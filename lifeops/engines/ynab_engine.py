@@ -16,7 +16,7 @@ def _payee_map(history):
             m[t["payee_name"].lower()][t["category_id"]] += 1
     return m
 
-def plan(categories, history, unapproved, month, cover_from="", no_assign=()):
+def plan(categories, history, unapproved, month, cover_order=(), no_assign=()):
     pmap = _payee_map(history)
     no_assign_ids = {c["id"] for c in categories if c["name"] in set(no_assign)}
     categorize, approve, novel, holds = [], [], [], []
@@ -41,26 +41,35 @@ def plan(categories, history, unapproved, month, cover_from="", no_assign=()):
         else:
             approve.append(t["id"])
     return {"categorize": categorize, "approve": approve, "novel": novel,
-            "holds": holds, "cover": _cover(month, cover_from)}
+            "holds": holds, "cover": _cover(month, cover_order)}
 
-def _cover(month, cover_from):
-    if not cover_from:
-        return []                                     # opt-in only — don't raid funds
+def _cover(month, cover_order):
+    """Cover overspent categories by draining discretionary WANTS in priority
+    order. Never touches anything not in cover_order (so savings/funds are safe).
+    Sources are never driven below zero; uncovered overspend is left red."""
+    if not cover_order:
+        return []
     cats = month.get("categories", [])
     by_name = {c["name"].lower(): c for c in cats}
-    names = [cover_from.lower()] if cover_from else ["buffer", "emergency", "stuff i forgot to budget"]
-    src = next((by_name[n] for n in names if n in by_name), None)
-    if not src:
-        return []
-    avail, moved, moves = src.get("balance", 0), 0, []
+    sources = [by_name[n.lower()] for n in cover_order if n.lower() in by_name]
+    avail = {s["id"]: s.get("balance", 0) for s in sources}
+    new_budget = {}                                   # category_id -> updated budgeted
+    def cur(c): return new_budget.get(c["id"], c.get("budgeted", 0))
     for c in cats:
-        if c["id"] == src["id"]:
-            continue
         bal = c.get("balance", 0)
-        if bal < 0 and avail > 0:
-            amt = min(-bal, avail)
-            moves.append({"category_id": c["id"], "budgeted": c.get("budgeted", 0) + amt})
-            avail -= amt; moved += amt
-    if moved:
-        moves.append({"category_id": src["id"], "budgeted": src.get("budgeted", 0) - moved})
-    return moves
+        if bal >= 0:
+            continue
+        deficit = -bal
+        for s in sources:
+            if deficit <= 0:
+                break
+            if s["id"] == c["id"]:
+                continue
+            give = min(deficit, avail.get(s["id"], 0))
+            if give <= 0:
+                continue
+            new_budget[c["id"]] = cur(c) + give
+            new_budget[s["id"]] = cur(s) - give
+            avail[s["id"]] -= give
+            deficit -= give
+    return [{"category_id": cid, "budgeted": b} for cid, b in new_budget.items()]

@@ -57,7 +57,7 @@ def run_ynab(fs, yn, now):
     since = (now.date() - _dt.timedelta(days=120)).isoformat()
     out = ynab_engine.plan(cats, yn.transactions(since_date=since),
                            yn.transactions(ttype="unapproved"), yn.month(),
-                           cover_from=config.YNAB_COVER_FROM, no_assign=config.YNAB_NO_ASSIGN)
+                           cover_order=config.YNAB_COVER_ORDER, no_assign=config.YNAB_NO_ASSIGN)
     # novel payees: the ONLY LLM call, and only if a key is configured
     if config.ANTHROPIC_API_KEY and out["novel"]:
         from . import llm

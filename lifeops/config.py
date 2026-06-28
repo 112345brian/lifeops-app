@@ -31,9 +31,11 @@ YNAB_BUDGET  = os.environ.get("YNAB_BUDGET", "last-used")
 # are NOT here — those do receive real transactions.
 YNAB_NO_ASSIGN = [s.strip() for s in os.environ.get(
     "YNAB_NO_ASSIGN", "Savings,Emergency Fund,Stocks").split(",") if s.strip()]
-# Cover-overspend is OPT-IN: blank = never auto-move budgeted dollars (don't raid
-# funds). Set to a dedicated buffer category name to enable.
-YNAB_COVER_FROM = os.environ.get("YNAB_COVER_FROM", "")
+# Overspending is covered by draining discretionary WANTS first, in this order —
+# never savings/funds. Blowing a budget costs you fun, not your future; if even
+# the wants can't cover it, it stays negative (and you get warned).
+YNAB_COVER_ORDER = [s.strip() for s in os.environ.get(
+    "YNAB_COVER_ORDER", "Shopping,Entertainment,Eating Out,Shows,Splurge").split(",") if s.strip()]
 
 # Anthropic (judgment calls only)
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
