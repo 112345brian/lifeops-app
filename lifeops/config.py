@@ -46,10 +46,10 @@ NTFY_SIGNAL_TOPIC = os.environ.get("NTFY_SIGNAL_TOPIC", "")   # phone -> app
 NTFY_ALERTS_TOPIC = os.environ.get("NTFY_ALERTS_TOPIC", "")   # app -> phone
 
 # FlowSavvy ids (from your account; the connector already revealed these)
-LIST_PERSONAL = os.environ.get("LIST_PERSONAL", "6784")
-LIST_COURSE   = os.environ.get("LIST_COURSE", "147765")
-SH_EVENINGS   = os.environ.get("SH_EVENINGS", "427991")
-SH_PERSONAL   = os.environ.get("SH_PERSONAL", "427988")
+LIST_PERSONAL = os.environ.get("LIST_PERSONAL", "")
+LIST_COURSE   = os.environ.get("LIST_COURSE", "")
+SH_EVENINGS   = os.environ.get("SH_EVENINGS", "")
+SH_PERSONAL   = os.environ.get("SH_PERSONAL", "")
 
 TZ = "America/Los_Angeles"
 
