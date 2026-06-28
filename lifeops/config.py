@@ -52,3 +52,27 @@ SH_EVENINGS   = os.environ.get("SH_EVENINGS", "427991")
 SH_PERSONAL   = os.environ.get("SH_PERSONAL", "427988")
 
 TZ = "America/Los_Angeles"
+
+# --- personal identifiers: NEVER hardcode these; real values live in .env ---
+PARTNER_NAME = os.environ.get("PARTNER_NAME", "Partner")
+PARTNER_TASK = os.environ.get("PARTNER_TASK", f"{PARTNER_NAME} time")   # FlowSavvy task title
+PARTNER_SIGNAL = os.environ.get("PARTNER_SIGNAL", f"saw {PARTNER_NAME.lower()}")  # ntfy body
+FRIENDS_TASK = os.environ.get("FRIENDS_TASK", "Friends")
+SOCIAL_CAL = os.environ.get("SOCIAL_CAL", "")          # partner's FlowSavvy calendar id
+
+# Event calendars that block evenings / drive social spend: "id:type,id:type"
+EVENT_CALS = dict(p.split(":") for p in os.environ.get("EVENT_CALS", "").split(",") if ":" in p)
+
+# Discretionary "fun money" category names
+DISCRETIONARY = [s.strip().lower() for s in os.environ.get(
+    "DISCRETIONARY", "Shopping,Entertainment,Eating Out,Shows,Splurge").split(",") if s.strip()]
+
+# Per-outing marginal cost by type
+COSTS = {}
+for _p in os.environ.get("OUTING_COSTS", "concert:40,party:35,date:50,friends:35").split(","):
+    if ":" in _p:
+        _k, _v = _p.split(":")
+        try:
+            COSTS[_k.strip()] = float(_v)
+        except ValueError:
+            pass

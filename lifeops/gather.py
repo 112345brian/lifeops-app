@@ -1,12 +1,8 @@
 """Turn live FlowSavvy data + history into the structured inputs engines expect.
-The 'read the fuzzy world' layer. Decisions happen in the engines.
+All personal identifiers come from config (.env) — none hardcoded here.
 """
 import datetime
-from . import history
-
-# FlowSavvy calendar ids whose EVENINGS genuinely block a gym (shows/dates/parties)
-BLOCKER_CALS = {"201560": "Breina", "201561": "Concerts", "201563": "Fun",
-                "310291": "AXS", "236685": "Partiful"}
+from . import history, config
 
 def _d(iso):  return (iso or "")[:10]
 def _hm(iso): return (iso or "")[11:16]
@@ -21,8 +17,7 @@ def _sleep_ok(now):
     evs = sorted([e for e in history.events() if e["action"] in ("sleep", "wake")
                   and e["ts"] >= win_start], key=lambda e: e["ts"])
     if not evs:
-        return True                                   # unknown -> don't penalize
-    # pair sleep->wake, sum durations, flag fragmentation
+        return True
     segs, start = [], None
     for e in evs:
         if e["action"] == "sleep":
@@ -32,7 +27,7 @@ def _sleep_ok(now):
             b = datetime.datetime.fromisoformat(e["ts"])
             segs.append((b - a).total_seconds() / 3600.0); start = None
     total = sum(s for s in segs if s > 0)
-    if len(segs) >= 3:           # fragmented night
+    if len(segs) >= 3:
         return False
     if total and (total < 5.5 or total > 11):
         return False
@@ -56,9 +51,8 @@ def gym_input(fs, now, sick_until=None):
                               "end": _hm(t.get("endDateTime")), "manual": False,
                               "started": _d(st) == today.isoformat() and _h(st) <= now.hour + 2})
 
-    # precise evening blockers: real events on the blocker calendars, 17:00-23:00
     blocked, shows = set(), set()
-    for cid in BLOCKER_CALS:
+    for cid in config.EVENT_CALS:
         try:
             evs = fs.list_items(itemType="event", calendarId=cid).get("items", [])
         except Exception:
@@ -67,10 +61,9 @@ def gym_input(fs, now, sick_until=None):
             st = e.get("startDateTime")
             if st and _d(st) in hset and 17 <= _h(st) < 23:
                 blocked.add(_d(st)); shows.add(_d(st))
-    # Reina time / Friends tasks also block the evening
     for t in gym_open:
         st = t.get("startDateTime"); title = (t.get("title") or "")
-        if st and _d(st) in hset and 17 <= _h(st) < 23 and title in ("Reina time", "Friends"):
+        if st and _d(st) in hset and 17 <= _h(st) < 23 and title in (config.PARTNER_TASK, config.FRIENDS_TASK):
             blocked.add(_d(st))
 
     sleep_ok = _sleep_ok(now)
@@ -87,11 +80,9 @@ def gym_input(fs, now, sick_until=None):
             "sick_until": sick_until, "completed_count": completed_count,
             "scheduled": scheduled, "days": days}
 
-_COSTS = {"concert": 40, "party": 35, "date": 50, "friends": 35}
-
 def homework_input(fs, now):
     out = []
-    for t in fs.list_items(itemType="task", listId="147765", completed=False).get("items", []):
+    for t in fs.list_items(itemType="task", listId=config.LIST_COURSE, completed=False).get("items", []):
         due = t.get("dueDateTime")
         if not due:
             continue
@@ -107,8 +98,7 @@ def homework_input(fs, now):
     return out
 
 def spend_input(fs, yn, now):
-    caltype = {"201561": "concert", "310291": "concert", "201563": "party",
-               "236685": "party", "201560": "date"}
+    caltype = config.EVENT_CALS
     start = now.date().isoformat(); end = (now.date() + datetime.timedelta(days=21)).isoformat()
     events = []
     for cid, typ in caltype.items():
@@ -120,16 +110,16 @@ def spend_input(fs, yn, now):
             st = e.get("startDateTime")
             if st and start <= _d(st) <= end:
                 du = (datetime.date.fromisoformat(_d(st)) - now.date()).days
-                events.append({"date": _d(st), "type": typ, "cost": _COSTS[typ],
+                events.append({"date": _d(st), "type": typ, "cost": config.COSTS.get(typ, 40),
                                "label": e.get("title") or typ, "days_until": du})
     for t in fs.list_items(itemType="task", completed=False).get("items", []):
         title = t.get("title") or ""; st = t.get("startDateTime") or t.get("dueDateTime")
-        if title in ("Reina time", "Friends") and st and start <= _d(st) <= end:
-            typ = "date" if title == "Reina time" else "friends"
+        if title in (config.PARTNER_TASK, config.FRIENDS_TASK) and st and start <= _d(st) <= end:
+            typ = "date" if title == config.PARTNER_TASK else "friends"
             du = (datetime.date.fromisoformat(_d(st)) - now.date()).days
-            events.append({"date": _d(st), "type": typ, "cost": _COSTS[typ],
+            events.append({"date": _d(st), "type": typ, "cost": config.COSTS.get(typ, 40),
                            "label": title, "days_until": du})
-    disc = {"shopping", "entertainment", "eating out", "shows", "splurge"}
+    disc = set(config.DISCRETIONARY)
     try:
         month = yn.month()
     except Exception:
@@ -143,18 +133,19 @@ def social_input(fs, now):
         return (now - datetime.datetime.fromisoformat(ts)).days if ts else None
     start = now.date().isoformat(); weekend = (now.date() + datetime.timedelta(days=7)).isoformat()
     open_tasks = fs.list_items(itemType="task", completed=False).get("items", [])
-    has_reina = any(t.get("title") == "Reina time" for t in open_tasks)
-    has_friend = any(t.get("title") == "Friends" for t in open_tasks)
-    try:
-        for e in fs.list_items(itemType="event", calendarId="201560").get("items", []):
-            st = e.get("startDateTime")
-            if st and start <= _d(st) <= weekend:
-                has_reina = True
-    except Exception:
-        pass
+    has_partner = any(t.get("title") == config.PARTNER_TASK for t in open_tasks)
+    has_friend = any(t.get("title") == config.FRIENDS_TASK for t in open_tasks)
+    if config.SOCIAL_CAL:
+        try:
+            for e in fs.list_items(itemType="event", calendarId=config.SOCIAL_CAL).get("items", []):
+                st = e.get("startDateTime")
+                if st and start <= _d(st) <= weekend:
+                    has_partner = True
+        except Exception:
+            pass
     days = [now.date() + datetime.timedelta(days=i) for i in range(1, 8)]
     days.sort(key=lambda d: (d.weekday() < 5, d))   # weekends first
-    return {"reina_days": ago(history.last("reina")), "friend_days": ago(history.last("friends")),
-            "has_reina": has_reina, "has_friend": has_friend,
+    return {"partner_days": ago(history.last("partner")), "friend_days": ago(history.last("friends")),
+            "has_partner": has_partner, "has_friend": has_friend,
             "good_days": [d.isoformat() for d in days],
             "is_protect_day": now.strftime("%a") in ("Sun", "Thu")}

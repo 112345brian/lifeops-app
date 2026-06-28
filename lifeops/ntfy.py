@@ -23,12 +23,19 @@ def poll(since=0):
             pass
     return msgs
 
-def alert(text, priority="default", tags=None):
-    """Push an alert to the phone. priority: min|low|default|high|urgent."""
+def alert(text, priority="default", tags=None, actions=None):
+    """Push an alert to the phone. priority: min|low|default|high|urgent.
+    actions: list of (label, signal_body) — renders tap buttons that POST the
+    signal_body back to the SIGNAL topic, so the system can react to your tap."""
     if not config.NTFY_ALERTS_TOPIC:
         return
     headers = {"Priority": priority}
     if tags:
         headers["Tags"] = ",".join(tags)
+    if actions and config.NTFY_SIGNAL_TOPIC:
+        sig = f"https://ntfy.sh/{config.NTFY_SIGNAL_TOPIC}"
+        headers["Actions"] = "; ".join(
+            f"http, {label}, {sig}, method=POST, body={body}, clear=true"
+            for label, body in actions)
     requests.post(f"https://ntfy.sh/{config.NTFY_ALERTS_TOPIC}",
                   data=text.encode("utf-8"), headers=headers, timeout=30)

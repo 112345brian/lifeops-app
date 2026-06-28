@@ -15,14 +15,15 @@ from .engines import gym_engine, ynab_engine
 _PRIO = {"urgent": "urgent", "high": "high", "none": "default"}
 
 # ntfy signal body -> history action
-_SIG = {"gym": "gym", "saw reina": "reina", "hung friends": "friends",
+_SIG = {"gym": "gym", config.PARTNER_SIGNAL: "partner", "hung friends": "friends",
         "fell-asleep": "sleep", "woke-up": "wake"}
 
 def _classify(title):
     t = (title or "").lower()
     for k, v in [("gym", "gym"), ("laundry", "laundry"), ("clean room", "clean_room"),
                  ("clean bathroom", "clean_bathroom"), ("tidy car", "tidy_car"),
-                 ("car wash", "car_wash"), ("oil change", "oil"), ("reina", "reina"),
+                 ("car wash", "car_wash"), ("oil change", "oil"),
+                 (config.PARTNER_TASK.lower(), "partner"),
                  ("friends", "friends"), ("meal prep", "meal"), ("groceries", "groceries"),
                  ("studio", "studio")]:
         if k in t:
@@ -63,7 +64,7 @@ def ingest(fs, now):
     os.makedirs(os.path.dirname(sp), exist_ok=True)
     json.dump(st, open(sp, "w", encoding="utf-8"))
 
-def _alert_once(key, text, priority="default", tags=None):
+def _alert_once(key, text, priority="default", tags=None, actions=None):
     """Send an alert at most once per calendar day per key. The tick runs every
     10 min — without this, advisory alerts would spam."""
     sp = os.path.join(history.ROOT, "logs", "alert_state.json")
@@ -75,7 +76,7 @@ def _alert_once(key, text, priority="default", tags=None):
     today = datetime.date.today().isoformat()
     if st.get(key) == today:
         return
-    ntfy.alert(text, priority=priority, tags=tags)
+    ntfy.alert(text, priority=priority, tags=tags, actions=actions)
     st[key] = today
     os.makedirs(os.path.dirname(sp), exist_ok=True)
     json.dump(st, open(sp, "w", encoding="utf-8"))
@@ -219,10 +220,12 @@ def run_spend(fs, yn, now):
 def run_social(fs, yn, now):
     from .engines import social_engine
     inp = gather.social_input(fs, now)
-    out = social_engine.plan(inp["reina_days"], inp["friend_days"], inp["has_reina"],
-                             inp["has_friend"], inp["good_days"], inp["is_protect_day"])
+    out = social_engine.plan(inp["partner_days"], inp["friend_days"], inp["has_partner"],
+                             inp["has_friend"], inp["good_days"], inp["is_protect_day"],
+                             partner_name=config.PARTNER_NAME)
     for c in out["creates"]:
-        fs.create_task(title=c["title"], listId=config.LIST_PERSONAL,
+        title = config.PARTNER_TASK if c["kind"] == "partner" else config.FRIENDS_TASK
+        fs.create_task(title=title, listId=config.LIST_PERSONAL,
                        schedulingHoursId=config.SH_EVENINGS, durationMinutes=120,
                        dueDateTime=f"{c['date']}T21:00:00",
                        canBeStartedAt=f"{c['date']}T17:00:00", isAutoIgnored=False,
@@ -234,6 +237,24 @@ def run_social(fs, yn, now):
     print(f"[social] created {len(out['creates'])}, nudges {len(out['nudges'])}")
 
 def run_meal(fs, yn, now):
+    sp = os.path.join(history.ROOT, "logs", "meal_state.json")
+    st = {"lastSkip": 0}
+    try: st.update(json.load(open(sp, encoding="utf-8")))
+    except Exception: pass
+    # Handle a "Have leftovers — skip" button tap: clear this week's tasks.
+    skipped = any((m.get("message") or "").strip().lower() == "meal-skip"
+                  for m in ntfy.poll(since=st["lastSkip"]))
+    st["lastSkip"] = int(now.timestamp())
+    os.makedirs(os.path.dirname(sp), exist_ok=True); json.dump(st, open(sp, "w", encoding="utf-8"))
+    if skipped:
+        for t in fs.list_items(itemType="task", completed=False).get("items", []):
+            if t.get("title") in ("Groceries", "Meal prep") and "LifeOps" in (t.get("notes") or ""):
+                try: fs.delete_item(t["id"])
+                except Exception: pass
+        history.append("meal", source="skipped")   # counts as handled this week
+        fs.recalculate()
+        print("[meal] skipped (leftovers) — cleared this week"); return
+
     last = history.last("meal")
     if last and (now - datetime.datetime.fromisoformat(last)).days < 6:
         print("[meal] not due"); return
@@ -250,7 +271,8 @@ def run_meal(fs, yn, now):
                    dueDateTime=f"{d4}T19:00:00", blockedByIds=[g["id"]] if g.get("id") else None,
                    isAutoIgnored=False, notes="Cook after groceries (LifeOps).")
     fs.recalculate()
-    _alert_once("meal", "Meal-prep week — added Groceries + cook. Delete if you've still got leftovers.")
+    _alert_once("meal", "Meal-prep week — Groceries + cook added.",
+                actions=[("Have leftovers — skip", "meal-skip")])
     print("[meal] created groceries + cook")
 
 DOMAINS = {"gym": run_gym, "ynab": run_ynab, "chore": run_chore, "catchup": run_catchup,
