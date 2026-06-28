@@ -8,7 +8,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 def _load_env():
-    env = ROOT / ".env"
+    # prefer private/.env (submodule) over root .env (legacy / local override)
+    env = ROOT / "private" / ".env"
+    if not env.exists():
+        env = ROOT / ".env"
     if env.exists():
         for line in env.read_text(encoding="utf-8").splitlines():
             line = line.strip()
