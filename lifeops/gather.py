@@ -75,6 +75,22 @@ def gym_input(fs, now, sick_until=None):
         if (t.get("title") or "") in (config.PARTNER_TASK, config.FRIENDS_TASK):
             _consider(t.get("startDateTime"), t.get("endDateTime"))
 
+    # coursework deadline pressure: remaining work due on/around each day
+    load = {}
+    try:
+        course = fs.list_items(itemType="task", listId=config.LIST_COURSE, completed=False).get("items", [])
+    except Exception:
+        course = []
+    for t in course:
+        due = t.get("dueDateTime")
+        if not due:
+            continue
+        rem = max(0, (t.get("durationMinutes") or 0) - (t.get("progressMinutes") or 0))
+        load[_d(due)] = load.get(_d(due), 0) + rem
+    def _heavy(ds_):  # >=3h of coursework due that day or the next → evening goes to it
+        nxt = (datetime.date.fromisoformat(ds_) + datetime.timedelta(days=1)).isoformat()
+        return (load.get(ds_, 0) + load.get(nxt, 0)) >= 180
+
     sleep_ok = _sleep_ok(now)
     days = []
     for d in horizon:
@@ -84,6 +100,7 @@ def gym_input(fs, now, sick_until=None):
                      "evening_blocked": ds in blocked,
                      "day_after_show": prev in shows,
                      "prior_night_blocked": prev in blocked,
+                     "deadline_heavy": _heavy(ds),
                      "sleep_ok": sleep_ok if near else True})
 
     return {"today": today.isoformat(), "now": now.isoformat(timespec="seconds"),

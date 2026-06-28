@@ -17,6 +17,13 @@ def D(s):
 def slot_for(day):
     if day.get("day_after_show"):
         return None
+    # Hard-deadline day: coursework outranks the gym EVENING. Only a before-work
+    # morning is acceptable (it doesn't eat the crunch evening), and only if sleep
+    # allows; otherwise the gym yields this day entirely.
+    if day.get("deadline_heavy"):
+        if day.get("sleep_ok", True) and not day.get("prior_night_blocked"):
+            return ("05:10", "06:10", "morning")
+        return None
     if not day.get("evening_blocked"):
         return ("19:00", "20:00", "evening")
     if day.get("sleep_ok", True) and not day.get("prior_night_blocked"):

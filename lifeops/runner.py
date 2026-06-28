@@ -284,11 +284,13 @@ def run_social(fs, yn, now):
         date = c["date"]
         fs.create_task(title=f"{base} (proposed)", listId=config.LIST_PERSONAL,
                        schedulingHoursId=config.SH_EVENINGS, durationMinutes=120,
+                       priority=config.PRIO_SOCIAL_PROPOSED,
                        dueDateTime=f"{date}T21:00:00", canBeStartedAt=f"{date}T17:00:00",
                        isAutoIgnored=False, notes="Proposed hangout — complete the 'Plan ...' task to lock it in.")
         plan_due = (datetime.date.fromisoformat(date) - datetime.timedelta(days=config.PLAN_LEAD_DAYS)).isoformat()
         fs.create_task(title=f"Plan {base}", listId=config.LIST_PERSONAL,
                        schedulingHoursId=config.SH_EVENINGS, durationMinutes=15,
+                       priority=config.PRIO_SOCIAL_PLAN,
                        dueDateTime=f"{plan_due}T21:00:00", isAutoIgnored=False,
                        notes="Reach out + arrange it. Completing this LOCKS IN the hangout.")
     if out["creates"]:
@@ -325,11 +327,12 @@ def run_meal(fs, yn, now):
     d4 = (now.date() + datetime.timedelta(days=4)).isoformat()
     g = fs.create_task(title="Groceries", listId=config.LIST_PERSONAL,
                        schedulingHoursId=config.SH_PERSONAL, durationMinutes=60,
-                       dueDateTime=f"{d3}T19:00:00", isAutoIgnored=False,
-                       notes="Meal-prep week (LifeOps).")
+                       priority=config.PRIO_MEAL, dueDateTime=f"{d3}T19:00:00",
+                       isAutoIgnored=False, notes="Meal-prep week (LifeOps).")
     fs.create_task(title="Meal prep", listId=config.LIST_PERSONAL,
                    schedulingHoursId=config.SH_PERSONAL, durationMinutes=120,
-                   dueDateTime=f"{d4}T19:00:00", blockedByIds=[g["id"]] if g.get("id") else None,
+                   priority=config.PRIO_MEAL, dueDateTime=f"{d4}T19:00:00",
+                   blockedByIds=[g["id"]] if g.get("id") else None,
                    isAutoIgnored=False, notes="Cook after groceries (LifeOps).")
     _touch()
     _alert_once("meal", "Meal-prep week — Groceries + cook added.",

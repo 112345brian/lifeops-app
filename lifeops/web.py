@@ -63,6 +63,23 @@ def _run_domain(name):
 
 def _esc(s): return str(s).replace("<", "&lt;").replace(">", "&gt;")
 
+def _status():
+    try:
+        lr = json.load(open(os.path.join(ROOT, "logs", "last_run.json"), encoding="utf-8"))
+    except Exception:
+        return "<i>never run yet</i>"
+    ts = lr.get("ts", "?")
+    try:
+        age = datetime.datetime.now() - datetime.datetime.fromisoformat(ts)
+        mins = int(age.total_seconds() // 60)
+        fresh = "🟢" if mins < 20 else ("🟡" if mins < 120 else "🔴")
+        when = f"{fresh} {mins} min ago"
+    except Exception:
+        when = ts
+    errs = lr.get("errors") or {}
+    estr = (" — <b style='color:#b00'>errors: " + _esc(", ".join(errs)) + "</b>") if errs else " — ok"
+    return f"last run {when} ({_esc(', '.join(lr.get('ran', [])) or '—')}){estr}"
+
 def render():
     fs = FlowSavvy()
     cyc = _cycle_tasks(fs)
@@ -108,6 +125,7 @@ table{{width:100%;border-collapse:collapse}} td{{padding:3px;border-bottom:1px s
 button{{padding:4px 8px}} input{{padding:3px}}
 </style>
 <h1>LifeOps</h1>
+<p style='background:#f4f4f4;padding:.5em;border-radius:6px'>{_status()}</p>
 
 <h2>Recurring tasks (repeat N days after you complete them)</h2>
 <table><tr><th>task</th><th>cycle</th><th>dur</th><th>next</th><th></th></tr>{rows}</table>

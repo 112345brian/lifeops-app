@@ -63,6 +63,13 @@ PROPOSE_AHEAD_DAYS = int(os.environ.get("PROPOSE_AHEAD_DAYS", "21"))  # propose 
 PLAN_LEAD_DAYS = int(os.environ.get("PLAN_LEAD_DAYS", "14"))          # "Plan it" task ~2 weeks before
 HEARTBEAT_URL = os.environ.get("HEARTBEAT_URL", "")   # healthchecks.io ping (dead-man's switch)
 
+# Deliberate priority hierarchy (FlowSavvy: asap > high > normal > low).
+# Intended order: hard deadlines (Canvas, bumped by load-watcher) > gym (fixed
+# block, immovable) > meal/coordination (normal) > chores & tentative social (low).
+PRIO_MEAL = os.environ.get("PRIO_MEAL", "normal")
+PRIO_SOCIAL_PLAN = os.environ.get("PRIO_SOCIAL_PLAN", "normal")      # the "go arrange it" to-do
+PRIO_SOCIAL_PROPOSED = os.environ.get("PRIO_SOCIAL_PROPOSED", "low")  # tentative, unconfirmed
+
 # Event calendars that block evenings / drive social spend: "id:type,id:type"
 EVENT_CALS = dict(p.split(":") for p in os.environ.get("EVENT_CALS", "").split(",") if ":" in p)
 
