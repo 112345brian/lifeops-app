@@ -86,3 +86,75 @@ def gym_input(fs, now, sick_until=None):
     return {"today": today.isoformat(), "now": now.isoformat(timespec="seconds"),
             "sick_until": sick_until, "completed_count": completed_count,
             "scheduled": scheduled, "days": days}
+
+_COSTS = {"concert": 40, "party": 35, "date": 50, "friends": 35}
+
+def homework_input(fs, now):
+    out = []
+    for t in fs.list_items(itemType="task", listId="147765", completed=False).get("items", []):
+        due = t.get("dueDateTime")
+        if not due:
+            continue
+        try:
+            h = (datetime.datetime.fromisoformat(due) - now).total_seconds() / 3600
+        except ValueError:
+            continue
+        if h < -24:
+            continue
+        dur = t.get("durationMinutes") or 0; prog = t.get("progressMinutes") or 0
+        out.append({"title": t.get("title") or "", "due_in_h": h, "due_in_days": h / 24,
+                    "remaining_min": max(0, dur - prog), "progress": prog})
+    return out
+
+def spend_input(fs, yn, now):
+    caltype = {"201561": "concert", "310291": "concert", "201563": "party",
+               "236685": "party", "201560": "date"}
+    start = now.date().isoformat(); end = (now.date() + datetime.timedelta(days=21)).isoformat()
+    events = []
+    for cid, typ in caltype.items():
+        try:
+            evs = fs.list_items(itemType="event", calendarId=cid).get("items", [])
+        except Exception:
+            evs = []
+        for e in evs:
+            st = e.get("startDateTime")
+            if st and start <= _d(st) <= end:
+                du = (datetime.date.fromisoformat(_d(st)) - now.date()).days
+                events.append({"date": _d(st), "type": typ, "cost": _COSTS[typ],
+                               "label": e.get("title") or typ, "days_until": du})
+    for t in fs.list_items(itemType="task", completed=False).get("items", []):
+        title = t.get("title") or ""; st = t.get("startDateTime") or t.get("dueDateTime")
+        if title in ("Reina time", "Friends") and st and start <= _d(st) <= end:
+            typ = "date" if title == "Reina time" else "friends"
+            du = (datetime.date.fromisoformat(_d(st)) - now.date()).days
+            events.append({"date": _d(st), "type": typ, "cost": _COSTS[typ],
+                           "label": title, "days_until": du})
+    disc = {"shopping", "entertainment", "eating out", "shows", "splurge"}
+    try:
+        month = yn.month()
+    except Exception:
+        month = {"categories": []}
+    fun = sum(c.get("balance", 0) for c in month.get("categories", [])
+              if c["name"].lower() in disc) / 1000.0
+    return {"events": events, "fun_money": fun}
+
+def social_input(fs, now):
+    def ago(ts):
+        return (now - datetime.datetime.fromisoformat(ts)).days if ts else None
+    start = now.date().isoformat(); weekend = (now.date() + datetime.timedelta(days=7)).isoformat()
+    open_tasks = fs.list_items(itemType="task", completed=False).get("items", [])
+    has_reina = any(t.get("title") == "Reina time" for t in open_tasks)
+    has_friend = any(t.get("title") == "Friends" for t in open_tasks)
+    try:
+        for e in fs.list_items(itemType="event", calendarId="201560").get("items", []):
+            st = e.get("startDateTime")
+            if st and start <= _d(st) <= weekend:
+                has_reina = True
+    except Exception:
+        pass
+    days = [now.date() + datetime.timedelta(days=i) for i in range(1, 8)]
+    days.sort(key=lambda d: (d.weekday() < 5, d))   # weekends first
+    return {"reina_days": ago(history.last("reina")), "friend_days": ago(history.last("friends")),
+            "has_reina": has_reina, "has_friend": has_friend,
+            "good_days": [d.isoformat() for d in days],
+            "is_protect_day": now.strftime("%a") in ("Sun", "Thu")}

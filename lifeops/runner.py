@@ -63,6 +63,23 @@ def ingest(fs, now):
     os.makedirs(os.path.dirname(sp), exist_ok=True)
     json.dump(st, open(sp, "w", encoding="utf-8"))
 
+def _alert_once(key, text, priority="default", tags=None):
+    """Send an alert at most once per calendar day per key. The tick runs every
+    10 min — without this, advisory alerts would spam."""
+    sp = os.path.join(history.ROOT, "logs", "alert_state.json")
+    st = {}
+    try:
+        st = json.load(open(sp, encoding="utf-8"))
+    except Exception:
+        pass
+    today = datetime.date.today().isoformat()
+    if st.get(key) == today:
+        return
+    ntfy.alert(text, priority=priority, tags=tags)
+    st[key] = today
+    os.makedirs(os.path.dirname(sp), exist_ok=True)
+    json.dump(st, open(sp, "w", encoding="utf-8"))
+
 def run_gym(fs, yn, now):
     inp = gather.gym_input(fs, now)
     out = gym_engine.plan(inp)
@@ -94,8 +111,8 @@ def run_gym(fs, yn, now):
         fs.recalculate()
     lvl = out["alert"]["level"]
     if lvl != "none":
-        ntfy.alert(out["alert"]["text"], priority=_PRIO[lvl],
-                   tags=["rotating_light"] if lvl == "urgent" else None)
+        _alert_once("gym:" + lvl, out["alert"]["text"], _PRIO[lvl],
+                    ["rotating_light"] if lvl == "urgent" else None)
     print(f"[gym] {out['summary']}")
 
 def run_ynab(fs, yn, now):
@@ -184,7 +201,40 @@ def run_catchup(fs, yn, now):
     st["lastHandled"] = int(now.timestamp())
     os.makedirs(os.path.dirname(sp), exist_ok=True); json.dump(st, open(sp, "w", encoding="utf-8"))
 
-DOMAINS = {"gym": run_gym, "ynab": run_ynab, "chore": run_chore, "catchup": run_catchup}
+def run_homework(fs, yn, now):
+    from .engines import load_engine
+    out = load_engine.plan(gather.homework_input(fs, now))
+    for text, lvl in out["alerts"]:
+        _alert_once("hw:" + text[:24], text, lvl)
+    print(f"[homework] {len(out['alerts'])} alert(s)")
+
+def run_spend(fs, yn, now):
+    from .engines import spend_engine
+    inp = gather.spend_input(fs, yn, now)
+    out = spend_engine.plan(inp["events"], inp["fun_money"])
+    if out["level"] != "none":
+        _alert_once("spend", out["text"], out["level"])
+    print(f"[spend] {out['level']} (fun=${inp['fun_money']:.0f}, {len(inp['events'])} events)")
+
+def run_social(fs, yn, now):
+    from .engines import social_engine
+    inp = gather.social_input(fs, now)
+    out = social_engine.plan(inp["reina_days"], inp["friend_days"], inp["has_reina"],
+                             inp["has_friend"], inp["good_days"], inp["is_protect_day"])
+    for c in out["creates"]:
+        fs.create_task(title=c["title"], listId=config.LIST_PERSONAL,
+                       schedulingHoursId=config.SH_EVENINGS, durationMinutes=120,
+                       dueDateTime=f"{c['date']}T21:00:00",
+                       canBeStartedAt=f"{c['date']}T17:00:00", isAutoIgnored=False,
+                       notes="Protected social time (LifeOps).")
+    if out["creates"]:
+        fs.recalculate()
+    for n in out["nudges"]:
+        _alert_once("social:" + n[:24], n)
+    print(f"[social] created {len(out['creates'])}, nudges {len(out['nudges'])}")
+
+DOMAINS = {"gym": run_gym, "ynab": run_ynab, "chore": run_chore, "catchup": run_catchup,
+           "homework": run_homework, "spend": run_spend, "social": run_social}
 
 # Tiers let the cron run cheaply and often. TICK is deterministic + LLM-free and
 # only writes on change, so it's safe to run every ~10 min. DAILY holds the
