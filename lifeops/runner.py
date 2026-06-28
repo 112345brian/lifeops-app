@@ -235,9 +235,11 @@ def run_social(fs, yn, now):
         base = title[5:].strip()
         for t in open_tasks:
             if t.get("title") == f"{base} (proposed)":
-                fs.create_task(title=base, listId=config.LIST_PERSONAL, isAutoScheduled=False,
-                               startDateTime=t.get("startDateTime"), endDateTime=t.get("endDateTime"),
-                               notes="Locked in (LifeOps).")
+                fs.create_task(title=base, listId=config.LIST_PERSONAL,
+                               schedulingHoursId=t.get("schedulingHoursId") or config.SH_EVENINGS,
+                               durationMinutes=t.get("durationMinutes") or 120,
+                               dueDateTime=t.get("dueDateTime"), canBeStartedAt=t.get("canBeStartedAt"),
+                               isAutoIgnored=False, notes="Locked in (LifeOps).")
                 fs.delete_item(t["id"])
                 _alert_once(f"lock:{base}:{now.date()}", f"🔒 Locked in: {base}")
                 break
