@@ -7,7 +7,7 @@ Run:  python -m lifeops.runner          # all wired domains
       python -m lifeops.runner gym      # one domain
 """
 import sys, datetime
-from . import config, ntfy, gather
+from . import config, ntfy, gather, lock
 from .flowsavvy import FlowSavvy
 from .engines import gym_engine
 
@@ -59,6 +59,17 @@ TIERS = {
 }
 
 def main():
+    try:
+        lock.acquire()
+    except lock.Locked:
+        print("another LifeOps run is active — skipping this cycle")
+        return
+    try:
+        _run()
+    finally:
+        lock.release()
+
+def _run():
     fs = FlowSavvy()
     now = datetime.datetime.now()
     args = sys.argv[1:] or ["tick"]
