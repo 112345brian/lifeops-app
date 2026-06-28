@@ -37,7 +37,7 @@ class YNAB:
         return self._post(f"/budgets/{self.b}/transactions", {"transactions": txns})
 
     def month(self, month="current"):
-        return self._get(f"/budgets/{self.b}/months/{month}")
+        return self._get(f"/budgets/{self.b}/months/{month}")["month"]
 
     def set_budgeted(self, category_id, milliunits, month="current"):
         return self._patch(f"/budgets/{self.b}/months/{month}/categories/{category_id}",

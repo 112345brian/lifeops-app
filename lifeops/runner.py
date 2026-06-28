@@ -233,8 +233,28 @@ def run_social(fs, yn, now):
         _alert_once("social:" + n[:24], n)
     print(f"[social] created {len(out['creates'])}, nudges {len(out['nudges'])}")
 
+def run_meal(fs, yn, now):
+    last = history.last("meal")
+    if last and (now - datetime.datetime.fromisoformat(last)).days < 6:
+        print("[meal] not due"); return
+    if fs.list_items(itemType="task", query="Meal prep", completed=False).get("items", []):
+        print("[meal] already planned"); return
+    d3 = (now.date() + datetime.timedelta(days=3)).isoformat()
+    d4 = (now.date() + datetime.timedelta(days=4)).isoformat()
+    g = fs.create_task(title="Groceries", listId=config.LIST_PERSONAL,
+                       schedulingHoursId=config.SH_PERSONAL, durationMinutes=60,
+                       dueDateTime=f"{d3}T19:00:00", isAutoIgnored=False,
+                       notes="Meal-prep week (LifeOps).")
+    fs.create_task(title="Meal prep", listId=config.LIST_PERSONAL,
+                   schedulingHoursId=config.SH_PERSONAL, durationMinutes=120,
+                   dueDateTime=f"{d4}T19:00:00", blockedByIds=[g["id"]] if g.get("id") else None,
+                   isAutoIgnored=False, notes="Cook after groceries (LifeOps).")
+    fs.recalculate()
+    _alert_once("meal", "Meal-prep week — added Groceries + cook. Delete if you've still got leftovers.")
+    print("[meal] created groceries + cook")
+
 DOMAINS = {"gym": run_gym, "ynab": run_ynab, "chore": run_chore, "catchup": run_catchup,
-           "homework": run_homework, "spend": run_spend, "social": run_social}
+           "homework": run_homework, "spend": run_spend, "social": run_social, "meal": run_meal}
 
 # Tiers let the cron run cheaply and often. TICK is deterministic + LLM-free and
 # only writes on change, so it's safe to run every ~10 min. DAILY holds the
