@@ -4,6 +4,7 @@ This is the 'read the fuzzy world' layer. Pure data-shaping — the decisions
 happen in the engines.
 """
 import datetime
+from . import history
 
 def _d(iso):  return (iso or "")[:10]
 def _hm(iso): return (iso or "")[11:16]
@@ -19,15 +20,10 @@ def gym_input(fs, now: datetime.datetime, sick_until=None):
 
     sched = fs.get_schedule(today.isoformat(), horizon[-1].isoformat()).get("scheduleItems", [])
     gym_open = fs.list_items(itemType="task", query="Gym", completed=False).get("items", [])
-    gym_done = fs.list_items(itemType="task", query="Gym", completed=True).get("items", [])
 
-    def in_week(s): return s and monday.isoformat() <= _d(s) <= sunday.isoformat()
-
-    completed_count = sum(
-        1 for t in gym_done
-        if "✅" in (t.get("title") or "")
-        and in_week(t.get("dueDateTime") or t.get("startDateTime"))
-    )
+    # completed gyms this week come from the permanent history log (durable,
+    # captures spontaneous sessions and ntfy pings), not lossy task-state.
+    completed_count = len(history.days_with("gym", monday.isoformat(), sunday.isoformat()))
 
     scheduled = []
     for t in gym_open:

@@ -6,13 +6,62 @@ The LLM (lifeops.llm) is touched only for the judgment slivers.
 Run:  python -m lifeops.runner          # all wired domains
       python -m lifeops.runner gym      # one domain
 """
-import sys, datetime
-from . import config, ntfy, gather, lock
+import sys, os, json, datetime
+from . import config, ntfy, gather, lock, history
 from .flowsavvy import FlowSavvy
 from .ynab import YNAB
 from .engines import gym_engine, ynab_engine
 
 _PRIO = {"urgent": "urgent", "high": "high", "none": "default"}
+
+# ntfy signal body -> history action
+_SIG = {"gym": "gym", "saw reina": "reina", "hung friends": "friends",
+        "fell-asleep": "sleep", "woke-up": "wake"}
+
+def _classify(title):
+    t = (title or "").lower()
+    for k, v in [("gym", "gym"), ("laundry", "laundry"), ("clean room", "clean_room"),
+                 ("clean bathroom", "clean_bathroom"), ("tidy car", "tidy_car"),
+                 ("car wash", "car_wash"), ("oil change", "oil"), ("reina", "reina"),
+                 ("friends", "friends"), ("meal prep", "meal"), ("groceries", "groceries"),
+                 ("studio", "studio")]:
+        if k in t:
+            return v
+    return None
+
+def ingest(fs, now):
+    """Harvest completions from ntfy signals + FlowSavvy check-offs into the
+    permanent history log. Runs every cycle; cheap and deduped."""
+    sp = os.path.join(history.ROOT, "logs", "ingest_state.json")
+    st = {"ntfy_ts": 0, "logged_ids": []}
+    try:
+        st.update(json.load(open(sp, encoding="utf-8")))
+    except Exception:
+        pass
+    logged = set(st["logged_ids"])
+    for m in ntfy.poll(since=st["ntfy_ts"]):
+        act = _SIG.get((m.get("message") or "").strip().lower())
+        if act:
+            ts = datetime.datetime.fromtimestamp(m["time"]).isoformat(timespec="seconds")
+            history.append(act, ts=ts, source="ntfy")
+        st["ntfy_ts"] = max(st["ntfy_ts"], m.get("time", 0))
+    frm = (now - datetime.timedelta(days=14)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        comp = fs.list_items(itemType="task", completed=True, modifiedAfter=frm).get("items", [])
+    except Exception:
+        comp = []
+    for t in comp:
+        key = f"{t['id']}@{t.get('lastModified','')}"
+        if key in logged:
+            continue
+        act = _classify(t.get("title"))
+        if act:
+            history.append(act, ts=(t.get("lastModified") or "")[:19], source="flowsavvy",
+                           meta={"id": t["id"]})
+        logged.add(key)
+    st["logged_ids"] = list(logged)[-1000:]
+    os.makedirs(os.path.dirname(sp), exist_ok=True)
+    json.dump(st, open(sp, "w", encoding="utf-8"))
 
 def run_gym(fs, yn, now):
     inp = gather.gym_input(fs, now)
@@ -113,6 +162,7 @@ def _run():
     fs = FlowSavvy()
     yn = YNAB()
     now = datetime.datetime.now()
+    ingest(fs, now)   # always update the completion history first
     args = sys.argv[1:] or ["tick"]
     names = []
     for a in args:
