@@ -17,6 +17,8 @@ class FlowSavvy:
                   "Content-Type": "application/json"}
 
     def _get(self, path, **params):
+        params = {k: (str(v).lower() if isinstance(v, bool) else v)
+                  for k, v in params.items() if v is not None and v != ""}
         r = requests.get(f"{self.base}{path}", headers=self.h, params=params, timeout=30)
         r.raise_for_status()
         return r.json()
