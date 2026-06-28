@@ -3,9 +3,11 @@
 #   LifeOps-daily  — once each morning, the heavier/LLM work (ynab, homework, social, chores, meal)
 # Both run whether or not Claude is open; they only need the PC on.
 
-$py   = (Get-Command python).Source
+# pythonw.exe = no console window (silent/inconspicuous); fall back to python.exe
+$py = (Get-Command python).Source -replace 'python\.exe$', 'pythonw.exe'
+if (-not (Test-Path $py)) { $py = (Get-Command python).Source }
 $proj = (Resolve-Path "$PSScriptRoot\..").Path
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -Hidden
 
 # --- tick: every 10 minutes, all day ---
 $tickAction  = New-ScheduledTaskAction -Execute $py -Argument "-m lifeops.runner tick" -WorkingDirectory $proj

@@ -41,7 +41,10 @@ def gym_input(fs, now, sick_until=None):
     hset = {d.isoformat() for d in horizon}
 
     gym_open = fs.list_items(itemType="task", query="Gym", completed=False).get("items", [])
-    completed_count = len(history.days_with("gym", monday.isoformat(), sunday.isoformat()))
+    # count gym days, excluding any you flagged "don't count" (gym-nocount)
+    gym_days = history.days_with("gym", monday.isoformat(), sunday.isoformat())
+    skip_days = history.days_with("gym_skip", monday.isoformat(), sunday.isoformat())
+    completed_count = len(gym_days - skip_days)
 
     scheduled = []
     for t in gym_open:

@@ -15,7 +15,8 @@ from .engines import gym_engine, ynab_engine
 _PRIO = {"urgent": "urgent", "high": "high", "none": "default"}
 
 # ntfy signal body -> history action
-_SIG = {"gym": "gym", config.PARTNER_SIGNAL: "partner", "hung friends": "friends",
+_SIG = {"gym": "gym", "gym-nocount": "gym_skip",
+        config.PARTNER_SIGNAL: "partner", "hung friends": "friends",
         "fell-asleep": "sleep", "woke-up": "wake"}
 
 def _classify(title):
