@@ -2,7 +2,7 @@
 All personal identifiers come from config (.env) — none hardcoded here.
 """
 import datetime
-from . import history, config
+from . import history, config, adherence
 
 def _d(iso):  return (iso or "")[:10]
 def _hm(iso): return (iso or "")[11:16]
@@ -103,9 +103,16 @@ def gym_input(fs, now, sick_until=None):
                      "deadline_heavy": _heavy(ds),
                      "sleep_ok": sleep_ok if near else True})
 
+    # adherence: stop scheduling slots he doesn't honor; use his real evening time
+    adh = adherence.gym(now)
+    allow_morning = not (adh["morning_rate"] is not None and adh["morning_rate"] < 0.3)
+    eh = adh["pref_evening_hour"]
+    es = f"{eh:02d}:00" if eh and 17 <= eh <= 20 else "19:00"
+    rules = {"allow_morning": allow_morning, "evening_start": es,
+             "evening_end": f"{int(es[:2]) + 1:02d}:00"}
     return {"today": today.isoformat(), "now": now.isoformat(timespec="seconds"),
             "sick_until": sick_until, "completed_count": completed_count,
-            "scheduled": scheduled, "days": days}
+            "scheduled": scheduled, "days": days, "rules": rules}
 
 def homework_input(fs, now):
     out = []

@@ -14,21 +14,21 @@ DAY = datetime.timedelta(days=1)
 def D(s):
     return datetime.date.fromisoformat(s)
 
-def slot_for(day):
-    if day.get("day_after_show"):
-        return None
-    # Hard-deadline day: coursework outranks the gym EVENING. Only a before-work
-    # morning is acceptable (it doesn't eat the crunch evening), and only if sleep
-    # allows; otherwise the gym yields this day entirely.
-    if day.get("deadline_heavy"):
-        if day.get("sleep_ok", True) and not day.get("prior_night_blocked"):
+def slot_for(day, r):
+    es, ee = r.get("evening_start", "19:00"), r.get("evening_end", "20:00")
+    allow_m = r.get("allow_morning", True)   # adherence: suppress mornings he never does
+    def morning():
+        if allow_m and day.get("sleep_ok", True) and not day.get("prior_night_blocked"):
             return ("05:10", "06:10", "morning")
         return None
+    if day.get("day_after_show"):
+        return None
+    # Hard-deadline day: coursework outranks the gym EVENING — morning only.
+    if day.get("deadline_heavy"):
+        return morning()
     if not day.get("evening_blocked"):
-        return ("19:00", "20:00", "evening")
-    if day.get("sleep_ok", True) and not day.get("prior_night_blocked"):
-        return ("05:10", "06:10", "morning")
-    return None
+        return (es, ee, "evening")
+    return morning()
 
 def run_length(date_str, busy):
     dt = D(date_str); n = 1
@@ -63,7 +63,7 @@ def plan(inp):
     for day in inp.get("days", []):
         if day["date"] in sched_dates:
             continue
-        s = slot_for(day)
+        s = slot_for(day, r)
         if s:
             cand.append((day["date"], s))
     cand.sort(key=lambda c: c[0])

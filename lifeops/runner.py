@@ -105,11 +105,17 @@ def _alert_once(key, text, priority="default", tags=None, actions=None):
     json.dump(st, open(sp, "w", encoding="utf-8"))
 
 def run_gym(fs, yn, now):
-    # clean up stale (past, never-completed) gym blocks so they don't linger
+    # clean up stale past gym blocks; record genuine misses (no ping that day) so
+    # adherence learning has data — by slot, to learn what he actually honors.
     today = now.date().isoformat()
     for t in fs.list_items(itemType="task", query="Gym", completed=False).get("items", []):
-        st = (t.get("startDateTime") or "")[:10]
-        if st and st < today:
+        sd = t.get("startDateTime") or ""
+        d = sd[:10]
+        if d and d < today:
+            if not history.days_with("gym", d, d):
+                slot = "morning" if (sd[11:13] or "12") < "11" else "evening"
+                history.append("gym_missed", ts=(sd[:19] or None), source="cleanup",
+                               meta={"slot": slot})
             try: fs.delete_item(t["id"]); _touch()
             except Exception: pass
     inp = gather.gym_input(fs, now)
