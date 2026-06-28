@@ -1,18 +1,24 @@
-# Registers a Windows Scheduled Task that runs the life-ops app ~3x/day.
-# Run this once in PowerShell from the project root. Edit $py if your python path differs.
+# Registers two Windows Scheduled Tasks for LifeOps. Run once from the project root.
+#   LifeOps-tick   — every 10 min, the cheap/deterministic loop (gym, catchup, spend)
+#   LifeOps-daily  — once each morning, the heavier/LLM work (ynab, homework, social, chores, meal)
+# Both run whether or not Claude is open; they only need the PC on.
 
 $py   = (Get-Command python).Source
 $proj = (Resolve-Path "$PSScriptRoot\..").Path
-$action  = New-ScheduledTaskAction -Execute $py -Argument "-m lifeops.runner" -WorkingDirectory $proj
-$triggers = @(
-  New-ScheduledTaskTrigger -Daily -At 7:10am
-  New-ScheduledTaskTrigger -Daily -At 2:10pm
-  New-ScheduledTaskTrigger -Daily -At 9:10pm
-)
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -DontStopOnIdleEnd `
-              -MultipleInstances IgnoreNew
-Register-ScheduledTask -TaskName "LifeOps" -Action $action -Trigger $triggers `
-  -Settings $settings -Description "Personal life-ops scheduler (FlowSavvy/YNAB/ntfy)" -Force
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew
 
-Write-Host "Registered 'LifeOps' to run at 7:10, 14:10, 21:10 daily."
-Write-Host "It runs whether or not Claude is open; only requires the PC to be on."
+# --- tick: every 10 minutes, all day ---
+$tickAction  = New-ScheduledTaskAction -Execute $py -Argument "-m lifeops.runner tick" -WorkingDirectory $proj
+$tickTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) `
+                 -RepetitionInterval (New-TimeSpan -Minutes 10) `
+                 -RepetitionDuration ([TimeSpan]::MaxValue)
+Register-ScheduledTask -TaskName "LifeOps-tick" -Action $tickAction -Trigger $tickTrigger `
+  -Settings $settings -Description "LifeOps fast loop (deterministic, ~every 10 min)" -Force
+
+# --- daily: once in the morning ---
+$dailyAction  = New-ScheduledTaskAction -Execute $py -Argument "-m lifeops.runner daily" -WorkingDirectory $proj
+$dailyTrigger = New-ScheduledTaskTrigger -Daily -At 7:10am
+Register-ScheduledTask -TaskName "LifeOps-daily" -Action $dailyAction -Trigger $dailyTrigger `
+  -Settings $settings -Description "LifeOps daily loop (heavier / LLM work)" -Force
+
+Write-Host "Registered LifeOps-tick (every 10 min) and LifeOps-daily (7:10am)."

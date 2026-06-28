@@ -48,15 +48,27 @@ def run_gym(fs, now):
                    tags=["rotating_light"] if lvl == "urgent" else None)
     print(f"[gym] {out['summary']}")
 
-DOMAINS = {"gym": run_gym}   # chore/homework/spend/social/catchup/ynab wire in next
+DOMAINS = {"gym": run_gym}   # chore/homework/spend/social/catchup/ynab wire in as ported
+
+# Tiers let the cron run cheaply and often. TICK is deterministic + LLM-free and
+# only writes on change, so it's safe to run every ~10 min. DAILY holds the
+# heavier / LLM-touching work and runs once a morning.
+TIERS = {
+    "tick":  ["gym", "catchup", "spend"],
+    "daily": ["ynab", "homework", "social", "chore", "meal"],
+}
 
 def main():
     fs = FlowSavvy()
     now = datetime.datetime.now()
-    for name in (sys.argv[1:] or list(DOMAINS)):
+    args = sys.argv[1:] or ["tick"]
+    names = []
+    for a in args:
+        names.extend(TIERS.get(a, [a]))
+    for name in names:
         fn = DOMAINS.get(name)
         if not fn:
-            print(f"unknown domain: {name}"); continue
+            continue   # not ported yet (or unknown) — skip quietly
         try:
             fn(fs, now)
         except Exception as e:
