@@ -11,9 +11,13 @@ def _h(iso):
     except ValueError: return 0
 
 def _sleep_ok(now):
-    """False if last night's sleep was poor or looks corrupted (engine then
-    won't pin a 5am morning). Uses the durable sleep/wake history."""
+    """False if last night's sleep was genuinely short. Prefers the watch's REAL
+    duration (Health Connect -> ntfy 'sleep:<minutes>'); only falls back to the
+    unreliable phone-sensor heuristic if there's no real data."""
     win_start = (now - datetime.timedelta(hours=18)).isoformat(timespec="seconds")
+    durs = [e for e in history.events("sleep_dur") if e["ts"] >= win_start]
+    if durs:   # real watch data wins
+        return (durs[-1].get("meta") or {}).get("minutes", 0) >= config.SLEEP_OK_MIN
     evs = sorted([e for e in history.events() if e["action"] in ("sleep", "wake")
                   and e["ts"] >= win_start], key=lambda e: e["ts"])
     if not evs:

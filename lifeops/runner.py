@@ -64,10 +64,17 @@ def ingest(fs, now):
         pass
     logged = set(st["logged_ids"])
     for m in ntfy.poll(since=st["ntfy_ts"]):
-        act = _SIG.get((m.get("message") or "").strip().lower())
+        body = (m.get("message") or "").strip().lower()
+        ts = datetime.datetime.fromtimestamp(m["time"]).isoformat(timespec="seconds")
+        act = _SIG.get(body)
         if act:
-            ts = datetime.datetime.fromtimestamp(m["time"]).isoformat(timespec="seconds")
             history.append(act, ts=ts, source="ntfy")
+        elif body.startswith("sleep:"):   # real sleep duration (minutes) from the watch
+            try:
+                history.append("sleep_dur", ts=ts, source="ntfy",
+                               meta={"minutes": int(float(body.split(":", 1)[1]))})
+            except Exception:
+                pass
         st["ntfy_ts"] = max(st["ntfy_ts"], m.get("time", 0))
     frm = _utc_iso(14)
     try:

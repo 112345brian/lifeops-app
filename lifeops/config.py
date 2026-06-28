@@ -62,6 +62,7 @@ SOCIAL_CAL = os.environ.get("SOCIAL_CAL", "")          # partner's FlowSavvy cal
 PROPOSE_AHEAD_DAYS = int(os.environ.get("PROPOSE_AHEAD_DAYS", "21"))  # propose hangouts ~3 weeks out
 PLAN_LEAD_DAYS = int(os.environ.get("PLAN_LEAD_DAYS", "14"))          # "Plan it" task ~2 weeks before
 HEARTBEAT_URL = os.environ.get("HEARTBEAT_URL", "")   # healthchecks.io ping (dead-man's switch)
+SLEEP_OK_MIN = int(os.environ.get("SLEEP_OK_MIN", "330"))  # min minutes of real sleep to count "rested"
 
 # Deliberate priority hierarchy (FlowSavvy: asap > high > normal > low).
 # Intended order: hard deadlines (Canvas, bumped by load-watcher) > gym (fixed
