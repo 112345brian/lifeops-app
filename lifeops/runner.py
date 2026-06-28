@@ -220,22 +220,51 @@ def run_spend(fs, yn, now):
 
 def run_social(fs, yn, now):
     from .engines import social_engine
+    sp = os.path.join(history.ROOT, "logs", "social_state.json")
+    st = {"lastLock": "1970-01-01T00:00:00Z"}
+    try: st.update(json.load(open(sp, encoding="utf-8")))
+    except Exception: pass
+    open_tasks = fs.list_items(itemType="task", completed=False).get("items", [])
+
+    # LOCK-IN: completing a "Plan X" task confirms the proposed X block.
+    for d in fs.list_items(itemType="task", completed=True, query="Plan",
+                           modifiedAfter=st["lastLock"]).get("items", []):
+        title = d.get("title") or ""
+        if not title.startswith("Plan "):
+            continue
+        base = title[5:].strip()
+        for t in open_tasks:
+            if t.get("title") == f"{base} (proposed)":
+                fs.create_task(title=base, listId=config.LIST_PERSONAL, isAutoScheduled=False,
+                               startDateTime=t.get("startDateTime"), endDateTime=t.get("endDateTime"),
+                               notes="Locked in (LifeOps).")
+                fs.delete_item(t["id"])
+                _alert_once(f"lock:{base}:{now.date()}", f"🔒 Locked in: {base}")
+                break
+    st["lastLock"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    os.makedirs(os.path.dirname(sp), exist_ok=True); json.dump(st, open(sp, "w", encoding="utf-8"))
+
     inp = gather.social_input(fs, now)
     out = social_engine.plan(inp["partner_days"], inp["friend_days"], inp["has_partner"],
                              inp["has_friend"], inp["good_days"], inp["is_protect_day"],
                              partner_name=config.PARTNER_NAME)
     for c in out["creates"]:
-        title = config.PARTNER_TASK if c["kind"] == "partner" else config.FRIENDS_TASK
-        fs.create_task(title=title, listId=config.LIST_PERSONAL,
+        base = config.PARTNER_TASK if c["kind"] == "partner" else config.FRIENDS_TASK
+        date = c["date"]
+        fs.create_task(title=f"{base} (proposed)", listId=config.LIST_PERSONAL,
                        schedulingHoursId=config.SH_EVENINGS, durationMinutes=120,
-                       dueDateTime=f"{c['date']}T21:00:00",
-                       canBeStartedAt=f"{c['date']}T17:00:00", isAutoIgnored=False,
-                       notes="Protected social time (LifeOps).")
+                       dueDateTime=f"{date}T21:00:00", canBeStartedAt=f"{date}T17:00:00",
+                       isAutoIgnored=False, notes="Proposed hangout — complete the 'Plan ...' task to lock it in.")
+        plan_due = (datetime.date.fromisoformat(date) - datetime.timedelta(days=2)).isoformat()
+        fs.create_task(title=f"Plan {base}", listId=config.LIST_PERSONAL,
+                       schedulingHoursId=config.SH_EVENINGS, durationMinutes=15,
+                       dueDateTime=f"{plan_due}T21:00:00", isAutoIgnored=False,
+                       notes="Reach out + arrange it. Completing this LOCKS IN the hangout.")
     if out["creates"]:
         fs.recalculate()
     for n in out["nudges"]:
         _alert_once("social:" + n[:24], n)
-    print(f"[social] created {len(out['creates'])}, nudges {len(out['nudges'])}")
+    print(f"[social] lock-check done; proposed {len(out['creates'])}; nudges {len(out['nudges'])}")
 
 def run_meal(fs, yn, now):
     sp = os.path.join(history.ROOT, "logs", "meal_state.json")

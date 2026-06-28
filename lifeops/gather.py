@@ -136,8 +136,11 @@ def social_input(fs, now):
         return (now - datetime.datetime.fromisoformat(ts)).days if ts else None
     start = now.date().isoformat(); weekend = (now.date() + datetime.timedelta(days=7)).isoformat()
     open_tasks = fs.list_items(itemType="task", completed=False).get("items", [])
-    has_partner = any(t.get("title") == config.PARTNER_TASK for t in open_tasks)
-    has_friend = any(t.get("title") == config.FRIENDS_TASK for t in open_tasks)
+    def _has(base):  # proposed / planning / locked all count as "has a plan"
+        return any((t.get("title") or "") in (base, f"{base} (proposed)", f"Plan {base}")
+                   for t in open_tasks)
+    has_partner = _has(config.PARTNER_TASK)
+    has_friend = _has(config.FRIENDS_TASK)
     if config.SOCIAL_CAL:
         try:
             for e in fs.list_items(itemType="event", calendarId=config.SOCIAL_CAL).get("items", []):
