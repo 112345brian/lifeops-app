@@ -26,6 +26,14 @@ FLOWSAVVY_TOKEN    = os.environ.get("FLOWSAVVY_TOKEN", "")
 # YNAB
 YNAB_TOKEN   = os.environ.get("YNAB_TOKEN", "")
 YNAB_BUDGET  = os.environ.get("YNAB_BUDGET", "last-used")
+# Pure money-move / savings funds the categorizer must NEVER assign a spend to
+# (a card swipe is never "Savings"). Lumpy spend-funds like Gifts/Splurge/Trips
+# are NOT here — those do receive real transactions.
+YNAB_NO_ASSIGN = [s.strip() for s in os.environ.get(
+    "YNAB_NO_ASSIGN", "Savings,Emergency Fund,Stocks").split(",") if s.strip()]
+# Cover-overspend is OPT-IN: blank = never auto-move budgeted dollars (don't raid
+# funds). Set to a dedicated buffer category name to enable.
+YNAB_COVER_FROM = os.environ.get("YNAB_COVER_FROM", "")
 
 # Anthropic (judgment calls only)
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")

@@ -9,11 +9,12 @@ Run:  python -m lifeops.runner          # all wired domains
 import sys, datetime
 from . import config, ntfy, gather, lock
 from .flowsavvy import FlowSavvy
-from .engines import gym_engine
+from .ynab import YNAB
+from .engines import gym_engine, ynab_engine
 
 _PRIO = {"urgent": "urgent", "high": "high", "none": "default"}
 
-def run_gym(fs, now):
+def run_gym(fs, yn, now):
     inp = gather.gym_input(fs, now)
     out = gym_engine.plan(inp)
     gym_engine.log(inp, out)
@@ -48,7 +49,46 @@ def run_gym(fs, now):
                    tags=["rotating_light"] if lvl == "urgent" else None)
     print(f"[gym] {out['summary']}")
 
-DOMAINS = {"gym": run_gym}   # chore/homework/spend/social/catchup/ynab wire in as ported
+def run_ynab(fs, yn, now):
+    import datetime as _dt
+    groups = yn.categories()
+    cats = [c for g in groups for c in g["categories"]
+            if not c.get("hidden") and not c.get("deleted")]
+    since = (now.date() - _dt.timedelta(days=120)).isoformat()
+    out = ynab_engine.plan(cats, yn.transactions(since_date=since),
+                           yn.transactions(ttype="unapproved"), yn.month(),
+                           cover_from=config.YNAB_COVER_FROM, no_assign=config.YNAB_NO_ASSIGN)
+    # novel payees: the ONLY LLM call, and only if a key is configured
+    if config.ANTHROPIC_API_KEY and out["novel"]:
+        from . import llm
+        skip = set(config.YNAB_NO_ASSIGN)
+        names = [c["name"] for c in cats if c["name"] not in skip]
+        nid = {c["name"]: c["id"] for c in cats}
+        for nv in out["novel"]:
+            cat = llm.categorize_unknown(nv["payee"], nv["amount"], names)
+            if cat in nid:
+                out["categorize"].append({"id": nv["id"], "category_id": nid[cat]})
+                if abs(nv["amount"]) * 1000 < ynab_engine.REVIEW:
+                    out["approve"].append(nv["id"])
+    catmap = {c["id"]: c["category_id"] for c in out["categorize"]}
+    appr = set(out["approve"])
+    updates = []
+    for tid in set(catmap) | appr:
+        u = {"id": tid}
+        if tid in catmap: u["category_id"] = catmap[tid]
+        if tid in appr:   u["approved"] = True
+        updates.append(u)
+    if updates:
+        yn.update_transactions(updates)
+    for mv in out["cover"]:
+        yn.set_budgeted(mv["category_id"], mv["budgeted"])
+    msg = (f"YNAB: categorized {len(out['categorize'])}, approved {len(appr)}, "
+           f"{len(out['novel'])} novel, {len(out['holds'])} held, covered {len(out['cover'])} cat(s)")
+    print("[ynab] " + msg)
+    if appr or out["holds"]:
+        ntfy.alert(msg)
+
+DOMAINS = {"gym": run_gym, "ynab": run_ynab}   # chore/homework/spend/social/catchup wire in next
 
 # Tiers let the cron run cheaply and often. TICK is deterministic + LLM-free and
 # only writes on change, so it's safe to run every ~10 min. DAILY holds the
@@ -71,6 +111,7 @@ def main():
 
 def _run():
     fs = FlowSavvy()
+    yn = YNAB()
     now = datetime.datetime.now()
     args = sys.argv[1:] or ["tick"]
     names = []
@@ -81,7 +122,7 @@ def _run():
         if not fn:
             continue   # not ported yet (or unknown) — skip quietly
         try:
-            fn(fs, now)
+            fn(fs, yn, now)
         except Exception as e:
             print(f"[{name}] ERROR: {e}")
 
