@@ -11,7 +11,7 @@ $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances 
 $tickAction  = New-ScheduledTaskAction -Execute $py -Argument "-m lifeops.runner tick" -WorkingDirectory $proj
 $tickTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) `
                  -RepetitionInterval (New-TimeSpan -Minutes 10) `
-                 -RepetitionDuration ([TimeSpan]::MaxValue)
+                 -RepetitionDuration (New-TimeSpan -Days 3650)
 Register-ScheduledTask -TaskName "LifeOps-tick" -Action $tickAction -Trigger $tickTrigger `
   -Settings $settings -Description "LifeOps fast loop (deterministic, ~every 10 min)" -Force
 
