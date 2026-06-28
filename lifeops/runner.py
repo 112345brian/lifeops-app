@@ -257,7 +257,7 @@ def run_social(fs, yn, now):
                        schedulingHoursId=config.SH_EVENINGS, durationMinutes=120,
                        dueDateTime=f"{date}T21:00:00", canBeStartedAt=f"{date}T17:00:00",
                        isAutoIgnored=False, notes="Proposed hangout — complete the 'Plan ...' task to lock it in.")
-        plan_due = (datetime.date.fromisoformat(date) - datetime.timedelta(days=2)).isoformat()
+        plan_due = (datetime.date.fromisoformat(date) - datetime.timedelta(days=config.PLAN_LEAD_DAYS)).isoformat()
         fs.create_task(title=f"Plan {base}", listId=config.LIST_PERSONAL,
                        schedulingHoursId=config.SH_EVENINGS, durationMinutes=15,
                        dueDateTime=f"{plan_due}T21:00:00", isAutoIgnored=False,

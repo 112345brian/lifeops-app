@@ -149,8 +149,9 @@ def social_input(fs, now):
                     has_partner = True
         except Exception:
             pass
-    days = [now.date() + datetime.timedelta(days=i) for i in range(1, 8)]
-    days.sort(key=lambda d: (d.weekday() < 5, d))   # weekends first
+    lo = max(1, config.PROPOSE_AHEAD_DAYS - 3); hi = config.PROPOSE_AHEAD_DAYS + 4
+    days = [now.date() + datetime.timedelta(days=i) for i in range(lo, hi)]
+    days.sort(key=lambda d: (d.weekday() < 5, d))   # weekends first, ~3 weeks out
     return {"partner_days": ago(history.last("partner")), "friend_days": ago(history.last("friends")),
             "has_partner": has_partner, "has_friend": has_friend,
             "good_days": [d.isoformat() for d in days],
