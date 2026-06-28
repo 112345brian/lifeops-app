@@ -44,7 +44,8 @@ def gym_input(fs, now, sick_until=None):
     horizon = [today + datetime.timedelta(days=i) for i in range(7)]
     hset = {d.isoformat() for d in horizon}
 
-    gym_open = fs.list_items(itemType="task", query="Gym", completed=False).get("items", [])
+    gym_open = [t for t in fs.list_items(itemType="task", query="Gym", completed=False).get("items", [])
+                if (t.get("title") or "").startswith("Gym")]
     # count gym days, excluding any you flagged "don't count" (gym-nocount)
     gym_days = history.days_with("gym", monday.isoformat(), sunday.isoformat())
     skip_days = history.days_with("gym_skip", monday.isoformat(), sunday.isoformat())
@@ -53,7 +54,7 @@ def gym_input(fs, now, sick_until=None):
     scheduled = []
     for t in gym_open:
         st = t.get("startDateTime")
-        if st and today.isoformat() <= _d(st) <= sunday.isoformat():
+        if st and _d(st) in hset:
             scheduled.append({"id": t["id"], "date": _d(st), "start": _hm(st),
                               "end": _hm(t.get("endDateTime")), "manual": False,
                               "started": _d(st) == today.isoformat() and _h(st) <= now.hour + 2})

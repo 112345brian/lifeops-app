@@ -115,7 +115,8 @@ def run_gym(fs, yn, now):
     # clean up stale past gym blocks; record genuine misses (no ping that day) so
     # adherence learning has data — by slot, to learn what he actually honors.
     today = now.date().isoformat()
-    for t in fs.list_items(itemType="task", query="Gym", completed=False).get("items", []):
+    for t in [t for t in fs.list_items(itemType="task", query="Gym", completed=False).get("items", [])
+              if (t.get("title") or "").startswith("Gym")]:
         sd = t.get("startDateTime") or ""
         d = sd[:10]
         if d and d < today:
