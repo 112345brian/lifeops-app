@@ -7,7 +7,7 @@ Run:  python -m lifeops.runner          # all wired domains
       python -m lifeops.runner gym      # one domain
 """
 import sys, os, json, datetime
-from . import config, ntfy, gather, lock, history
+from . import config, ntfy, gather, lock, history, adherence
 from .flowsavvy import FlowSavvy
 from .ynab import YNAB
 from .engines import gym_engine, ynab_engine
@@ -345,8 +345,26 @@ def run_meal(fs, yn, now):
                 actions=[("Have leftovers — skip", "meal-skip")])
     print("[meal] created groceries + cook")
 
+def run_digest(fs, yn, now):
+    """Weekly accountability digest (Sundays) — the one LLM-as-coach use."""
+    if now.strftime("%a") != "Sun" or not config.ANTHROPIC_API_KEY:
+        print("[digest] skip (not Sunday / no key)"); return
+    mon = now.date() - datetime.timedelta(days=now.date().weekday())
+    sun = mon + datetime.timedelta(days=6)
+    wk = lambda a: len(history.days_with(a, mon.isoformat(), sun.isoformat()))
+    facts = {"gym_done": wk("gym"), "gym_target": 4, "gym_adherence": adherence.gym(now),
+             "chores_done": wk("laundry") + wk("clean_room") + wk("clean_bathroom"),
+             "saw_partner": wk("partner"), "saw_friends": wk("friends")}
+    from . import llm
+    try:
+        _alert_once("digest:" + now.date().isoformat(), llm.weekly_digest(facts))
+        print("[digest] sent")
+    except Exception as e:
+        print(f"[digest] error: {e}")
+
 DOMAINS = {"gym": run_gym, "ynab": run_ynab, "chore": run_chore, "catchup": run_catchup,
-           "homework": run_homework, "spend": run_spend, "social": run_social, "meal": run_meal}
+           "homework": run_homework, "spend": run_spend, "social": run_social,
+           "meal": run_meal, "digest": run_digest}
 
 # Tiers let the cron run cheaply and often. TICK is deterministic + LLM-free and
 # only writes on change, so it's safe to run every ~10 min. DAILY holds the
@@ -355,7 +373,7 @@ TIERS = {
     # tick is signal-driven + cheap (every ~10 min). Scheduling/planning is NOT
     # here — it doesn't need 10-min churn and would keep reshuffling your calendar.
     "tick":  ["catchup", "spend"],
-    "daily": ["gym", "ynab", "homework", "social", "chore", "meal"],
+    "daily": ["gym", "ynab", "homework", "social", "chore", "meal", "digest"],
 }
 
 def main():

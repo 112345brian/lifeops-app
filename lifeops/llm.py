@@ -36,3 +36,14 @@ def categorize_unknown(payee, amount, category_names):
         return cat if cat in category_names else None
     except Exception:
         return None
+
+def weekly_digest(facts):
+    """Turn the week's adherence stats into a blunt, supportive accountability
+    note. This is NL synthesis — a real LLM job, not deterministic logic."""
+    prompt = ("You are Brian's blunt but supportive accountability coach. From the "
+              "stats, write 2-3 sentences: what he actually did this week, the ONE "
+              "pattern worth fixing, and a real push for next week. Be direct and a "
+              "little funny, never corny or preachy.\nStats: " + json.dumps(facts))
+    msg = _c().messages.create(model=config.JUDGE_MODEL, max_tokens=220,
+                               messages=[{"role": "user", "content": prompt}])
+    return msg.content[0].text.strip()
