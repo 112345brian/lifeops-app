@@ -16,8 +16,7 @@ Output:{"creates":[{title,listId,durationMinutes,minLengthMinutes,priority,
 import json, sys, re, datetime
 DAY = datetime.timedelta(days=1)
 
-def main():
-    inp = json.load(open(sys.argv[1], encoding="utf-8"))
+def plan(inp):
     processed = list(inp.get("processed", []))
     seen = set(processed)
     creates = []
@@ -33,8 +32,7 @@ def main():
         t = c.get("dueTime") or "20:00"
         lead = min(3, max(0, n - 1))
         creates.append({
-            "title": c["title"],
-            "listId": c.get("listId"),
+            "title": c["title"], "listId": c.get("listId"),
             "durationMinutes": c.get("durationMinutes"),
             "minLengthMinutes": c.get("minLengthMinutes"),
             "priority": c.get("priority", "low"),
@@ -44,7 +42,10 @@ def main():
             "canBeStartedAt": f"{(nextd - lead*DAY).isoformat()}T{t}:00",
         })
         processed.append(c["id"]); seen.add(c["id"])
-    out = {"creates": creates, "processed": processed[-300:]}
+    return {"creates": creates, "processed": processed[-300:]}
+
+def main():
+    out = plan(json.load(open(sys.argv[1], encoding="utf-8")))
     json.dump(out, open(sys.argv[2], "w", encoding="utf-8"), indent=2)
     print(json.dumps(out, indent=2))
 

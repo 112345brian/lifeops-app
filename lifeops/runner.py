@@ -137,7 +137,54 @@ def run_ynab(fs, yn, now):
     if appr or out["holds"]:
         ntfy.alert(msg)
 
-DOMAINS = {"gym": run_gym, "ynab": run_ynab}   # chore/homework/spend/social/catchup wire in next
+def run_chore(fs, yn, now):
+    sp = os.path.join(history.ROOT, "logs", "chore_state.json")
+    st = {"processed": [], "lastRunUtc": "1970-01-01T00:00:00Z"}
+    try: st.update(json.load(open(sp, encoding="utf-8")))
+    except Exception: pass
+    from .engines import chore_engine
+    comp = fs.list_items(itemType="task", completed=True, modifiedAfter=st["lastRunUtc"]).get("items", [])
+    completed = []
+    for t in comp:
+        if "[cycle:" not in (t.get("notes") or ""):
+            continue
+        completed.append({"id": t["id"], "title": t.get("title"), "notes": t.get("notes"),
+                          "completed_date": (t.get("lastModified") or now.isoformat())[:10],
+                          "durationMinutes": t.get("durationMinutes"),
+                          "minLengthMinutes": t.get("minLengthMinutes"),
+                          "listId": t.get("listId"), "priority": t.get("priority", "low"),
+                          "schedulingHoursId": t.get("schedulingHoursId"),
+                          "dueTime": (t.get("dueDateTime") or "")[11:16] or "20:00"})
+    out = chore_engine.plan({"completed": completed, "processed": st["processed"]})
+    for c in out["creates"]:
+        fs.create_task(title=c["title"], listId=c["listId"], durationMinutes=c["durationMinutes"],
+                       minLengthMinutes=c["minLengthMinutes"], priority=c["priority"],
+                       schedulingHoursId=c["schedulingHoursId"], notes=c["notes"],
+                       dueDateTime=c["dueDateTime"], canBeStartedAt=c["canBeStartedAt"],
+                       isAutoIgnored=False)
+    if out["creates"]:
+        fs.recalculate()
+    st["processed"] = out["processed"]; st["lastRunUtc"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    os.makedirs(os.path.dirname(sp), exist_ok=True); json.dump(st, open(sp, "w", encoding="utf-8"))
+    print(f"[chore] cycled {len(out['creates'])}")
+
+def run_catchup(fs, yn, now):
+    sp = os.path.join(history.ROOT, "logs", "catchup_state.json")
+    st = {"lastHandled": 0}
+    try: st.update(json.load(open(sp, encoding="utf-8")))
+    except Exception: pass
+    fired = any((m.get("message") or "").strip().lower() == "catchup"
+                for m in ntfy.poll(since=st["lastHandled"]))
+    if fired:
+        fs.recalculate(reschedule_past=True)
+        ntfy.alert("Catch-up: re-packed your whole schedule around what's left.")
+        print("[catchup] re-packed")
+    else:
+        print("[catchup] no trigger")
+    st["lastHandled"] = int(now.timestamp())
+    os.makedirs(os.path.dirname(sp), exist_ok=True); json.dump(st, open(sp, "w", encoding="utf-8"))
+
+DOMAINS = {"gym": run_gym, "ynab": run_ynab, "chore": run_chore, "catchup": run_catchup}
 
 # Tiers let the cron run cheaply and often. TICK is deterministic + LLM-free and
 # only writes on change, so it's safe to run every ~10 min. DAILY holds the
