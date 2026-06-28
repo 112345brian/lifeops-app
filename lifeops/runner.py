@@ -337,15 +337,18 @@ def run_meal(fs, yn, now):
         print("[meal] not due"); return
     if fs.list_items(itemType="task", query="Meal prep", completed=False).get("items", []):
         print("[meal] already planned"); return
+    d0 = now.date().isoformat()
     d3 = (now.date() + datetime.timedelta(days=3)).isoformat()
     d4 = (now.date() + datetime.timedelta(days=4)).isoformat()
     g = fs.create_task(title="Groceries", listId=config.LIST_PERSONAL,
                        schedulingHoursId=config.SH_PERSONAL, durationMinutes=60,
                        priority=config.PRIO_MEAL, dueDateTime=f"{d3}T19:00:00",
+                       canBeStartedAt=f"{d0}T00:00:00",
                        isAutoIgnored=False, notes="Meal-prep week (LifeOps).")
     fs.create_task(title="Meal prep", listId=config.LIST_PERSONAL,
                    schedulingHoursId=config.SH_PERSONAL, durationMinutes=120,
                    priority=config.PRIO_MEAL, dueDateTime=f"{d4}T19:00:00",
+                   canBeStartedAt=f"{d3}T00:00:00",
                    blockedByIds=[g["id"]] if g.get("id") else None,
                    isAutoIgnored=False, notes="Cook after groceries (LifeOps).")
     _touch()
