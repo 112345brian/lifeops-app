@@ -54,30 +54,37 @@ def gym_input(fs, now, sick_until=None):
                               "end": _hm(t.get("endDateTime")), "manual": False,
                               "started": _d(st) == today.isoformat() and _h(st) <= now.hour + 2})
 
+    # An event only BLOCKS the gym if it overlaps the 18:00-21:00 evening window;
+    # any social event still marks the day as a "show" (for recovery + late-night).
     blocked, shows = set(), set()
+    def _consider(st, en):
+        if not st or _d(st) not in hset:
+            return
+        sh, eh = _h(st), (_h(en) if en else _h(st) + 2)
+        shows.add(_d(st))
+        if sh < 21 and eh > 18:
+            blocked.add(_d(st))
     for cid in config.EVENT_CALS:
         try:
             evs = fs.list_items(itemType="event", calendarId=cid).get("items", [])
         except Exception:
             evs = []
         for e in evs:
-            st = e.get("startDateTime")
-            if st and _d(st) in hset and 17 <= _h(st) < 23:
-                blocked.add(_d(st)); shows.add(_d(st))
+            _consider(e.get("startDateTime"), e.get("endDateTime"))
     for t in gym_open:
-        st = t.get("startDateTime"); title = (t.get("title") or "")
-        if st and _d(st) in hset and 17 <= _h(st) < 23 and title in (config.PARTNER_TASK, config.FRIENDS_TASK):
-            blocked.add(_d(st))
+        if (t.get("title") or "") in (config.PARTNER_TASK, config.FRIENDS_TASK):
+            _consider(t.get("startDateTime"), t.get("endDateTime"))
 
     sleep_ok = _sleep_ok(now)
     days = []
     for d in horizon:
         ds, prev = d.isoformat(), (d - datetime.timedelta(days=1)).isoformat()
+        near = (d - today).days <= 1   # last night's sleep only gates today/tomorrow
         days.append({"date": ds, "weekday": d.strftime("%a"),
                      "evening_blocked": ds in blocked,
                      "day_after_show": prev in shows,
                      "prior_night_blocked": prev in blocked,
-                     "sleep_ok": sleep_ok})
+                     "sleep_ok": sleep_ok if near else True})
 
     return {"today": today.isoformat(), "now": now.isoformat(timespec="seconds"),
             "sick_until": sick_until, "completed_count": completed_count,
