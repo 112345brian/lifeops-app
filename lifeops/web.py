@@ -1,30 +1,41 @@
-"""LifeOps control panel — a tiny FastAPI app you reach privately over Tailscale.
-
-Does the things FlowSavvy/Claude can't: create/edit completion-relative recurring
-tasks (the [cycle:Nd] kind), see status + history, edit config knobs, toggle
-domains on/off, and fire manual actions — all without querying Claude.
+"""LifeOps control panel — FastAPI web UI.
 
 Run:   uvicorn lifeops.web:app --host 0.0.0.0 --port 8765
-Reach: tailscale serve 8765   ->  https://<your-pc>.<tailnet>.ts.net
+Reach: tailscale serve 8765  →  https://<your-pc>.<tailnet>.ts.net
 """
 import os, re, sys, json, subprocess, datetime
-from fastapi import FastAPI, Form
-from fastapi.responses import HTMLResponse, RedirectResponse
+from pathlib import Path
+from fastapi import FastAPI, Form, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
 from . import config, history
 from .flowsavvy import FlowSavvy
 
 app = FastAPI()
-ROOT = history.ROOT
+TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+
+ROOT         = history.ROOT
 DOMAINS_FILE = os.path.join(ROOT, "logs", "domains.json")
-ENV = os.path.join(ROOT, ".env")
-ALL_DOMAINS = ["gym", "ynab", "chore", "catchup", "homework", "spend", "social", "meal"]
-EDITABLE = ["PARTNER_NAME", "PARTNER_SIGNAL", "PROPOSE_AHEAD_DAYS", "PLAN_LEAD_DAYS",
-            "DISCRETIONARY", "OUTING_COSTS", "YNAB_COVER_ORDER", "YNAB_NO_ASSIGN",
-            "EVENT_CALS", "SOCIAL_CAL"]   # never secrets/tokens
+ENV          = os.path.join(ROOT, ".env")
+
+ALL_DOMAINS  = ["gym", "ynab", "chore", "catchup", "homework", "spend", "social", "meal"]
+DOMAIN_ICON  = {"gym": "🏋️", "ynab": "💰", "chore": "🧹", "catchup": "⚡",
+                "homework": "📚", "spend": "💸", "social": "👫", "meal": "🍽️"}
+EDITABLE     = ["PARTNER_NAME", "PARTNER_SIGNAL", "PROPOSE_AHEAD_DAYS", "PLAN_LEAD_DAYS",
+                "DISCRETIONARY", "OUTING_COSTS", "YNAB_COVER_ORDER", "YNAB_NO_ASSIGN",
+                "EVENT_CALS", "SOCIAL_CAL"]
+ACTION_COLOR = {"gym": "#4ade80", "gym_skip": "#6b7280", "chore_done": "#60a5fa",
+                "social": "#c084fc", "meal": "#fb923c", "ynab": "#fbbf24",
+                "homework": "#38bdf8", "digest": "#a78bfa", "sleep": "#818cf8"}
+
+
+# ── helpers ───────────────────────────────────────────────────────────────────
 
 def _domains():
-    try: return json.load(open(DOMAINS_FILE, encoding="utf-8"))
-    except Exception: return {}
+    try:
+        return json.load(open(DOMAINS_FILE, encoding="utf-8"))
+    except Exception:
+        return {}
 
 def _env_value(key):
     try:
@@ -37,11 +48,14 @@ def _env_value(key):
 
 def _set_env(key, val):
     lines = []
-    try: lines = open(ENV, encoding="utf-8").read().splitlines()
-    except FileNotFoundError: pass
+    try:
+        lines = open(ENV, encoding="utf-8").read().splitlines()
+    except FileNotFoundError:
+        pass
     for i, l in enumerate(lines):
         if l.strip().startswith(key + "="):
-            lines[i] = f"{key}={val}"; break
+            lines[i] = f"{key}={val}"
+            break
     else:
         lines.append(f"{key}={val}")
     open(ENV, "w", encoding="utf-8").write("\n".join(lines) + "\n")
@@ -51,8 +65,8 @@ def _cycle_tasks(fs):
     for t in fs.list_items(itemType="task", completed=False).get("items", []):
         m = re.search(r"\[cycle:(\d+)d\]", t.get("notes") or "")
         if m:
-            out.append({"id": t["id"], "title": t.get("title") or "", "days": int(m.group(1)),
-                        "due": (t.get("dueDateTime") or "")[:10],
+            out.append({"id": t["id"], "title": t.get("title") or "",
+                        "days": int(m.group(1)), "due": (t.get("dueDateTime") or "")[:10],
                         "dur": t.get("durationMinutes"), "list": t.get("listId"),
                         "sh": t.get("schedulingHoursId")})
     return sorted(out, key=lambda x: x["title"].lower())
@@ -61,116 +75,138 @@ def _run_domain(name):
     subprocess.Popen([sys.executable, "-m", "lifeops.runner", name], cwd=ROOT,
                      creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
-def _esc(s): return str(s).replace("<", "&lt;").replace(">", "&gt;")
-
-def _status():
+def _last_run():
     try:
         lr = json.load(open(os.path.join(ROOT, "logs", "last_run.json"), encoding="utf-8"))
     except Exception:
-        return "<i>never run yet</i>"
-    ts = lr.get("ts", "?")
-    try:
-        age = datetime.datetime.now() - datetime.datetime.fromisoformat(ts)
-        mins = int(age.total_seconds() // 60)
-        fresh = "🟢" if mins < 20 else ("🟡" if mins < 120 else "🔴")
-        when = f"{fresh} {mins} min ago"
-    except Exception:
-        when = ts
-    errs = lr.get("errors") or {}
-    estr = (" — <b style='color:#b00'>errors: " + _esc(", ".join(errs)) + "</b>") if errs else " — ok"
-    return f"last run {when} ({_esc(', '.join(lr.get('ran', [])) or '—')}){estr}"
+        return None
+    ts = lr.get("ts")
+    age_mins = None
+    if ts:
+        try:
+            delta = datetime.datetime.now() - datetime.datetime.fromisoformat(ts)
+            age_mins = int(delta.total_seconds() // 60)
+        except Exception:
+            pass
+    return {"ts": ts, "ran": lr.get("ran", []), "errors": lr.get("errors") or {}, "age_mins": age_mins}
 
-def render():
-    fs = FlowSavvy()
-    cyc = _cycle_tasks(fs)
+def _gym_stats():
+    cutoff     = (datetime.date.today() - datetime.timedelta(weeks=4)).isoformat()
+    evts       = [e for e in history.events("gym")      if e["ts"][:10] >= cutoff]
+    skip_dates = {e["ts"][:10] for e in history.events("gym_skip")}
+    real       = [e for e in evts if e["ts"][:10] not in skip_dates]
+    morning    = sum(1 for e in real
+                     if datetime.datetime.fromisoformat(e["ts"]).hour < 12)
+    week_start = (datetime.date.today()
+                  - datetime.timedelta(days=datetime.date.today().weekday())).isoformat()
+    this_week  = sum(1 for e in real if e["ts"][:10] >= week_start)
+    return {"total_4w": len(real), "morning": morning,
+            "evening": len(real) - morning, "this_week": this_week}
+
+def _build_context(fs):
+    lr  = _last_run()
     dom = _domains()
-    recent = history.events()[-12:][::-1]
+    gs  = _gym_stats()
 
-    rows = "".join(
-        f"<tr><td>{_esc(c['title'])}</td><td>every {c['days']}d</td>"
-        f"<td>{c['dur'] or ''}m</td><td>next {c['due']}</td>"
-        f"<td><form method=post action=/cycle/edit style='display:inline'>"
-        f"<input type=hidden name=id value='{c['id']}'>"
-        f"<input name=days value='{c['days']}' size=3> "
-        f"<button>save</button></form> "
-        f"<form method=post action=/cycle/del style='display:inline'>"
-        f"<input type=hidden name=id value='{c['id']}'><button>x</button></form></td></tr>"
-        for c in cyc) or "<tr><td colspan=5><i>none yet</i></td></tr>"
+    # status bar
+    if lr is None:
+        dot, text = "⚫", "never run"
+    else:
+        mins = lr["age_mins"]
+        if mins is None:
+            dot, text = "⚫", lr["ts"] or "?"
+        elif mins < 20:
+            dot, text = "🟢", f"{mins}m ago"
+        elif mins < 120:
+            dot, text = "🟡", f"{mins}m ago"
+        else:
+            dot, text = "🔴", f"{mins // 60}h ago"
+        if lr["errors"]:
+            text += " · errors: " + ", ".join(lr["errors"])
+        if lr["ran"]:
+            text += " · ran: " + ", ".join(lr["ran"])
 
-    toggles = "".join(
-        f"<form method=post action=/domain style='display:inline-block;margin:2px'>"
-        f"<input type=hidden name=name value='{d}'>"
-        f"<button name=on value='{0 if dom.get(d, True) else 1}'>"
-        f"{d}: {'ON' if dom.get(d, True) else 'off'}</button></form>"
-        for d in ALL_DOMAINS)
+    # domains list
+    domains = [{"name": d, "icon": DOMAIN_ICON.get(d, "•"), "enabled": dom.get(d, True)}
+               for d in ALL_DOMAINS]
 
-    runs = "".join(f"<form method=post action=/run style='display:inline-block;margin:2px'>"
-                   f"<input type=hidden name=name value='{d}'><button>run {d}</button></form>"
-                   for d in ALL_DOMAINS)
+    # history entries
+    raw_history = history.events()[-50:][::-1]
+    hist = []
+    for e in raw_history:
+        ts = e.get("ts", "")
+        try:
+            display_ts = datetime.datetime.fromisoformat(ts).strftime("%m-%d %H:%M")
+        except Exception:
+            display_ts = ts[:16]
+        meta = e.get("meta") or {}
+        meta_str = (", ".join(f"{k}={v}" for k, v in meta.items())
+                    if isinstance(meta, dict) else str(meta))
+        hist.append({
+            "display_ts": display_ts,
+            "action":     e.get("action", "?"),
+            "source":     e.get("source", ""),
+            "color":      ACTION_COLOR.get(e.get("action", ""), "#9ca3af"),
+            "meta_str":   meta_str,
+        })
 
-    cfg = "".join(
-        f"<tr><td>{k}</td><td><form method=post action=/config>"
-        f"<input type=hidden name=key value='{k}'>"
-        f"<input name=value value='{_esc(_env_value(k))}' size=40><button>save</button>"
-        f"</form></td></tr>" for k in EDITABLE)
+    return {
+        "status_dot":       dot,
+        "status_text":      text,
+        "gym_stats":        gs,
+        "domains":          domains,
+        "cycle_tasks":      _cycle_tasks(fs),
+        "config_items":     [{"key": k, "value": _env_value(k)} for k in EDITABLE],
+        "history":          hist,
+        "list_personal":    config.LIST_PERSONAL,
+        "last_run_domains": ", ".join(lr["ran"]) if lr and lr["ran"] else "",
+        "last_run_errors":  str(lr["errors"]) if lr and lr["errors"] else "",
+    }
 
-    hist = "".join(f"<li>{_esc(e['ts'])} — <b>{_esc(e['action'])}</b> ({_esc(e.get('source',''))})</li>"
-                   for e in recent) or "<li><i>nothing logged</i></li>"
 
-    return f"""<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>
-<title>LifeOps</title><style>
-body{{font-family:system-ui;max-width:760px;margin:1em auto;padding:0 .6em}}
-h2{{margin-top:1.4em;border-bottom:1px solid #ccc}}
-table{{width:100%;border-collapse:collapse}} td{{padding:3px;border-bottom:1px solid #eee;font-size:14px}}
-button{{padding:4px 8px}} input{{padding:3px}}
-</style>
-<h1>LifeOps</h1>
-<p style='background:#f4f4f4;padding:.5em;border-radius:6px'>{_status()}</p>
+# ── JSON endpoints ─────────────────────────────────────────────────────────────
 
-<h2>Recurring tasks (repeat N days after you complete them)</h2>
-<table><tr><th>task</th><th>cycle</th><th>dur</th><th>next</th><th></th></tr>{rows}</table>
-<form method=post action=/cycle/new style='margin-top:.6em'>
- <input name=title placeholder=title required>
- every <input name=days value=7 size=3>d ·
- <input name=duration value=30 size=4>min ·
- list <input name=listId value='{config.LIST_PERSONAL}' size=8>
- <button>add</button>
-</form>
+@app.get("/api/status")
+def api_status():
+    lr  = _last_run()
+    dom = _domains()
+    return JSONResponse({
+        "last_run":  lr,
+        "domains":   {d: dom.get(d, True) for d in ALL_DOMAINS},
+        "gym_stats": _gym_stats(),
+    })
 
-<h2>Domains</h2><div>{toggles}</div>
-<h3>Run now</h3><div>{runs}</div>
-<div style='margin-top:.5em'>
- <form method=post action=/gym-nocount style='display:inline'><button>gym: don't count today</button></form>
- <form method=post action=/recalc style='display:inline'><button>recalculate</button></form>
-</div>
+@app.get("/api/history")
+def api_history(n: int = 50):
+    return JSONResponse(history.events()[-n:][::-1])
 
-<h2>Config <small>(restart the app to apply)</small></h2>
-<table>{cfg}</table>
 
-<h2>Recent history</h2><ul>{hist}</ul>
-"""
-
-@app.get("/", response_class=HTMLResponse)
-def home():
-    return render()
+# ── action endpoints ────────────────────────────────────────────────────────────
 
 @app.post("/cycle/new")
 def cycle_new(title: str = Form(...), days: int = Form(7), duration: int = Form(30),
               listId: str = Form("")):
     fs = FlowSavvy()
-    d = (datetime.date.today() + datetime.timedelta(days=days)).isoformat()
-    fs.create_task(title=title, listId=listId or config.LIST_PERSONAL,
-                   durationMinutes=duration, minLengthMinutes=duration,
-                   schedulingHoursId=config.SH_PERSONAL, isAutoIgnored=False,
-                   dueDateTime=f"{d}T20:00:00",
-                   canBeStartedAt=f"{datetime.date.today().isoformat()}T08:00:00",
-                   notes=f"<p>Recurring task.</p><p>[cycle:{days}d]</p>")
+    d  = (datetime.date.today() + datetime.timedelta(days=days)).isoformat()
+    fs.create_task(
+        title=title,
+        listId=listId or config.LIST_PERSONAL,
+        durationMinutes=duration,
+        minLengthMinutes=duration,
+        schedulingHoursId=config.SH_PERSONAL,
+        isAutoIgnored=False,
+        dueDateTime=f"{d}T20:00:00",
+        canBeStartedAt=f"{datetime.date.today().isoformat()}T08:00:00",
+        notes=f"<p>Recurring task.</p><p>[cycle:{days}d]</p>",
+    )
     fs.recalculate()
     return RedirectResponse("/", 303)
 
 @app.post("/cycle/del")
 def cycle_del(id: str = Form(...)):
-    fs = FlowSavvy(); fs.delete_item(id); fs.recalculate()
+    fs = FlowSavvy()
+    fs.delete_item(id)
+    fs.recalculate()
     return RedirectResponse("/", 303)
 
 @app.post("/cycle/edit")
@@ -179,26 +215,34 @@ def cycle_edit(id: str = Form(...), days: int = Form(...)):
     for c in _cycle_tasks(fs):
         if c["id"] == id:
             d = (datetime.date.today() + datetime.timedelta(days=days)).isoformat()
-            fs.create_task(title=c["title"], listId=c["list"] or config.LIST_PERSONAL,
-                           durationMinutes=c["dur"], minLengthMinutes=c["dur"],
-                           schedulingHoursId=c["sh"] or config.SH_PERSONAL, isAutoIgnored=False,
-                           dueDateTime=f"{d}T20:00:00",
-                           canBeStartedAt=f"{datetime.date.today().isoformat()}T08:00:00",
-                           notes=f"<p>Recurring task.</p><p>[cycle:{days}d]</p>")
-            fs.delete_item(id); fs.recalculate()
+            fs.create_task(
+                title=c["title"],
+                listId=c["list"] or config.LIST_PERSONAL,
+                durationMinutes=c["dur"],
+                minLengthMinutes=c["dur"],
+                schedulingHoursId=c["sh"] or config.SH_PERSONAL,
+                isAutoIgnored=False,
+                dueDateTime=f"{d}T20:00:00",
+                canBeStartedAt=f"{datetime.date.today().isoformat()}T08:00:00",
+                notes=f"<p>Recurring task.</p><p>[cycle:{days}d]</p>",
+            )
+            fs.delete_item(id)
+            fs.recalculate()
             break
     return RedirectResponse("/", 303)
 
 @app.post("/domain")
-def domain(name: str = Form(...), on: int = Form(...)):
-    d = _domains(); d[name] = bool(on)
+def domain_toggle(name: str = Form(...), on: int = Form(...)):
+    d = _domains()
+    d[name] = bool(on)
     os.makedirs(os.path.dirname(DOMAINS_FILE), exist_ok=True)
     json.dump(d, open(DOMAINS_FILE, "w", encoding="utf-8"))
     return RedirectResponse("/", 303)
 
 @app.post("/run")
-def run(name: str = Form(...)):
-    _run_domain(name); return RedirectResponse("/", 303)
+def run_domain(name: str = Form(...)):
+    _run_domain(name)
+    return RedirectResponse("/", 303)
 
 @app.post("/config")
 def set_config(key: str = Form(...), value: str = Form("")):
@@ -208,8 +252,19 @@ def set_config(key: str = Form(...), value: str = Form("")):
 
 @app.post("/gym-nocount")
 def gym_nocount():
-    history.append("gym_skip", source="ui"); return RedirectResponse("/", 303)
+    history.append("gym_skip", source="ui")
+    return RedirectResponse("/", 303)
 
 @app.post("/recalc")
 def recalc():
-    FlowSavvy().recalculate(); return RedirectResponse("/", 303)
+    FlowSavvy().recalculate()
+    return RedirectResponse("/", 303)
+
+
+# ── main page ──────────────────────────────────────────────────────────────────
+
+@app.get("/", response_class=HTMLResponse)
+def home(request: Request):
+    fs  = FlowSavvy()
+    ctx = _build_context(fs)
+    return TEMPLATES.TemplateResponse("index.html", {"request": request, **ctx})
