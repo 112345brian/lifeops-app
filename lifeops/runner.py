@@ -126,7 +126,12 @@ def run_gym(fs, yn, now):
                                meta={"slot": slot})
             try: fs.delete_item(t["id"]); _touch()
             except Exception: pass
-    inp = gather.gym_input(fs, now)
+    gym_state_path = os.path.join(history.ROOT, "logs", "gym_state.json")
+    try:
+        sick_until = json.load(open(gym_state_path, encoding="utf-8")).get("sick_until")
+    except Exception:
+        sick_until = None
+    inp = gather.gym_input(fs, now, sick_until=sick_until)
     out = gym_engine.plan(inp)
     gym_engine.log(inp, out)
     have = {s["date"] for s in inp["scheduled"]}

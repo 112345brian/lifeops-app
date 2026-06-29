@@ -217,6 +217,32 @@ tr:last-child td { border-bottom: none; }
 .hist-action { font-weight: 500; }
 .hist-meta   { color: var(--muted); font-size: 12px; }
 
+/* ── gym controls ── */
+.gym-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+@media (max-width: 620px) { .gym-grid { grid-template-columns: 1fr; } }
+
+.gym-control-group { display: flex; flex-direction: column; gap: .4rem; }
+.gym-label { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.gym-note  { font-size: 11px; color: var(--muted); line-height: 1.4; }
+.gym-note.warn { color: var(--yellow); }
+
+.gym-blocked-list { display: flex; flex-direction: column; gap: .3rem; margin-top: .2rem; }
+.gym-blocked-row  { display: flex; align-items: center; justify-content: space-between;
+                    background: var(--surface2); border: 1px solid var(--border);
+                    border-radius: 6px; padding: .3rem .6rem; font-size: 13px; }
+
+input[type=date] {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 5px;
+  padding: .25rem .5rem;
+  font-size: 13px;
+  font-family: var(--font);
+  color-scheme: dark;
+}
+input[type=date]:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent; }
+
 /* ── misc ── */
 .muted  { color: var(--muted); }
 .danger { color: var(--red); }
@@ -314,6 +340,69 @@ tr:last-child td { border-bottom: none; }
     {% endif %}
   </div>
 
+</div>
+
+<!-- ── Gym Controls ── -->
+<div class="card section">
+  <div class="card-title">Gym Controls</div>
+  <div class="gym-grid">
+
+    <!-- Re-plan -->
+    <div class="gym-control-group">
+      <div class="gym-label">Re-plan</div>
+      <form method="post" action="/run" class="f-inline">
+        <input type="hidden" name="name" value="gym">
+        <button class="btn btn-primary btn-sm">↻ re-plan gym now</button>
+      </form>
+    </div>
+
+    <!-- Sick until -->
+    <div class="gym-control-group">
+      <div class="gym-label">Sick / rest week</div>
+      <form method="post" action="/gym/sick-until" class="f-row">
+        <input type="date" name="date" value="{{ gym_sick_until }}" min="{{ today }}">
+        <button class="btn btn-sm">set</button>
+        {% if gym_sick_until %}
+        <button class="btn btn-sm btn-danger" name="date" value="">clear</button>
+        {% endif %}
+      </form>
+      {% if gym_sick_until %}
+      <div class="gym-note warn">Gym paused until {{ gym_sick_until }}</div>
+      {% endif %}
+    </div>
+
+    <!-- Block a date -->
+    <div class="gym-control-group">
+      <div class="gym-label">Skip a specific day</div>
+      <form method="post" action="/gym/block-date" class="f-row">
+        <input type="date" name="date" value="{{ tomorrow }}" min="{{ today }}">
+        <button class="btn btn-sm">block date</button>
+      </form>
+      {% if gym_blocks %}
+      <div class="gym-blocked-list">
+        {% for b in gym_blocks %}
+        <div class="gym-blocked-row">
+          <span>🚫 {{ b.label }}</span>
+          <form method="post" action="/gym/unblock-date" class="f-inline">
+            <input type="hidden" name="date" value="{{ b.date }}">
+            <button class="btn btn-xs btn-danger">unblock</button>
+          </form>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- No-count -->
+    <div class="gym-control-group">
+      <div class="gym-label">Today's session</div>
+      <form method="post" action="/gym-nocount" class="f-inline">
+        <button class="btn btn-sm">don't count today's gym</button>
+      </form>
+      <div class="gym-note">Use after a forced/partial session you don't want counted toward your weekly target.</div>
+    </div>
+
+  </div>
 </div>
 
 <!-- ── Recurring Tasks ── -->

@@ -37,12 +37,23 @@ def _sleep_ok(now):
         return False
     return True
 
+def _gym_blocked_dates():
+    """Dates manually marked 'no gym' via the web UI."""
+    import json, os
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "logs", "gym_blocks.json")
+    try:
+        return set(json.load(open(path, encoding="utf-8")))
+    except Exception:
+        return set()
+
 def gym_input(fs, now, sick_until=None):
     today = now.date()
     monday = today - datetime.timedelta(days=today.weekday())
     sunday = monday + datetime.timedelta(days=6)
     horizon = [today + datetime.timedelta(days=i) for i in range(7)]
     hset = {d.isoformat() for d in horizon}
+    gym_blocked = _gym_blocked_dates()
 
     gym_open = [t for t in fs.list_items(itemType="task", query="Gym", completed=False).get("items", [])
                 if (t.get("title") or "").startswith("Gym")]
@@ -106,7 +117,8 @@ def gym_input(fs, now, sick_until=None):
                      "day_after_show": prev in shows,
                      "prior_night_blocked": prev in blocked,
                      "deadline_heavy": _heavy(ds),
-                     "sleep_ok": sleep_ok if near else True})
+                     "sleep_ok": sleep_ok if near else True,
+                     "gym_blocked": ds in gym_blocked})
 
     # adherence: stop scheduling slots he doesn't honor; use his real evening time
     adh = adherence.gym(now)

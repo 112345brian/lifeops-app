@@ -14,9 +14,11 @@ from .flowsavvy import FlowSavvy
 app = FastAPI()
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
-ROOT         = history.ROOT
-DOMAINS_FILE = os.path.join(ROOT, "logs", "domains.json")
-ENV          = os.path.join(ROOT, ".env")
+ROOT            = history.ROOT
+DOMAINS_FILE    = os.path.join(ROOT, "logs", "domains.json")
+GYM_BLOCKS_FILE = os.path.join(ROOT, "logs", "gym_blocks.json")
+GYM_STATE_FILE  = os.path.join(ROOT, "logs", "gym_state.json")
+ENV             = os.path.join(ROOT, ".env")
 
 ALL_DOMAINS  = ["gym", "ynab", "chore", "catchup", "homework", "spend", "social", "meal"]
 DOMAIN_ICON  = {"gym": "🏋️", "ynab": "💰", "chore": "🧹", "catchup": "⚡",
@@ -103,6 +105,40 @@ def _gym_stats():
     return {"total_4w": len(real), "morning": morning,
             "evening": len(real) - morning, "this_week": this_week}
 
+def _gym_blocks():
+    """Future-only blocked dates, sorted."""
+    today = datetime.date.today().isoformat()
+    try:
+        dates = json.load(open(GYM_BLOCKS_FILE, encoding="utf-8"))
+    except Exception:
+        dates = []
+    return sorted(d for d in dates if d >= today)
+
+def _save_gym_blocks(dates):
+    today = datetime.date.today().isoformat()
+    pruned = sorted({d for d in dates if d >= today})
+    os.makedirs(os.path.dirname(GYM_BLOCKS_FILE), exist_ok=True)
+    json.dump(pruned, open(GYM_BLOCKS_FILE, "w", encoding="utf-8"))
+
+def _gym_sick_until():
+    try:
+        return json.load(open(GYM_STATE_FILE, encoding="utf-8")).get("sick_until") or ""
+    except Exception:
+        return ""
+
+def _save_gym_sick_until(date_str):
+    state = {}
+    try:
+        state = json.load(open(GYM_STATE_FILE, encoding="utf-8"))
+    except Exception:
+        pass
+    if date_str:
+        state["sick_until"] = date_str
+    else:
+        state.pop("sick_until", None)
+    os.makedirs(os.path.dirname(GYM_STATE_FILE), exist_ok=True)
+    json.dump(state, open(GYM_STATE_FILE, "w", encoding="utf-8"))
+
 def _build_context(fs):
     lr  = _last_run()
     dom = _domains()
@@ -150,6 +186,15 @@ def _build_context(fs):
             "meta_str":   meta_str,
         })
 
+    # gym controls state
+    gym_blocks = _gym_blocks()
+    sick_until = _gym_sick_until()
+    today = datetime.date.today()
+    gym_block_display = [
+        {"date": d, "label": datetime.date.fromisoformat(d).strftime("%a %b %d").replace(" 0", " ")}
+        for d in gym_blocks
+    ]
+
     return {
         "status_dot":       dot,
         "status_text":      text,
@@ -161,6 +206,10 @@ def _build_context(fs):
         "list_personal":    config.LIST_PERSONAL,
         "last_run_domains": ", ".join(lr["ran"]) if lr and lr["ran"] else "",
         "last_run_errors":  str(lr["errors"]) if lr and lr["errors"] else "",
+        "gym_blocks":       gym_block_display,
+        "gym_sick_until":   sick_until,
+        "today":            today.isoformat(),
+        "tomorrow":         (today + datetime.timedelta(days=1)).isoformat(),
     }
 
 
@@ -253,6 +302,37 @@ def set_config(key: str = Form(...), value: str = Form("")):
 @app.post("/gym-nocount")
 def gym_nocount():
     history.append("gym_skip", source="ui")
+    return RedirectResponse("/", 303)
+
+@app.post("/gym/block-date")
+def gym_block_date(date: str = Form(...)):
+    try:
+        datetime.date.fromisoformat(date)  # validate
+    except ValueError:
+        return RedirectResponse("/", 303)
+    dates = _gym_blocks()
+    if date not in dates:
+        dates.append(date)
+    _save_gym_blocks(dates)
+    _run_domain("gym")
+    return RedirectResponse("/", 303)
+
+@app.post("/gym/unblock-date")
+def gym_unblock_date(date: str = Form(...)):
+    dates = [d for d in _gym_blocks() if d != date]
+    _save_gym_blocks(dates)
+    _run_domain("gym")
+    return RedirectResponse("/", 303)
+
+@app.post("/gym/sick-until")
+def gym_sick_until(date: str = Form("")):
+    if date:
+        try:
+            datetime.date.fromisoformat(date)
+        except ValueError:
+            return RedirectResponse("/", 303)
+    _save_gym_sick_until(date)
+    _run_domain("gym")
     return RedirectResponse("/", 303)
 
 @app.post("/recalc")

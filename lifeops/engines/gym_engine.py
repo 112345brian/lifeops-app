@@ -15,6 +15,8 @@ def D(s):
     return datetime.date.fromisoformat(s)
 
 def slot_for(day, r):
+    if day.get("gym_blocked"):
+        return None
     es, ee = r.get("evening_start", "19:00"), r.get("evening_end", "20:00")
     allow_m = r.get("allow_morning", True)   # adherence: suppress mornings he never does
     def morning():
