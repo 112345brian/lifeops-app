@@ -342,6 +342,48 @@ input[type=date]:focus { outline: 2px solid var(--accent); outline-offset: 1px; 
 
 </div>
 
+<!-- ── Scheduling Controls ── -->
+<div class="card section">
+  <div class="card-title">Scheduling Controls</div>
+  <div class="gym-grid">
+
+    <!-- Recalculate -->
+    <div class="gym-control-group">
+      <div class="gym-label">Reschedule everything</div>
+      <form method="post" action="/recalc" class="f-inline">
+        <button class="btn btn-primary btn-sm">↻ recalculate now</button>
+      </form>
+      <div class="gym-note">Reruns FlowSavvy's auto-scheduler across all tasks.</div>
+    </div>
+
+    <!-- Block a day -->
+    <div class="gym-control-group">
+      <div class="gym-label">Block a day</div>
+      <form method="post" action="/schedule/block-day" class="f-row">
+        <input type="date" name="date" value="{{ tomorrow }}" min="{{ today }}">
+        <button class="btn btn-sm">block day</button>
+      </form>
+      {% if not block_cal_set %}
+      <div class="gym-note warn">Set BLOCK_CAL in config to also block FlowSavvy tasks. Gym is always blocked.</div>
+      {% endif %}
+      {% if sched_blocks %}
+      <div class="gym-blocked-list">
+        {% for b in sched_blocks %}
+        <div class="gym-blocked-row">
+          <span>🚫 {{ b.label }}</span>
+          <form method="post" action="/schedule/unblock-day" class="f-inline">
+            <input type="hidden" name="date" value="{{ b.date }}">
+            <button class="btn btn-xs btn-danger">unblock</button>
+          </form>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+
+  </div>
+</div>
+
 <!-- ── Gym Controls ── -->
 <div class="card section">
   <div class="card-title">Gym Controls</div>

@@ -14,18 +14,19 @@ from .flowsavvy import FlowSavvy
 app = FastAPI()
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
-ROOT            = history.ROOT
-DOMAINS_FILE    = os.path.join(ROOT, "logs", "domains.json")
-GYM_BLOCKS_FILE = os.path.join(ROOT, "logs", "gym_blocks.json")
-GYM_STATE_FILE  = os.path.join(ROOT, "logs", "gym_state.json")
-ENV             = os.path.join(ROOT, ".env")
+ROOT              = history.ROOT
+DOMAINS_FILE      = os.path.join(ROOT, "logs", "domains.json")
+GYM_BLOCKS_FILE   = os.path.join(ROOT, "logs", "gym_blocks.json")
+GYM_STATE_FILE    = os.path.join(ROOT, "logs", "gym_state.json")
+SCHED_BLOCKS_FILE = os.path.join(ROOT, "logs", "schedule_blocks.json")
+ENV               = os.path.join(ROOT, ".env")
 
 ALL_DOMAINS  = ["gym", "ynab", "chore", "catchup", "homework", "spend", "social", "meal"]
 DOMAIN_ICON  = {"gym": "🏋️", "ynab": "💰", "chore": "🧹", "catchup": "⚡",
                 "homework": "📚", "spend": "💸", "social": "👫", "meal": "🍽️"}
 EDITABLE     = ["PARTNER_NAME", "PARTNER_SIGNAL", "PROPOSE_AHEAD_DAYS", "PLAN_LEAD_DAYS",
                 "DISCRETIONARY", "OUTING_COSTS", "YNAB_COVER_ORDER", "YNAB_NO_ASSIGN",
-                "EVENT_CALS", "SOCIAL_CAL"]
+                "EVENT_CALS", "SOCIAL_CAL", "BLOCK_CAL"]
 ACTION_COLOR = {"gym": "#4ade80", "gym_skip": "#6b7280", "chore_done": "#60a5fa",
                 "social": "#c084fc", "meal": "#fb923c", "ynab": "#fbbf24",
                 "homework": "#38bdf8", "digest": "#a78bfa", "sleep": "#818cf8"}
@@ -139,6 +140,21 @@ def _save_gym_sick_until(date_str):
     os.makedirs(os.path.dirname(GYM_STATE_FILE), exist_ok=True)
     json.dump(state, open(GYM_STATE_FILE, "w", encoding="utf-8"))
 
+def _sched_blocks():
+    """General FlowSavvy busy-event blocks: [{date, event_id, label}]."""
+    today = datetime.date.today().isoformat()
+    try:
+        entries = json.load(open(SCHED_BLOCKS_FILE, encoding="utf-8"))
+    except Exception:
+        entries = []
+    return sorted((e for e in entries if e.get("date", "") >= today), key=lambda e: e["date"])
+
+def _save_sched_blocks(entries):
+    today = datetime.date.today().isoformat()
+    pruned = [e for e in entries if e.get("date", "") >= today]
+    os.makedirs(os.path.dirname(SCHED_BLOCKS_FILE), exist_ok=True)
+    json.dump(pruned, open(SCHED_BLOCKS_FILE, "w", encoding="utf-8"))
+
 def _build_context(fs):
     lr  = _last_run()
     dom = _domains()
@@ -195,6 +211,13 @@ def _build_context(fs):
         for d in gym_blocks
     ]
 
+    # general schedule blocks
+    sched_blocks_raw = _sched_blocks()
+    sched_block_display = [
+        {**b, "label": datetime.date.fromisoformat(b["date"]).strftime("%a %b %d").replace(" 0", " ")}
+        for b in sched_blocks_raw
+    ]
+
     return {
         "status_dot":       dot,
         "status_text":      text,
@@ -210,6 +233,8 @@ def _build_context(fs):
         "gym_sick_until":   sick_until,
         "today":            today.isoformat(),
         "tomorrow":         (today + datetime.timedelta(days=1)).isoformat(),
+        "sched_blocks":     sched_block_display,
+        "block_cal_set":    bool(config.BLOCK_CAL),
     }
 
 
@@ -302,6 +327,59 @@ def set_config(key: str = Form(...), value: str = Form("")):
 @app.post("/gym-nocount")
 def gym_nocount():
     history.append("gym_skip", source="ui")
+    return RedirectResponse("/", 303)
+
+@app.post("/schedule/block-day")
+def schedule_block_day(date: str = Form(...)):
+    try:
+        datetime.date.fromisoformat(date)
+    except ValueError:
+        return RedirectResponse("/", 303)
+    event_id = None
+    if config.BLOCK_CAL:
+        try:
+            fs = FlowSavvy()
+            r = fs.create_event(
+                title="Blocked",
+                calendarId=config.BLOCK_CAL,
+                startDateTime=f"{date}T07:00:00",
+                endDateTime=f"{date}T22:00:00",
+            )
+            event_id = r.get("id") or r.get("item", {}).get("id")
+            fs.recalculate()
+        except Exception:
+            pass
+    entries = _sched_blocks()
+    if not any(e["date"] == date for e in entries):
+        entries.append({"date": date, "event_id": event_id})
+    _save_sched_blocks(entries)
+    # also block gym engine for the same day
+    gym_dates = _gym_blocks()
+    if date not in gym_dates:
+        gym_dates.append(date)
+    _save_gym_blocks(gym_dates)
+    _run_domain("gym")
+    return RedirectResponse("/", 303)
+
+@app.post("/schedule/unblock-day")
+def schedule_unblock_day(date: str = Form(...)):
+    entries = _sched_blocks()
+    to_remove = [e for e in entries if e["date"] == date]
+    entries = [e for e in entries if e["date"] != date]
+    _save_sched_blocks(entries)
+    # delete FlowSavvy event if we stored one
+    if config.BLOCK_CAL:
+        try:
+            fs = FlowSavvy()
+            for e in to_remove:
+                if e.get("event_id"):
+                    fs.delete_item(e["event_id"])
+            fs.recalculate()
+        except Exception:
+            pass
+    # also unblock gym engine
+    _save_gym_blocks([d for d in _gym_blocks() if d != date])
+    _run_domain("gym")
     return RedirectResponse("/", 303)
 
 @app.post("/gym/block-date")

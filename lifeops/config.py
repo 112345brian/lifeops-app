@@ -62,6 +62,7 @@ PARTNER_TASK = os.environ.get("PARTNER_TASK", f"{PARTNER_NAME} time")   # FlowSa
 PARTNER_SIGNAL = os.environ.get("PARTNER_SIGNAL", f"saw {PARTNER_NAME.lower()}")  # ntfy body
 FRIENDS_TASK = os.environ.get("FRIENDS_TASK", "Friends")
 SOCIAL_CAL = os.environ.get("SOCIAL_CAL", "")          # partner's FlowSavvy calendar id
+BLOCK_CAL  = os.environ.get("BLOCK_CAL",  "")          # calendar for UI-created busy blocks
 PROPOSE_AHEAD_DAYS = int(os.environ.get("PROPOSE_AHEAD_DAYS", "21"))  # propose hangouts ~3 weeks out
 PLAN_LEAD_DAYS = int(os.environ.get("PLAN_LEAD_DAYS", "14"))          # "Plan it" task ~2 weeks before
 HEARTBEAT_URL = os.environ.get("HEARTBEAT_URL", "")   # healthchecks.io ping (dead-man's switch)
