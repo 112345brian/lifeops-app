@@ -37,6 +37,31 @@ def categorize_unknown(payee, amount, category_names):
     except Exception:
         return None
 
+def extract_readings(page_text, module_num):
+    """Parse a Canvas Readings page into a structured list.
+    Returns [{author, title, type, estimated_minutes}] or [] on failure.
+    type: article | blog | chapter | accessible_chapter | tutorial | documentation | book
+    """
+    prompt = (
+        f"Module {module_num} Readings & Resources page:\n\n{page_text[:4000]}\n\n"
+        "List every individual reading/resource as a JSON array. Each element:\n"
+        '{"author":"Last, F. (or org name)","title":"Short title","type":"article|blog|chapter|'
+        'accessible_chapter|tutorial|documentation|book","estimated_minutes":30}\n'
+        "Duration guidelines — article/blog: 20-30, tutorial-with-code: 40-60, "
+        "documentation: 45-60, academic chapter: 40-50, accessible chapter: 25-35, "
+        "full short book: 240. Return ONLY the JSON array."
+    )
+    try:
+        msg = _c().messages.create(
+            model=config.JUDGE_MODEL, max_tokens=1000,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        txt = msg.content[0].text.strip()
+        txt = txt[txt.find("["): txt.rfind("]") + 1]
+        return json.loads(txt)
+    except Exception:
+        return []
+
 def weekly_digest(facts):
     """Turn the week's adherence stats into a blunt, supportive accountability
     note. This is NL synthesis — a real LLM job, not deterministic logic."""

@@ -6,7 +6,7 @@ The LLM (lifeops.llm) is touched only for the judgment slivers.
 Run:  python -m lifeops.runner          # all wired domains
       python -m lifeops.runner gym      # one domain
 """
-import sys, os, json, datetime
+import sys, os, re, json, datetime
 from . import config, ntfy, gather, lock, history, adherence
 from .flowsavvy import FlowSavvy
 from .ynab import YNAB
@@ -378,9 +378,185 @@ def run_digest(fs, yn, now):
     except Exception as e:
         print(f"[digest] error: {e}")
 
+def run_canvas(fs, yn, now):
+    """Sync newly-unlocked Canvas modules → FlowSavvy tasks.
+
+    Runs once per day. Skips silently if CANVAS_TOKEN is not configured.
+    State: logs/canvas_state.json — tracks which modules have been synced
+    and which task titles already exist (prevents duplicates across runs).
+    """
+    if not config.CANVAS_TOKEN:
+        print("[canvas] skip (no CANVAS_TOKEN)"); return
+
+    from .canvas import Canvas, strip_html
+    from .engines import canvas_engine
+    from . import llm
+
+    sp = os.path.join(history.ROOT, "logs", "canvas_state.json")
+    st = {"synced_modules": [], "task_titles": []}
+    try:
+        st.update(json.load(open(sp, encoding="utf-8")))
+    except Exception:
+        pass
+    synced  = set(st["synced_modules"])
+    seen_titles = set(st["task_titles"])
+
+    # also pull existing FlowSavvy titles so we never duplicate across restarts
+    try:
+        existing = fs.list_items(itemType="task", listId=config.LIST_COURSE,
+                                 completed=False, query="M0").get("items", [])
+        seen_titles.update(t.get("title", "") for t in existing)
+    except Exception:
+        pass
+
+    cv = Canvas()
+    today = now.date()
+
+    try:
+        modules = cv.modules()
+    except Exception as e:
+        print(f"[canvas] failed to fetch modules: {e}"); return
+
+    modules_data = []
+    for mod in modules:
+        num = int(re.search(r"\d+", mod.get("name", "0") or "0").group() or 0)
+        unlock_str = mod.get("unlock_at") or mod.get("published_at") or ""
+        unlock_date = canvas_engine._parse_date(unlock_str) or today
+        if num in synced or unlock_date > today:
+            continue
+
+        # gather assignments for this module from its items
+        assignments = []
+        items = mod.get("items") or []
+        for item in items:
+            if item.get("type") == "Assignment":
+                # fetch full assignment detail via assignments API
+                pass  # populated below from bulk assignment fetch
+
+        modules_data.append({
+            "module_num":  num,
+            "unlock_date": unlock_date,
+            "_mod_items":  items,
+            "_mod_id":     mod["id"],
+        })
+
+    if not modules_data:
+        print("[canvas] no new modules to sync"); return
+
+    # bulk fetch all assignments once
+    try:
+        all_assignments = {a["id"]: a for a in cv.assignments()}
+    except Exception as e:
+        print(f"[canvas] failed to fetch assignments: {e}"); return
+
+    # populate assignments + readings per module
+    for mod in modules_data:
+        items = mod.pop("_mod_items")
+        mod_id = mod.pop("_mod_id")
+
+        asgns = []
+        reading_page_slugs = []
+        for item in items:
+            if item.get("type") == "Assignment":
+                cid = item.get("content_id")
+                if cid and cid in all_assignments:
+                    asgns.append(all_assignments[cid])
+            elif item.get("type") == "Page":
+                t = (item.get("title") or "").lower()
+                if any(w in t for w in ("reading", "resource", "material")):
+                    slug = item.get("page_url") or item.get("url", "").split("/pages/")[-1]
+                    if slug:
+                        reading_page_slugs.append(slug)
+
+        # extract readings from pages via LLM
+        readings = []
+        for slug in reading_page_slugs:
+            try:
+                page = cv.page(slug)
+                text = strip_html(page.get("body") or "")
+                if text:
+                    readings.extend(llm.extract_readings(text, mod["module_num"]))
+            except Exception as e:
+                print(f"[canvas] page {slug}: {e}")
+
+        mod["assignments"] = asgns
+        mod["readings"]    = readings
+
+    # plan
+    result = canvas_engine.plan(modules_data, seen_titles, today)
+
+    # apply: create tasks in FlowSavvy
+    created_titles = {}   # title → id (for dependency wiring)
+    for spec in result["creates"]:
+        dep_title = spec.pop("_dep_title", None)
+        kwargs = {
+            "listId":            config.LIST_COURSE,
+            "schedulingHoursId": config.SH_COURSE,
+            "isAutoScheduled":   True,
+            **spec,
+        }
+        if dep_title and dep_title in created_titles:
+            kwargs["mustBeDoneAfter"] = created_titles[dep_title]
+        try:
+            r = fs.create_task(**kwargs)
+            tid = (r or {}).get("id") or (r or {}).get("item", {}).get("id")
+            if tid:
+                created_titles[spec["title"]] = tid
+            _touch()
+        except Exception as e:
+            print(f"[canvas] create failed for {spec.get('title','?')}: {e}")
+
+    # check for due-date changes in already-synced assignments
+    try:
+        for a in all_assignments.values():
+            name = a.get("name", "")
+            new_due = a.get("due_at", "")
+            if not new_due:
+                continue
+            # search FlowSavvy for matching title fragments
+            for item in fs.list_items(itemType="task", listId=config.LIST_COURSE,
+                                      completed=False, query=name[:30]).get("items", []):
+                if item.get("title", "").endswith(name) or item.get("title", "") == f"M{a.get('module_id','?'):02}: {name}":
+                    fs_due = (item.get("dueDateTime") or "")[:10]
+                    canvas_due = new_due[:10]
+                    if fs_due and canvas_due and fs_due != canvas_due:
+                        fs.update_task(item["id"], dueDateTime=f"{canvas_due}T23:59:00")
+                        _touch()
+                        print(f"[canvas] updated due date for {item['title']}: {fs_due}→{canvas_due}")
+    except Exception as e:
+        print(f"[canvas] change-check error: {e}")
+
+    # check announcements
+    try:
+        import datetime as _dt
+        since = (_dt.date.today() - _dt.timedelta(days=7)).isoformat()
+        announcements = cv.announcements(since_date=since)
+        for ann in announcements[:3]:
+            title = ann.get("title", "")
+            posted = (ann.get("posted_at") or "")[:10]
+            print(f"[canvas] announcement ({posted}): {title}")
+    except Exception:
+        pass
+
+    if _DIRTY[0]:
+        pass  # recalculate handled by main _run()
+
+    # save state
+    for mod in modules_data:
+        synced.add(mod["module_num"])
+    seen_titles.update(created_titles.keys())
+    st["synced_modules"] = sorted(synced)
+    st["task_titles"]    = sorted(seen_titles)
+    os.makedirs(os.path.dirname(sp), exist_ok=True)
+    json.dump(st, open(sp, "w", encoding="utf-8"))
+
+    n = len(created_titles)
+    print(f"[canvas] {n} task(s) created\n{result['report']}")
+
+
 DOMAINS = {"gym": run_gym, "ynab": run_ynab, "chore": run_chore, "catchup": run_catchup,
            "homework": run_homework, "spend": run_spend, "social": run_social,
-           "meal": run_meal, "digest": run_digest}
+           "meal": run_meal, "digest": run_digest, "canvas": run_canvas}
 
 # Tiers let the cron run cheaply and often. TICK is deterministic + LLM-free and
 # only writes on change, so it's safe to run every ~10 min. DAILY holds the
@@ -389,7 +565,7 @@ TIERS = {
     # tick is signal-driven + cheap (every ~10 min). Scheduling/planning is NOT
     # here — it doesn't need 10-min churn and would keep reshuffling your calendar.
     "tick":  ["catchup", "spend"],
-    "daily": ["gym", "ynab", "homework", "social", "chore", "meal", "digest"],
+    "daily": ["gym", "ynab", "homework", "social", "chore", "meal", "digest", "canvas"],
 }
 
 def main():

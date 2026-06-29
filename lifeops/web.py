@@ -21,9 +21,9 @@ GYM_STATE_FILE    = os.path.join(ROOT, "logs", "gym_state.json")
 SCHED_BLOCKS_FILE = os.path.join(ROOT, "logs", "schedule_blocks.json")
 ENV               = os.path.join(ROOT, ".env")
 
-ALL_DOMAINS  = ["gym", "ynab", "chore", "catchup", "homework", "spend", "social", "meal"]
+ALL_DOMAINS  = ["gym", "ynab", "chore", "catchup", "homework", "spend", "social", "meal", "canvas"]
 DOMAIN_ICON  = {"gym": "🏋️", "ynab": "💰", "chore": "🧹", "catchup": "⚡",
-                "homework": "📚", "spend": "💸", "social": "👫", "meal": "🍽️"}
+                "homework": "📚", "spend": "💸", "social": "👫", "meal": "🍽️", "canvas": "🎓"}
 EDITABLE     = ["PARTNER_NAME", "PARTNER_SIGNAL", "PROPOSE_AHEAD_DAYS", "PLAN_LEAD_DAYS",
                 "DISCRETIONARY", "OUTING_COSTS", "YNAB_COVER_ORDER", "YNAB_NO_ASSIGN",
                 "EVENT_CALS", "SOCIAL_CAL", "BLOCK_CAL"]
