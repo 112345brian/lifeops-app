@@ -401,11 +401,27 @@ def run_canvas(fs, yn, now):
     synced  = set(st["synced_modules"])
     seen_titles = set(st["task_titles"])
 
-    # also pull existing FlowSavvy titles so we never duplicate across restarts
+    # 20-day rolling cache of completed task titles (avoids re-fetching history each run)
+    cutoff = (today - datetime.timedelta(days=20)).isoformat()
+    completed_cache = {title: dt for title, dt in st.get("completed_cache", {}).items()
+                       if dt >= cutoff}
+    seen_titles.update(completed_cache)
+
+    # pull live FlowSavvy titles — both incomplete and recently completed
     try:
         existing = fs.list_items(itemType="task", listId=config.LIST_COURSE,
                                  completed=False, query="M0").get("items", [])
         seen_titles.update(t.get("title", "") for t in existing)
+    except Exception:
+        pass
+    try:
+        done = fs.list_items(itemType="task", listId=config.LIST_COURSE,
+                             completed=True, query="M0").get("items", [])
+        for t in done:
+            title = t.get("title", "")
+            if title and title not in completed_cache:
+                completed_cache[title] = (t.get("lastModified") or today.isoformat())[:10]
+        seen_titles.update(completed_cache)
     except Exception:
         pass
 
@@ -545,8 +561,9 @@ def run_canvas(fs, yn, now):
     for mod in modules_data:
         synced.add(mod["module_num"])
     seen_titles.update(created_titles.keys())
-    st["synced_modules"] = sorted(synced)
-    st["task_titles"]    = sorted(seen_titles)
+    st["synced_modules"]  = sorted(synced)
+    st["task_titles"]     = sorted(seen_titles)
+    st["completed_cache"] = completed_cache
     os.makedirs(os.path.dirname(sp), exist_ok=True)
     json.dump(st, open(sp, "w", encoding="utf-8"))
 
