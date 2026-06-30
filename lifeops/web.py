@@ -213,3 +213,22 @@ def gym_nocount():
 @app.post("/recalc")
 def recalc():
     FlowSavvy().recalculate(); return RedirectResponse("/", 303)
+
+
+def main():
+    """Windowless-safe entry point: `pythonw -m lifeops.web`.
+    pythonw has no console, so sys.stdout/stderr are None and uvicorn's default
+    logging crashes on startup — point them at a logfile before serving. Run via
+    the `uvicorn` CLI instead for interactive/console use (see module docstring)."""
+    import uvicorn
+    if sys.stdout is None or sys.stderr is None:   # running under pythonw
+        log = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                           "logs", "web.log")
+        os.makedirs(os.path.dirname(log), exist_ok=True)
+        f = open(log, "a", buffering=1, encoding="utf-8")
+        sys.stdout = sys.stderr = f
+    uvicorn.run("lifeops.web:app", host="127.0.0.1", port=8765)
+
+
+if __name__ == "__main__":
+    main()
