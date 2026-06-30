@@ -112,14 +112,22 @@ def _alert_once(key, text, priority="default", tags=None, actions=None):
     json.dump(st, open(sp, "w", encoding="utf-8"))
 
 def run_gym(fs, yn, now):
-    # clean up stale past gym blocks; record genuine misses (no ping that day) so
+    # clean up stale gym blocks; record genuine misses (no ping that day) so
     # adherence learning has data — by slot, to learn what he actually honors.
+    # A block on a PAST date, or a TODAY block whose time has fully elapsed with no
+    # workout logged, is a miss — delete it so it stops counting toward the target
+    # and the engine can schedule a replacement (runs before gather, below).
     today = now.date().isoformat()
+    now_iso = now.isoformat()
+    did_today = bool(history.days_with("gym", today, today))
     for t in [t for t in fs.list_items(itemType="task", query="Gym", completed=False).get("items", [])
               if (t.get("title") or "").startswith("Gym")]:
         sd = t.get("startDateTime") or ""
+        ed = t.get("endDateTime") or ""
         d = sd[:10]
-        if d and d < today:
+        past_day = bool(d) and d < today
+        elapsed_today = d == today and bool(ed) and ed < now_iso and not did_today
+        if past_day or elapsed_today:
             if not history.days_with("gym", d, d):
                 slot = "morning" if (sd[11:13] or "12") < "11" else "evening"
                 history.append("gym_missed", ts=(sd[:19] or None), source="cleanup",
@@ -377,14 +385,17 @@ DOMAINS = {"gym": run_gym, "ynab": run_ynab, "chore": run_chore, "catchup": run_
            "homework": run_homework, "spend": run_spend, "social": run_social,
            "meal": run_meal, "digest": run_digest}
 
-# Tiers let the cron run cheaply and often. TICK is deterministic + LLM-free and
-# only writes on change, so it's safe to run every ~10 min. DAILY holds the
-# heavier / LLM-touching work and runs once a morning.
+# Tiers are keyed by latency need, not just cost. ingest() runs before every tier
+# (so phone signals + completions are recorded each cycle no matter which fires).
 TIERS = {
-    # tick is signal-driven + cheap (every ~10 min). Scheduling/planning is NOT
-    # here — it doesn't need 10-min churn and would keep reshuffling your calendar.
-    "tick":  ["catchup", "spend"],
-    "daily": ["gym", "ynab", "homework", "social", "chore", "meal", "digest"],
+    # signal: the interactive path — a phone tap ("catchup") should re-pack the day
+    # in ~2 min, not wait for the 10-min tick. Cheap: ntfy poll + ingest only.
+    "signal": ["catchup"],
+    # tick: all-day deterministic loop. gym lives here so a slot blocked mid-day gets
+    # re-planned the same day; the engine only writes on real change, so no churn.
+    "tick":   ["catchup", "spend", "gym"],
+    # daily: heavier / LLM-touching work, once each morning.
+    "daily":  ["ynab", "homework", "social", "chore", "meal", "digest"],
 }
 
 def main():

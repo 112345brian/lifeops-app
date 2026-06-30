@@ -39,25 +39,34 @@ def _sleep_ok(now):
 
 def gym_input(fs, now, sick_until=None):
     today = now.date()
-    monday = today - datetime.timedelta(days=today.weekday())
-    sunday = monday + datetime.timedelta(days=6)
+    # ROLLING 7-day windows, not the calendar week. The target is "≈N sessions in
+    # any trailing 7 days" — so count workouts done in the last 7 days and blocks
+    # scheduled in the next 7. Calendar-week counting reset every Monday (ignoring a
+    # workout done two days ago) and let the count be gamed across the boundary.
+    # The dedup path already went rolling in 9a5d8ea; this aligns the completion count.
     horizon = [today + datetime.timedelta(days=i) for i in range(7)]
     hset = {d.isoformat() for d in horizon}
+    trail_start = (today - datetime.timedelta(days=6)).isoformat()
+    trail_end = today.isoformat()
 
     gym_open = [t for t in fs.list_items(itemType="task", query="Gym", completed=False).get("items", [])
                 if (t.get("title") or "").startswith("Gym")]
-    # count gym days, excluding any you flagged "don't count" (gym-nocount)
-    gym_days = history.days_with("gym", monday.isoformat(), sunday.isoformat())
-    skip_days = history.days_with("gym_skip", monday.isoformat(), sunday.isoformat())
-    completed_count = len(gym_days - skip_days)
 
-    scheduled = []
+    scheduled, sched_dates = [], set()
     for t in gym_open:
         st = t.get("startDateTime")
         if st and _d(st) in hset:
+            sched_dates.add(_d(st))
             scheduled.append({"id": t["id"], "date": _d(st), "start": _hm(st),
                               "end": _hm(t.get("endDateTime")), "manual": False,
                               "started": _d(st) == today.isoformat() and _h(st) <= now.hour + 2})
+
+    # workouts actually done in the trailing 7 days, minus any flagged "don't count"
+    # (gym-nocount). A day that's both done and still on the calendar counts once, so
+    # subtract scheduled dates here to avoid double-counting the today overlap.
+    done_dates = (history.days_with("gym", trail_start, trail_end)
+                  - history.days_with("gym_skip", trail_start, trail_end))
+    completed_count = len(done_dates - sched_dates)
 
     # An event only BLOCKS the gym if it overlaps the 18:00-21:00 evening window;
     # any social event still marks the day as a "show" (for recovery + late-night).

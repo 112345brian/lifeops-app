@@ -6,12 +6,21 @@ engines; the LLM is called only for genuine judgment slivers.
 
 ## Architecture
 ```
-Windows Task Scheduler (3x/day)  ->  python -m lifeops.runner
+Windows Task Scheduler  ->  python -m lifeops.runner <tier>
    gather  ->  DECIDE (engines, deterministic)  ->  apply
    clients: FlowSavvy API · YNAB API · ntfy · Anthropic (judgment only)
 ```
 FlowSavvy already syncs all your Google calendars, so deadlines + social events
 are read **through the FlowSavvy API** — no Google OAuth needed.
+
+Three tiers, keyed by how fast they need to react:
+- `signal` (~2 min) — interactive path: a phone tap (catchup) re-packs the day fast.
+- `tick` (~10 min) — all-day deterministic loop (gym, spend). Gym lives here so a
+  slot blocked mid-day gets re-planned the same day; engines only write on real
+  change, so frequent runs don't churn the calendar.
+- `daily` (7:10am) — heavier / LLM-touching work (ynab, homework, social, chores, meal).
+
+A single global run-lock serializes overlapping fires so they can't race FlowSavvy.
 
 ## Layout
 - `lifeops/flowsavvy.py`, `ynab.py`, `ntfy.py` — REST clients

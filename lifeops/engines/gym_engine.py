@@ -91,7 +91,8 @@ def plan(inp):
         out["alert"] = {"level": "urgent",
                         "text": f"GO TODAY — last viable day to hit {floor}x this week."}
 
-    out["summary"] = (f"have={have} target={target} needed={needed} "
+    out["summary"] = (f"have={have} (done={completed}+sched={len(scheduled)}) "
+                      f"target={target} needed={needed} "
                       f"chose={[c[0] for c in chosen]} viable_left={viable_left}")
     return out
 
