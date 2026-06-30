@@ -400,6 +400,7 @@ def run_canvas(fs, yn, now):
         pass
     synced  = set(st["synced_modules"])
     seen_titles = set(st["task_titles"])
+    today = now.date()
 
     # 20-day rolling cache of completed task titles (avoids re-fetching history each run)
     cutoff = (today - datetime.timedelta(days=20)).isoformat()
@@ -426,7 +427,6 @@ def run_canvas(fs, yn, now):
         pass
 
     cv = Canvas()
-    today = now.date()
 
     try:
         modules = cv.modules()
