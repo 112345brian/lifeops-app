@@ -37,6 +37,20 @@ def test_skips_no_cycle_tag():
     out = chore_engine.plan({"completed": [c], "processed": []})
     assert out["creates"] == []
 
+def test_malformed_date_skips_item_not_batch():
+    bad  = {**BASE, "id": "bad", "completed_date": "not-a-date"}
+    none = {**BASE, "id": "none", "completed_date": None}
+    out = chore_engine.plan({"completed": [bad, none, BASE], "processed": []})
+    assert len(out["creates"]) == 1            # good one still cycles
+    assert out["creates"][0]["title"] == "Laundry"
+    assert "bad" not in out["processed"]       # bad items can retry when fixed
+
+def test_missing_id_or_title_skipped():
+    no_id    = {**BASE}; no_id.pop("id")
+    no_title = {**BASE, "id": "c9"}; no_title.pop("title")
+    out = chore_engine.plan({"completed": [no_id, no_title], "processed": []})
+    assert out["creates"] == []
+
 def test_marks_as_processed():
     out = chore_engine.plan({"completed": [BASE], "processed": []})
     assert "c1" in out["processed"]

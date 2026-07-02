@@ -39,3 +39,14 @@ def test_zero_fun_money_triggers_alert():
     events = [_event("Date night", 50, 4)]
     out = spend_engine.plan(events, fun_money=0)
     assert out["level"] != "none"
+
+def test_missing_fields_do_not_crash():
+    out = spend_engine.plan([{}, {"cost": None, "label": None}], fun_money=0)
+    assert out["level"] == "none"      # no cost → nothing owed → no alert
+
+def test_soonest_uses_days_until_not_date_strings():
+    # a malformed date string must not break imminence detection
+    events = [{"label": "Weird", "cost": 90, "date": "July 4th", "days_until": 1},
+              {"label": "Later", "cost": 10, "date": "2026-07-30", "days_until": 30}]
+    out = spend_engine.plan(events, fun_money=20)
+    assert out["level"] == "high"      # the days_until=1 event is imminent

@@ -119,3 +119,37 @@ def test_uses_configured_evening_time():
     out = gym_engine.plan(_inp(completed=3, days=days, rules=rules))
     creates = [a for a in out["actions"] if a["op"] == "create"]
     assert creates[0]["start"] == "18:00"
+
+def test_consecutive_cap_counts_completed_history():
+    # trained Sat+Sun (completed, not scheduled) — Monday would be a REAL 3rd
+    # consecutive day and must be skipped even though nothing is "scheduled"
+    import datetime
+    dates = _dates(7)
+    sat = (datetime.date.fromisoformat(MON) - datetime.timedelta(days=2)).isoformat()
+    sun = (datetime.date.fromisoformat(MON) - datetime.timedelta(days=1)).isoformat()
+    inp = _inp(completed=2, days=[_day(d) for d in dates])
+    inp["completed_dates"] = [sat, sun]
+    out = gym_engine.plan(inp)
+    creates = [a for a in out["actions"] if a["op"] == "create"]
+    assert all(a["date"] != MON for a in creates), "booked a real 3rd straight day"
+
+def test_completed_day_not_rescheduled():
+    inp = _inp(completed=1, days=[_day(d) for d in _dates(7)])
+    inp["completed_dates"] = [MON]     # already trained today
+    out = gym_engine.plan(inp)
+    creates = [a for a in out["actions"] if a["op"] == "create"]
+    assert all(a["date"] != MON for a in creates)
+
+def test_viable_left_excludes_cap_rejected_days():
+    # 3 open days but they're consecutive with completed Sat+Sun around them:
+    # viable count must reflect the cap, not raw candidate count
+    import datetime
+    dates = _dates(7)
+    days = [_day(dates[0]), _day(dates[1])] + \
+           [_day(d, evening_blocked=True) for d in dates[2:]]
+    rules = {**RULES, "allow_morning": False, "max_consecutive": 1}
+    out = gym_engine.plan(_inp(completed=0, days=days, rules=rules))
+    # with max_consecutive=1 only one of the two adjacent days is usable;
+    # floor=3, so this must be a "set to miss" high alert with viable_left=1
+    assert out["alert"]["level"] == "high"
+    assert "only 1 viable" in out["alert"]["text"]
