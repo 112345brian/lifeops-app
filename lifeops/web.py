@@ -5,6 +5,7 @@ Reach: tailscale serve 8765  →  https://<your-pc>.<tailnet>.ts.net
 """
 import os, re, sys, json, subprocess, datetime
 from pathlib import Path
+from urllib.parse import quote
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -13,6 +14,22 @@ from .flowsavvy import FlowSavvy
 
 app = FastAPI()
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+
+
+@app.middleware("http")
+async def _auth(request: Request, call_next):
+    """Optional shared-secret gate for Tailscale/funnel exposure. With WEB_TOKEN
+    set, open the panel once as /?token=<secret>; a cookie keeps you in."""
+    if config.WEB_TOKEN:
+        supplied = request.query_params.get("token") or request.cookies.get("lifeops_auth")
+        if supplied != config.WEB_TOKEN:
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        resp = await call_next(request)
+        if request.query_params.get("token") == config.WEB_TOKEN:
+            resp.set_cookie("lifeops_auth", config.WEB_TOKEN,
+                            max_age=90 * 24 * 3600, httponly=True)
+        return resp
+    return await call_next(request)
 
 ROOT              = history.ROOT
 DOMAINS_FILE      = os.path.join(ROOT, "logs", "domains.json")
@@ -29,7 +46,8 @@ EDITABLE     = ["PARTNER_NAME", "PARTNER_SIGNAL", "PROPOSE_AHEAD_DAYS", "PLAN_LE
                 "EVENT_CALS", "SOCIAL_CAL", "BLOCK_CAL"]
 ACTION_COLOR = {"gym": "#4ade80", "gym_skip": "#6b7280", "chore_done": "#60a5fa",
                 "social": "#c084fc", "meal": "#fb923c", "ynab": "#fbbf24",
-                "homework": "#38bdf8", "digest": "#a78bfa", "sleep": "#818cf8"}
+                "homework": "#38bdf8", "digest": "#a78bfa", "sleep": "#818cf8",
+                "course": "#34d399", "course_task": "#22d3ee"}
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -91,7 +109,8 @@ def _last_run():
             age_mins = int(delta.total_seconds() // 60)
         except Exception:
             pass
-    return {"ts": ts, "ran": lr.get("ran", []), "errors": lr.get("errors") or {}, "age_mins": age_mins}
+    return {"ts": ts, "ran": lr.get("ran", []), "errors": lr.get("errors") or {},
+            "details": lr.get("details") or {}, "age_mins": age_mins}
 
 def _gym_stats():
     cutoff     = (datetime.date.today() - datetime.timedelta(weeks=4)).isoformat()
@@ -315,11 +334,15 @@ def domain_toggle(name: str = Form(...), on: int = Form(...)):
 
 @app.post("/run")
 def run_domain(name: str = Form(...)):
+    if name not in ALL_DOMAINS:               # never pass arbitrary argv through
+        return RedirectResponse(f"/?msg={quote('unknown domain: ' + name[:24])}", 303)
     _run_domain(name)
     return RedirectResponse("/", 303)
 
 @app.post("/config")
 def set_config(key: str = Form(...), value: str = Form("")):
+    # newlines would inject extra lines into .env — flatten them
+    value = value.replace("\r", " ").replace("\n", " ").strip()
     if key in EDITABLE:
         _set_env(key, value)
     return RedirectResponse("/", 303)
@@ -327,6 +350,7 @@ def set_config(key: str = Form(...), value: str = Form("")):
 @app.post("/gym-nocount")
 def gym_nocount():
     history.append("gym_skip", source="ui")
+    _run_domain("gym")     # re-plan immediately, consistent with the other gym controls
     return RedirectResponse("/", 303)
 
 @app.post("/schedule/block-day")
@@ -334,8 +358,8 @@ def schedule_block_day(date: str = Form(...)):
     try:
         datetime.date.fromisoformat(date)
     except ValueError:
-        return RedirectResponse("/", 303)
-    event_id = None
+        return RedirectResponse(f"/?msg={quote('invalid date')}", 303)
+    event_id, warn = None, ""
     if config.BLOCK_CAL:
         try:
             fs = FlowSavvy()
@@ -347,8 +371,9 @@ def schedule_block_day(date: str = Form(...)):
             )
             event_id = r.get("id") or r.get("item", {}).get("id")
             fs.recalculate()
-        except Exception:
-            pass
+        except Exception as e:
+            # do NOT swallow this: without the event, FlowSavvy is NOT blocked
+            warn = f"⚠️ FlowSavvy busy event failed ({str(e)[:80]}) — only gym is blocked for {date}."
     entries = _sched_blocks()
     if not any(e["date"] == date for e in entries):
         entries.append({"date": date, "event_id": event_id})
@@ -359,7 +384,7 @@ def schedule_block_day(date: str = Form(...)):
         gym_dates.append(date)
     _save_gym_blocks(gym_dates)
     _run_domain("gym")
-    return RedirectResponse("/", 303)
+    return RedirectResponse(f"/?msg={quote(warn)}" if warn else "/", 303)
 
 @app.post("/schedule/unblock-day")
 def schedule_unblock_day(date: str = Form(...)):
@@ -367,6 +392,7 @@ def schedule_unblock_day(date: str = Form(...)):
     to_remove = [e for e in entries if e["date"] == date]
     entries = [e for e in entries if e["date"] != date]
     _save_sched_blocks(entries)
+    warn = ""
     # delete FlowSavvy event if we stored one
     if config.BLOCK_CAL:
         try:
@@ -375,19 +401,19 @@ def schedule_unblock_day(date: str = Form(...)):
                 if e.get("event_id"):
                     fs.delete_item(e["event_id"])
             fs.recalculate()
-        except Exception:
-            pass
+        except Exception as e:
+            warn = f"⚠️ Couldn't delete the FlowSavvy busy event ({str(e)[:80]}) — remove it manually."
     # also unblock gym engine
     _save_gym_blocks([d for d in _gym_blocks() if d != date])
     _run_domain("gym")
-    return RedirectResponse("/", 303)
+    return RedirectResponse(f"/?msg={quote(warn)}" if warn else "/", 303)
 
 @app.post("/gym/block-date")
 def gym_block_date(date: str = Form(...)):
     try:
         datetime.date.fromisoformat(date)  # validate
     except ValueError:
-        return RedirectResponse("/", 303)
+        return RedirectResponse(f"/?msg={quote('invalid date')}", 303)
     dates = _gym_blocks()
     if date not in dates:
         dates.append(date)
@@ -408,7 +434,7 @@ def gym_sick_until(date: str = Form("")):
         try:
             datetime.date.fromisoformat(date)
         except ValueError:
-            return RedirectResponse("/", 303)
+            return RedirectResponse(f"/?msg={quote('invalid date')}", 303)
     _save_gym_sick_until(date)
     _run_domain("gym")
     return RedirectResponse("/", 303)
@@ -425,4 +451,23 @@ def recalc():
 def home(request: Request):
     fs  = FlowSavvy()
     ctx = _build_context(fs)
+    ctx["flash"] = (request.query_params.get("msg") or "")[:200]
     return TEMPLATES.TemplateResponse("index.html", {"request": request, **ctx})
+
+
+def main():
+    """Windowless-safe entry point: `pythonw -m lifeops.web`.
+    pythonw has no console, so sys.stdout/stderr are None and uvicorn's default
+    logging crashes on startup — point them at a logfile before serving. Run via
+    the `uvicorn` CLI instead for interactive/console use (see module docstring)."""
+    import uvicorn
+    if sys.stdout is None or sys.stderr is None:   # running under pythonw
+        log = os.path.join(ROOT, "logs", "web.log")
+        os.makedirs(os.path.dirname(log), exist_ok=True)
+        f = open(log, "a", buffering=1, encoding="utf-8")
+        sys.stdout = sys.stderr = f
+    uvicorn.run("lifeops.web:app", host="127.0.0.1", port=8765)
+
+
+if __name__ == "__main__":
+    main()

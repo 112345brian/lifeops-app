@@ -266,6 +266,13 @@ input[type=date]:focus { outline: 2px solid var(--accent); outline-offset: 1px; 
   <div id="status-bar">{{ status_dot }} {{ status_text }}</div>
 </header>
 
+{% if flash %}
+<div style="background:#3b2f13;border:1px solid #a16207;color:#fde68a;
+            border-radius:8px;padding:.6rem .9rem;margin:.6rem 0;font-size:14px;">
+  {{ flash }}
+</div>
+{% endif %}
+
 <!-- ── Stat pills ── -->
 <div class="stats-row">
   <div class="stat-pill">
