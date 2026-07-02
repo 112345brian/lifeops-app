@@ -64,8 +64,15 @@ FRIENDS_TASK = os.environ.get("FRIENDS_TASK", "Friends")
 SOCIAL_CAL = os.environ.get("SOCIAL_CAL", "")          # partner's FlowSavvy calendar id
 BLOCK_CAL  = os.environ.get("BLOCK_CAL",  "")          # calendar for UI-created busy blocks
 
-# Canvas LMS
+# Web panel shared secret. If set, every request must present it once as
+# ?token=... (a cookie is set after that). Unset = open (localhost-only use).
+WEB_TOKEN  = os.environ.get("WEB_TOKEN", "")
+
+# Canvas LMS — CANVAS_TOKEN (API token) preferred; CANVAS_COOKIE (the browser
+# session cookie header, e.g. "canvas_session=...") works when the school
+# doesn't hand out tokens. Cookies expire under SSO — re-export periodically.
 CANVAS_TOKEN     = os.environ.get("CANVAS_TOKEN", "")
+CANVAS_COOKIE    = os.environ.get("CANVAS_COOKIE", "")
 CANVAS_BASE_URL  = os.environ.get("CANVAS_BASE_URL", "https://jhu.instructure.com")
 CANVAS_COURSE_ID = os.environ.get("CANVAS_COURSE_ID", "124987")
 SH_COURSE        = os.environ.get("SH_COURSE", "428026")  # FlowSavvy scheduling hours for coursework

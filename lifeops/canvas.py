@@ -3,7 +3,9 @@
 Uses the Canvas REST API (not scraping) to fetch modules, assignments,
 pages, and announcements for a single course.
 
-Token: CANVAS_TOKEN in .env  (Settings → Account → New access token)
+Auth: CANVAS_TOKEN in .env (Settings → Account → New access token), or —
+when the school doesn't allow tokens — CANVAS_COOKIE with the browser's
+session cookie header ("canvas_session=..."). Cookies expire under SSO.
 """
 import re, requests
 from . import config
@@ -11,7 +13,10 @@ from . import config
 class Canvas:
     def __init__(self):
         self.base = (config.CANVAS_BASE_URL or "https://jhu.instructure.com").rstrip("/")
-        self.h    = {"Authorization": f"Bearer {config.CANVAS_TOKEN}"}
+        if config.CANVAS_TOKEN:
+            self.h = {"Authorization": f"Bearer {config.CANVAS_TOKEN}"}
+        else:
+            self.h = {"Cookie": config.CANVAS_COOKIE}
         self.course = config.CANVAS_COURSE_ID
 
     def _get(self, path, extra_params=None):

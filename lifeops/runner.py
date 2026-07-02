@@ -6,7 +6,7 @@ The LLM (lifeops.llm) is touched only for the judgment slivers.
 Run:  python -m lifeops.runner          # all wired domains
       python -m lifeops.runner gym      # one domain
 """
-import sys, os, re, json, datetime
+import sys, os, re, io, json, datetime, contextlib
 from . import config, ntfy, gather, lock, history, adherence
 from .flowsavvy import FlowSavvy
 from .ynab import YNAB
@@ -51,6 +51,9 @@ def _classify(title):
                  ("studio", "studio")]:
         if k in t:
             return v
+    # coursework: canvas-created tasks look like "M07: ... [AS.470.703.81.SU26]"
+    if re.match(r"^m\d{2}\b", t) or "[as." in t:
+        return "course"
     return None
 
 def ingest(fs, now):
@@ -385,8 +388,8 @@ def run_canvas(fs, yn, now):
     State: logs/canvas_state.json — tracks which modules have been synced
     and which task titles already exist (prevents duplicates across runs).
     """
-    if not config.CANVAS_TOKEN:
-        print("[canvas] skip (no CANVAS_TOKEN)"); return
+    if not (config.CANVAS_TOKEN or config.CANVAS_COOKIE):
+        print("[canvas] skip (no CANVAS_TOKEN / CANVAS_COOKIE)"); return
 
     from .canvas import Canvas, strip_html
     from .engines import canvas_engine
@@ -441,14 +444,7 @@ def run_canvas(fs, yn, now):
         if num in synced or unlock_date > today:
             continue
 
-        # gather assignments for this module from its items
-        assignments = []
         items = mod.get("items") or []
-        for item in items:
-            if item.get("type") == "Assignment":
-                # fetch full assignment detail via assignments API
-                pass  # populated below from bulk assignment fetch
-
         modules_data.append({
             "module_num":  num,
             "unlock_date": unlock_date,
@@ -512,12 +508,16 @@ def run_canvas(fs, yn, now):
             **spec,
         }
         if dep_title and dep_title in created_titles:
-            kwargs["mustBeDoneAfter"] = created_titles[dep_title]
+            # FlowSavvy's real dependency field (same one run_meal uses)
+            kwargs["blockedByIds"] = [created_titles[dep_title]]
         try:
             r = fs.create_task(**kwargs)
             tid = (r or {}).get("id") or (r or {}).get("item", {}).get("id")
             if tid:
                 created_titles[spec["title"]] = tid
+            # durable audit trail — creations must survive discarded stdout
+            history.append("course_task", source="canvas",
+                           meta={"id": tid, "title": spec["title"]})
             _touch()
         except Exception as e:
             print(f"[canvas] create failed for {spec.get('title','?')}: {e}")
@@ -532,13 +532,18 @@ def run_canvas(fs, yn, now):
             # search FlowSavvy for matching title fragments
             for item in fs.list_items(itemType="task", listId=config.LIST_COURSE,
                                       completed=False, query=name[:30]).get("items", []):
-                if item.get("title", "").endswith(name) or item.get("title", "") == f"M{a.get('module_id','?'):02}: {name}":
-                    fs_due = (item.get("dueDateTime") or "")[:10]
-                    canvas_due = new_due[:10]
-                    if fs_due and canvas_due and fs_due != canvas_due:
-                        fs.update_task(item["id"], dueDateTime=f"{canvas_due}T23:59:00")
-                        _touch()
-                        print(f"[canvas] updated due date for {item['title']}: {fs_due}→{canvas_due}")
+                # only the unsplit / final task carries the Canvas due date;
+                # phase tasks ("… — Draft") have staggered dues — leave them be
+                title = item.get("title") or ""
+                bare = title.rstrip("]").split(" [")[0]     # strip "[AS.…]" course tag
+                if not (title.endswith(name) or bare.endswith(name)):
+                    continue
+                fs_due = (item.get("dueDateTime") or "")[:10]
+                canvas_due = new_due[:10]
+                if fs_due and canvas_due and fs_due != canvas_due:
+                    fs.update_task(item["id"], dueDateTime=f"{canvas_due}T23:59:00")
+                    _touch()
+                    print(f"[canvas] updated due date for {title}: {fs_due}→{canvas_due}")
     except Exception as e:
         print(f"[canvas] change-check error: {e}")
 
@@ -553,9 +558,6 @@ def run_canvas(fs, yn, now):
             print(f"[canvas] announcement ({posted}): {title}")
     except Exception:
         pass
-
-    if _DIRTY[0]:
-        pass  # recalculate handled by main _run()
 
     # save state
     for mod in modules_data:
@@ -581,9 +583,45 @@ DOMAINS = {"gym": run_gym, "ynab": run_ynab, "chore": run_chore, "catchup": run_
 TIERS = {
     # tick is signal-driven + cheap (every ~10 min). Scheduling/planning is NOT
     # here — it doesn't need 10-min churn and would keep reshuffling your calendar.
-    "tick":  ["catchup", "spend"],
-    "daily": ["gym", "ynab", "homework", "social", "chore", "meal", "digest", "canvas"],
+    # meal lives here so a "Have leftovers — skip" tap is honored within minutes,
+    # not at tomorrow's 7:10am (its weekly-create path self-guards and is cheap).
+    # spend moved to daily: it only ever alerts once/day, so 10-min YNAB+FlowSavvy
+    # fetches were 143 wasted API round-trips per day.
+    "tick":  ["catchup", "meal"],
+    "daily": ["gym", "ynab", "homework", "social", "chore", "meal", "spend", "digest", "canvas"],
 }
+
+def _capture(fn, *args):
+    """Run fn with stdout captured so its one-line summaries survive pythonw
+    (where prints are silently discarded). Echoes to a real console if any."""
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            fn(*args)
+    finally:
+        txt = buf.getvalue()
+        if sys.__stdout__:
+            try:
+                sys.__stdout__.write(txt); sys.__stdout__.flush()
+            except Exception:
+                pass
+    return txt.strip()
+
+RUNS_LOG_MAX = 2_000_000   # ~2MB before trimming to the newest 2000 runs
+
+def _append_run_log(rec):
+    """Durable per-run audit trail: what each domain actually did every cycle."""
+    p = os.path.join(history.ROOT, "logs", "runs.jsonl")
+    try:
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec) + "\n")
+        if os.path.getsize(p) > RUNS_LOG_MAX:
+            lines = open(p, encoding="utf-8").read().splitlines()
+            with open(p, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines[-2000:]) + "\n")
+    except Exception:
+        pass
 
 def main():
     try:
@@ -614,10 +652,12 @@ def _run():
     except Exception:
         pass
 
-    try:
-        ingest(fs, now)               # always update the completion history first
+    details = {}
+    try:                              # always update the completion history first
+        details["ingest"] = _capture(ingest, fs, now)
     except Exception as e:
-        errors["ingest"] = str(e); print(f"[ingest] ERROR: {e}")
+        errors["ingest"] = str(e); details["ingest"] = f"ERROR: {e}"
+        print(f"[ingest] ERROR: {e}")
 
     names, explicit = [], set()
     for a in (sys.argv[1:] or ["tick"]):
@@ -635,9 +675,10 @@ def _run():
         if not fn:
             continue
         try:
-            fn(fs, yn, now)
+            details[name] = _capture(fn, fs, yn, now)
         except Exception as e:
-            errors[name] = str(e); print(f"[{name}] ERROR: {e}")
+            errors[name] = str(e); details[name] = f"ERROR: {e}"
+            print(f"[{name}] ERROR: {e}")
 
     if _DIRTY[0]:                      # ONE recalc per run, only if something changed
         try: fs.recalculate()
@@ -648,9 +689,11 @@ def _run():
                     "⚠️ LifeOps errors — " + "; ".join(f"{k}: {v[:40]}" for k, v in errors.items()),
                     "high")
     _heartbeat(not errors)
+    rec = {"ts": now.isoformat(timespec="seconds"), "args": sys.argv[1:],
+           "ran": names, "errors": errors, "details": details}
     os.makedirs(os.path.dirname(hp), exist_ok=True)
-    json.dump({"ts": now.isoformat(timespec="seconds"), "ran": names, "errors": errors},
-              open(hp, "w", encoding="utf-8"))
+    json.dump(rec, open(hp, "w", encoding="utf-8"))
+    _append_run_log(rec)
 
 if __name__ == "__main__":
     main()
