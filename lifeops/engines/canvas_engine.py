@@ -12,7 +12,8 @@ DAY = datetime.timedelta(days=1)
 def classify(name, submission_types=None):
     n = name.lower()
     st = " ".join(submission_types or []).lower()
-    if "reply" in n or "response to peer" in n or "peer response" in n:
+    if ("reply" in n or "replies" in n            # Canvas: "Required Replies (1)"
+            or "response to peer" in n or "peer response" in n):
         return "reply"
     if "discussion" in n or "discussion_topic" in st:
         return "discussion"
@@ -33,12 +34,22 @@ def classify(name, submission_types=None):
 
 # ── duration + splitting rules ────────────────────────────────────────────────
 
-def _spread(final_due, gaps_before):
-    """Return N-1 intermediate due dates given days-before-final gaps.
-    gaps_before = [days_before_for_phase_1, ..., days_before_for_last_phase]
-    final_due is a datetime.date.
+def _spread(final_due, gaps_before, today=None):
+    """Intermediate due dates given days-before-final gaps, plus the final due.
+    gaps_before = [days_before_for_phase_1, ..., days_before_for_second_to_last]
+    final_due is a datetime.date. Intermediates are clamped to `today` so a
+    close deadline never emits phases that are already overdue at creation.
     """
-    return [final_due - datetime.timedelta(days=g) for g in gaps_before] + [final_due]
+    dates = [final_due - datetime.timedelta(days=g) for g in gaps_before]
+    if today:
+        dates = [max(d, today) for d in dates]
+    return dates + [final_due]
+
+
+# fallback durations for assignments Canvas gives us no due date for (unsplit)
+_NO_DUE_DURATION = {"reply": 40, "discussion": 75, "prospectus": 180, "paper": 195,
+                    "final_paper": 480, "final_project": 260, "lab": 260,
+                    "assignment": 260, "presentation": 105}
 
 
 def split_assignment(mod_num, name, atype, due_date, unlock_date, readings_due, today):
@@ -62,13 +73,18 @@ def split_assignment(mod_num, name, atype, due_date, unlock_date, readings_due, 
         }
         return {k: v for k, v in t.items() if v is not None}
 
+    # No due date from Canvas → phase spreading has nothing to anchor on.
+    # Emit ONE unsplit task with no deadline instead of crashing in _spread.
+    if due_date is None:
+        return [_task(tag, _NO_DUE_DURATION.get(atype, 60), None, start)]
+
     if atype == "reply":
         return [_task(tag, 40, due_date, start)]
 
     if atype == "discussion":
         # check if it smells like it needs data work first
         if any(w in name.lower() for w in ("data", "find", "identify", "research", "collect")):
-            dates = _spread(due_date, [3, 0])
+            dates = _spread(due_date, [3, 0], today)
             return [
                 _task(f"{tag} — Research",    55, dates[0], start),
                 _task(f"{tag} — Write Post",  65, dates[1], dates[0], dep_title=f"{tag} — Research"),
@@ -76,14 +92,14 @@ def split_assignment(mod_num, name, atype, due_date, unlock_date, readings_due, 
         return [_task(tag, 75, due_date, start)]
 
     if atype == "prospectus":
-        dates = _spread(due_date, [5, 0])
+        dates = _spread(due_date, [5, 0], today)
         return [
             _task(f"{tag} — Outline",  60, dates[0], start),
             _task(f"{tag} — Draft",   120, dates[1], dates[0], dep_title=f"{tag} — Outline"),
         ]
 
     if atype == "paper":
-        dates = _spread(due_date, [7, 3, 0])
+        dates = _spread(due_date, [7, 3, 0], today)
         return [
             _task(f"{tag} — Outline & Notes", 45,  dates[0], start),
             _task(f"{tag} — Draft",          110,  dates[1], dates[0], dep_title=f"{tag} — Outline & Notes"),
@@ -91,7 +107,8 @@ def split_assignment(mod_num, name, atype, due_date, unlock_date, readings_due, 
         ]
 
     if atype == "final_paper":
-        dates = _spread(due_date, [14, 9, 5, 2, 0])
+        # 4 phases → 4 gaps; last gap 0 so Proofread & Submit lands ON the deadline
+        dates = _spread(due_date, [14, 9, 5, 0], today)
         return [
             _task(f"{tag} — Incorporate Feedback", 120, dates[0], start),
             _task(f"{tag} — Rewrite & Expand",     150, dates[1], dates[0],
@@ -103,7 +120,7 @@ def split_assignment(mod_num, name, atype, due_date, unlock_date, readings_due, 
         ]
 
     if atype in ("final_project", "lab", "assignment"):
-        dates = _spread(due_date, [7, 3, 0])
+        dates = _spread(due_date, [7, 3, 0], today)
         return [
             _task(f"{tag} — Setup & Data Exploration",  80, dates[0], start),
             _task(f"{tag} — Analysis & Visualization", 105, dates[1], dates[0],
@@ -169,8 +186,8 @@ def plan(modules_data, existing_titles, today):
     report_lines = []
 
     for mod in modules_data:
-        num         = mod["module_num"]
-        unlock      = mod["unlock_date"]
+        num         = mod.get("module_num") or 0
+        unlock      = mod.get("unlock_date") or today
         assignments = mod.get("assignments", [])
         readings    = mod.get("readings", [])
 
@@ -182,6 +199,10 @@ def plan(modules_data, existing_titles, today):
                 asgn_dues.append(due)
         earliest_due = min(asgn_dues) if asgn_dues else None
         readings_due = (earliest_due - 2 * DAY) if earliest_due else (unlock + 7 * DAY)
+        if readings_due < today:
+            readings_due = today          # late sync: never emit pre-overdue readings
+
+        mod_lines = []
 
         # readings
         for r in readings:
@@ -190,7 +211,7 @@ def plan(modules_data, existing_titles, today):
             if t["title"] not in existing_titles:
                 creates.append(t)
                 existing_titles.add(t["title"])
-                report_lines.append(f"  + {t['title']} ({t['durationMinutes']}m)")
+                mod_lines.append(f"  + {t['title']} ({t['durationMinutes']}m)")
 
         # assignments
         for a in assignments:
@@ -202,10 +223,11 @@ def plan(modules_data, existing_titles, today):
                 if spec["title"] not in existing_titles:
                     creates.append(spec)
                     existing_titles.add(spec["title"])
-                    report_lines.append(f"  + {spec['title']} ({spec['durationMinutes']}m)")
+                    mod_lines.append(f"  + {spec['title']} ({spec['durationMinutes']}m)")
 
-        if report_lines:
-            report_lines.insert(0, f"M{num:02d} ({len(creates)} tasks so far):")
+        if mod_lines:
+            report_lines.append(f"M{num:02d} (+{len(mod_lines)} tasks):")
+            report_lines.extend(mod_lines)
 
     return {
         "creates":      creates,

@@ -21,13 +21,19 @@ def plan(inp):
     seen = set(processed)
     creates = []
     for c in inp.get("completed", []):
-        if c["id"] in seen:
+        cid = c.get("id")
+        if not cid or cid in seen:
             continue
         m = re.search(r"\[cycle:(\d+)d\]", c.get("notes", "") or "")
         if not m:
             continue                                   # not a managed chore
         n = int(m.group(1))
-        comp = datetime.date.fromisoformat(c["completed_date"])
+        try:
+            comp = datetime.date.fromisoformat(c.get("completed_date") or "")
+        except (ValueError, TypeError):
+            continue           # malformed record: skip it, don't abort the batch
+        if not c.get("title"):
+            continue
         nextd = comp + n * DAY
         t = c.get("dueTime") or "20:00"
         lead = min(3, max(0, n - 1))
@@ -41,7 +47,7 @@ def plan(inp):
             "dueDateTime": f"{nextd.isoformat()}T{t}:00",
             "canBeStartedAt": f"{(nextd - lead*DAY).isoformat()}T{t}:00",
         })
-        processed.append(c["id"]); seen.add(c["id"])
+        processed.append(cid); seen.add(cid)
     return {"creates": creates, "processed": processed[-300:]}
 
 def main():

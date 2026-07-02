@@ -60,17 +60,21 @@ def plan(inp):
     needed = max(0, target - have)
     floor_needed = max(0, floor - have)
     sched_dates = {g["date"] for g in scheduled}
+    # days he ACTUALLY trained recently — the consecutive cap must count these,
+    # not just scheduled blocks, or we book a real 3rd straight day after the
+    # fact (completed sessions aren't in `scheduled` anymore).
+    done_dates = set(inp.get("completed_dates", []))
 
     cand = []
     for day in inp.get("days", []):
-        if day["date"] in sched_dates:
+        if day["date"] in sched_dates or day["date"] in done_dates:
             continue
         s = slot_for(day, r)
         if s:
             cand.append((day["date"], s))
     cand.sort(key=lambda c: c[0])
 
-    chosen, busy = [], set(sched_dates)
+    chosen, busy = [], set(sched_dates) | done_dates
     for date, slot in cand:
         if len(chosen) >= needed:
             break
@@ -85,7 +89,11 @@ def plan(inp):
             out["wind_down"].append({"date": (D(date) - DAY).isoformat(),
                                      "start": "21:00", "end": "23:00"})
 
-    viable_left = len(cand)
+    # viable = chosen days + remaining candidates that still pass the consecutive
+    # cap (a day the cap always rejects is NOT viable — counting it under-warns)
+    viable_left = len(chosen) + sum(
+        1 for date, _ in cand
+        if date not in busy and run_length(date, busy | {date}) <= r["max_consecutive"])
     if floor_needed > viable_left:
         out["alert"] = {"level": "high",
                         "text": f"Heads up: set to miss {floor}x this week — only {viable_left} viable day(s) left."}

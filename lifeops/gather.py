@@ -61,6 +61,10 @@ def gym_input(fs, now, sick_until=None):
     gym_days = history.days_with("gym", monday.isoformat(), sunday.isoformat())
     skip_days = history.days_with("gym_skip", monday.isoformat(), sunday.isoformat())
     completed_count = len(gym_days - skip_days)
+    # days he PHYSICALLY trained in the last week (skips included — his muscles
+    # don't care about scorekeeping) so the engine's consecutive cap sees them
+    recent_start = (today - datetime.timedelta(days=7)).isoformat()
+    completed_dates = sorted(history.days_with("gym", recent_start, today.isoformat()))
 
     scheduled = []
     for t in gym_open:
@@ -129,6 +133,7 @@ def gym_input(fs, now, sick_until=None):
              "evening_end": f"{int(es[:2]) + 1:02d}:00"}
     return {"today": today.isoformat(), "now": now.isoformat(timespec="seconds"),
             "sick_until": sick_until, "completed_count": completed_count,
+            "completed_dates": completed_dates,
             "scheduled": scheduled, "days": days, "rules": rules}
 
 def homework_input(fs, now):
