@@ -3,6 +3,24 @@
 Notable changes, newest first. Personal project — no version numbers, just
 dates and the reasoning behind each change.
 
+## Unreleased (branch: `worktree-mobile-app`, based on `worktree-web-ui`)
+
+### 2026-07-03
+- **Installable PWA + notification deep links.** The control panel is now a
+  proper installable app: `manifest.json`, generated icons, a service worker
+  (network-first — the dashboard is live data, not a static shell to cache
+  aggressively), and an in-panel "Add to Home Screen" hint (iOS has no
+  install-prompt API, so the panel surfaces the Share-sheet instructions
+  itself; Android/Chrome gets a one-tap custom install button via
+  `beforeinstallprompt`). Kept **ntfy** as the actual push mechanism rather
+  than building custom Web Push — it's already proven-reliable and fully
+  wired into every alert path, whereas Web Push on iOS only works from an
+  already-installed PWA and silently drops expired subscriptions. Instead,
+  added a `PANEL_URL` config value + a `click` URL on every ntfy alert so
+  tapping a notification deep-links straight into the relevant panel section
+  (e.g. a gym alert opens directly to Gym Controls) — one integrated
+  experience across the two apps instead of two disconnected ones.
+
 ## Unreleased (branch: `worktree-web-ui`)
 
 ### 2026-07-03

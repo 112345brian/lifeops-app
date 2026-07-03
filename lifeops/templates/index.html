@@ -4,6 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>LifeOps</title>
+<link rel="manifest" href="/static/manifest.json">
+<link rel="icon" href="/static/icons/favicon-32.png" sizes="32x32">
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+<meta name="theme-color" content="#0f1117">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="LifeOps">
 <style>
 :root {
   --bg: #0f1117;
@@ -273,6 +280,14 @@ input[type=date]:focus { outline: 2px solid var(--accent); outline-offset: 1px; 
 </div>
 {% endif %}
 
+<div id="install-hint" style="display:none;background:var(--surface2);border:1px solid var(--border);
+            border-radius:8px;padding:.6rem .9rem;margin:.6rem 0;font-size:13px;
+            align-items:center;justify-content:space-between;gap:.75rem;">
+  <span id="install-hint-text"></span>
+  <button onclick="document.getElementById('install-hint').style.display='none'"
+          style="background:none;border:none;color:var(--muted);font-size:16px;cursor:pointer;padding:0 .25rem;">×</button>
+</div>
+
 <!-- ── Stat pills ── -->
 <div class="stats-row">
   <div class="stat-pill">
@@ -350,7 +365,7 @@ input[type=date]:focus { outline: 2px solid var(--accent); outline-offset: 1px; 
 </div>
 
 <!-- ── Scheduling Controls ── -->
-<div class="card section">
+<div class="card section" id="scheduling">
   <div class="card-title">Scheduling Controls</div>
   <div class="gym-grid">
 
@@ -392,7 +407,7 @@ input[type=date]:focus { outline: 2px solid var(--accent); outline-offset: 1px; 
 </div>
 
 <!-- ── Gym Controls ── -->
-<div class="card section">
+<div class="card section" id="gym">
   <div class="card-title">Gym Controls</div>
   <div class="gym-grid">
 
@@ -507,7 +522,7 @@ input[type=date]:focus { outline: 2px solid var(--accent); outline-offset: 1px; 
 </div>
 
 <!-- ── Config ── -->
-<div class="card section">
+<div class="card section" id="config">
   <div class="card-title">Config
     <span class="muted" style="text-transform:none;font-weight:400;font-size:10px">
       — restart app to apply
@@ -576,6 +591,42 @@ async function refreshStatus() {
   } catch(e) {}
 }
 setInterval(refreshStatus, 60000);
+
+// --- PWA install ---
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
+
+(function () {
+  const isStandalone = window.matchMedia('(display-mode: standalone)').matches
+                      || window.navigator.standalone === true;
+  if (isStandalone) return;   // already installed, nothing to hint at
+
+  const hint = document.getElementById('install-hint');
+  const text = document.getElementById('install-hint-text');
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+
+  if (isIOS) {
+    // iOS has no install prompt API -- Safari only offers Share -> Add to
+    // Home Screen, so this is the only way to surface the option at all.
+    text.textContent = '📲 Add LifeOps to your Home Screen: tap Share, then "Add to Home Screen".';
+    hint.style.display = 'flex';
+  } else {
+    // Android/Chrome: capture the native prompt and offer a one-tap install
+    // instead of waiting for the browser's own (easy to miss) mini-infobar.
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      text.innerHTML = '📲 Install LifeOps as an app — <a href="#" id="install-btn" style="color:var(--accent);">tap here</a>.';
+      hint.style.display = 'flex';
+      document.getElementById('install-btn').onclick = async (ev) => {
+        ev.preventDefault();
+        e.prompt();
+        await e.userChoice;
+        hint.style.display = 'none';
+      };
+    });
+  }
+})();
 </script>
 
 </body>

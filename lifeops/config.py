@@ -67,6 +67,11 @@ BLOCK_CAL  = os.environ.get("BLOCK_CAL",  "")          # calendar for UI-created
 # Web panel shared secret. If set, every request must present it once as
 # ?token=... (a cookie is set after that). Unset = open (localhost-only use).
 WEB_TOKEN  = os.environ.get("WEB_TOKEN", "")
+# Public URL of the panel (your Tailscale HTTPS hostname, e.g.
+# https://mypc.tailxxxx.ts.net) — used to deep-link ntfy notifications
+# straight into the relevant panel section. Blank = notifications just
+# don't include a tap-through link.
+PANEL_URL  = os.environ.get("PANEL_URL", "")
 
 # Canvas LMS — CANVAS_TOKEN (API token) preferred. If unset (JHU disables
 # self-service tokens), lifeops.canvas_browser drives an authenticated browser

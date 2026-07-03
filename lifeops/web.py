@@ -7,13 +7,26 @@ import os, re, sys, json, subprocess, datetime
 from pathlib import Path
 from urllib.parse import quote
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from . import config, history
 from .flowsavvy import FlowSavvy
 
+STATIC_DIR = Path(__file__).parent / "static"
+
 app = FastAPI()
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+@app.get("/sw.js")
+def service_worker():
+    """Served at the root (not /static/sw.js) so its scope covers the whole
+    app -- a service worker can only control paths at or below where it's
+    registered from."""
+    return FileResponse(STATIC_DIR / "sw.js", media_type="application/javascript",
+                        headers={"Service-Worker-Allowed": "/"})
 
 
 @app.middleware("http")

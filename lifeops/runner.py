@@ -97,9 +97,12 @@ def ingest(fs, now):
     os.makedirs(os.path.dirname(sp), exist_ok=True)
     json.dump(st, open(sp, "w", encoding="utf-8"))
 
-def _alert_once(key, text, priority="default", tags=None, actions=None):
+def _alert_once(key, text, priority="default", tags=None, actions=None, click_anchor=""):
     """Send an alert at most once per calendar day per key. The tick runs every
-    10 min — without this, advisory alerts would spam."""
+    10 min — without this, advisory alerts would spam. click_anchor: panel
+    section to deep-link into when the notification is tapped (e.g. "gym") —
+    "" links to the panel root, which is still useful (opens the app).
+    Omitted entirely if PANEL_URL isn't configured."""
     sp = os.path.join(history.ROOT, "logs", "alert_state.json")
     st = {}
     try:
@@ -109,7 +112,8 @@ def _alert_once(key, text, priority="default", tags=None, actions=None):
     today = datetime.date.today().isoformat()
     if st.get(key) == today:
         return
-    ntfy.alert(text, priority=priority, tags=tags, actions=actions)
+    ntfy.alert(text, priority=priority, tags=tags, actions=actions,
+              click=ntfy.panel_url(click_anchor))
     st[key] = today
     os.makedirs(os.path.dirname(sp), exist_ok=True)
     json.dump(st, open(sp, "w", encoding="utf-8"))
@@ -165,7 +169,7 @@ def run_gym(fs, yn, now):
     lvl = out["alert"]["level"]
     if lvl != "none":
         _alert_once("gym:" + lvl, out["alert"]["text"], _PRIO[lvl],
-                    ["rotating_light"] if lvl == "urgent" else None)
+                    ["rotating_light"] if lvl == "urgent" else None, click_anchor="gym")
     print(f"[gym] {out['summary']}")
 
 def run_ynab(fs, yn, now):
@@ -205,7 +209,7 @@ def run_ynab(fs, yn, now):
            f"{len(out['novel'])} novel, {len(out['holds'])} held, covered {len(out['cover'])} cat(s)")
     print("[ynab] " + msg)
     if appr or out["holds"]:
-        ntfy.alert(msg)
+        ntfy.alert(msg, click=ntfy.panel_url())
 
 def run_chore(fs, yn, now):
     sp = os.path.join(history.ROOT, "logs", "chore_state.json")
@@ -247,7 +251,8 @@ def run_catchup(fs, yn, now):
                 for m in ntfy.poll(since=st["lastHandled"]))
     if fired:
         fs.recalculate(reschedule_past=True)
-        ntfy.alert("Catch-up: re-packed your whole schedule around what's left.")
+        ntfy.alert("Catch-up: re-packed your whole schedule around what's left.",
+                  click=ntfy.panel_url())
         print("[catchup] re-packed")
     else:
         print("[catchup] no trigger")

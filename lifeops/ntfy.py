@@ -23,10 +23,13 @@ def poll(since=0):
             pass
     return msgs
 
-def alert(text, priority="default", tags=None, actions=None):
+def alert(text, priority="default", tags=None, actions=None, click=None):
     """Push an alert to the phone. priority: min|low|default|high|urgent.
     actions: list of (label, signal_body) — renders tap buttons that POST the
-    signal_body back to the SIGNAL topic, so the system can react to your tap."""
+    signal_body back to the SIGNAL topic, so the system can react to your tap.
+    click: URL opened when the notification body itself is tapped (not an
+    action button) — pass a panel_url(...) fragment to deep-link into the
+    relevant control-panel section."""
     if not config.NTFY_ALERTS_TOPIC:
         return
     headers = {"Priority": priority}
@@ -37,5 +40,15 @@ def alert(text, priority="default", tags=None, actions=None):
         headers["Actions"] = "; ".join(
             f"http, {label}, {sig}, method=POST, body={body}, clear=true"
             for label, body in actions)
+    if click:
+        headers["Click"] = click
     requests.post(f"https://ntfy.sh/{config.NTFY_ALERTS_TOPIC}",
                   data=text.encode("utf-8"), headers=headers, timeout=30)
+
+def panel_url(anchor=""):
+    """Build a link into the control panel for a Click header. Returns None
+    (omit Click entirely) if PANEL_URL isn't configured."""
+    if not config.PANEL_URL:
+        return None
+    base = config.PANEL_URL.rstrip("/")
+    return f"{base}/#{anchor}" if anchor else base

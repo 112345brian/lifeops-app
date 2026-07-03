@@ -86,6 +86,27 @@ config, and history. Set `WEB_TOKEN` in `.env` before exposing it beyond
 localhost — every request then needs `/?token=<secret>` once (a cookie keeps
 you in after).
 
+### Installing it as an app + notifications
+The panel is a PWA — over your Tailscale HTTPS URL, add it to your phone's
+home screen and it opens standalone (no browser chrome), with its own icon:
+- **iOS**: open the URL in Safari → Share → **Add to Home Screen** (the panel
+  shows this instruction itself the first time you visit, since iOS Safari
+  has no automatic install prompt)
+- **Android/Chrome**: the panel offers a one-tap **Install** banner
+  automatically once the manifest + service worker are detected
+
+Notifications still go through **ntfy** (a dedicated, reliable push app —
+already wired into every alert path: gym urgency, YNAB holds, Canvas session
+expiry, run errors, the weekly digest). Install the ntfy app and subscribe to
+your `NTFY_ALERTS_TOPIC`. Set `PANEL_URL` in `.env` to your Tailscale hostname
+and those notifications deep-link straight into the relevant panel section
+when tapped (e.g. a gym alert opens directly to Gym Controls) — so the two
+apps work as one experience even though push delivery and the dashboard are
+technically separate pieces. (Real in-app Web Push was considered instead of
+ntfy, but ntfy is already proven-reliable and fully wired; Web Push on iOS is
+finicky — subscriptions expire silently and only work from an already-installed
+PWA — so it wasn't worth the fragility for a personal single-user app.)
+
 ## Testing
 ```
 python -m pytest tests/ -q
