@@ -1,33 +1,76 @@
 # Changelog
 
-Notable changes, newest first. Personal project — no version numbers, just
-dates and the reasoning behind each change.
+Notable changes, newest first. Personal project, versioned simply (see
+`VERSION` / `lifeops.__version__`) — dates and the reasoning behind each
+change matter more here than semver strictness.
 
-## Unreleased (branch: `worktree-mobile-app`, based on `worktree-web-ui`)
+## [1.0.0] — 2026-07-03
 
-### 2026-07-03
-- **Installable PWA + notification deep links.** The control panel is now a
-  proper installable app: `manifest.json`, generated icons, a service worker
-  (network-first — the dashboard is live data, not a static shell to cache
-  aggressively), and an in-panel "Add to Home Screen" hint (iOS has no
-  install-prompt API, so the panel surfaces the Share-sheet instructions
-  itself; Android/Chrome gets a one-tap custom install button via
-  `beforeinstallprompt`). Kept **ntfy** as the actual push mechanism rather
-  than building custom Web Push — it's already proven-reliable and fully
-  wired into every alert path, whereas Web Push on iOS only works from an
-  already-installed PWA and silently drops expired subscriptions. Instead,
-  added a `PANEL_URL` config value + a `click` URL on every ntfy alert so
-  tapping a notification deep-links straight into the relevant panel section
-  (e.g. a gym alert opens directly to Gym Controls) — one integrated
-  experience across the two apps instead of two disconnected ones.
+First consolidated release: everything below (control panel, all 9 domains,
+Canvas sync, PWA install, and this pre-merge review's fixes) merged from
+`worktree-web-ui` + `worktree-mobile-app` onto `master` in one pass.
 
-## Unreleased (branch: `worktree-web-ui`)
+### Pre-merge review fixes
+Before consolidating, ran a code review over the full accumulated diff and
+fixed every confirmed finding:
+- **Tier rebalance had silently dropped the `"signal"` TIERS key** while
+  `register_task.ps1` still registers a 2-minute scheduled task that runs
+  `runner.py signal` — restored it. Without this, the low-latency "catchup"
+  phone-tap response silently degraded from ~2 min to the 10-min tick, with
+  no error anywhere.
+- **Canvas sync crashed on any unnumbered module** (`re.search(r"\d+", ...).group()`
+  on a module like "Start Here: Welcome and Course Overview" — a real module
+  in the actual course) — now skips unnumbered utility modules instead of
+  raising every single day.
+- **Canvas task dedup broke past Module 9** — a `query="M0"` substring filter
+  silently stopped matching `M10`/`M11`/`M12` titles. Dropped the filter;
+  `listId` scoping to the course list is already sufficient.
+- **Canvas auth failures were inconsistent** — a revoked/expired browser
+  session alerted at high priority, but a revoked `CANVAS_TOKEN` degraded to
+  a `print()` that's silently discarded under `pythonw`. Both paths now
+  alert identically.
+- **`run_meal` moved to the 10-min tick tier but still polled ntfy
+  unconditionally** before checking due-ness — reintroducing the exact
+  redundant-fetch pattern this same changelog claims to have fixed for
+  `spend` (moved the opposite direction for exactly this reason). Now checks
+  the free, local due-date first.
+- **`gym_engine`'s `viable_left` fix (below) was incomplete** — it checked
+  each remaining candidate against the fixed `busy` set independently, so
+  candidates mutually adjacent to *each other* (not to `busy`) were each
+  individually counted as viable even though the consecutive-day cap means
+  not all of them could be booked together. Now simulates the same greedy
+  booking order to get the true count.
+- **`canvas_engine._spread()`'s today-clamping (below) collapsed
+  dependency-chained phases onto the identical date** on a late sync — e.g.
+  three chained tasks (each blocked by the previous) all due the same day,
+  sequentially impossible. Now clamps relative to the previous phase,
+  preserving order until there's genuinely no more calendar to spread across.
+- 2 new regression tests (106 total).
+- **Known limitation, unverified:** whether an installed PWA's standalone
+  launch shares a cookie jar with the browser session that authenticated it
+  under `WEB_TOKEN` is platform-dependent (particularly on iOS) and couldn't
+  be confirmed from source alone — needs a manual check on a real device. If
+  the home-screen icon 401s while the browser tab works fine, this is why.
 
-### 2026-07-03
-- **Canvas sync via browser session, no token/cookie needed.** JHU disables
-  self-service Canvas API tokens, and Canvas's session cookie is `httpOnly`
-  (unreadable from a page, confirmed by direct test — not a permissions
-  issue, a browser security boundary). Added `lifeops/canvas_browser.py`: a
+### Installable PWA + notification deep links
+The control panel is now a proper installable app: `manifest.json`, generated
+icons, a service worker (network-first — the dashboard is live data, not a
+static shell to cache aggressively), and an in-panel "Add to Home Screen"
+hint (iOS has no install-prompt API, so the panel surfaces the Share-sheet
+instructions itself; Android/Chrome gets a one-tap custom install button via
+`beforeinstallprompt`). Kept **ntfy** as the actual push mechanism rather
+than building custom Web Push — it's already proven-reliable and fully
+wired into every alert path, whereas Web Push on iOS only works from an
+already-installed PWA and silently drops expired subscriptions. Instead,
+added a `PANEL_URL` config value + a `click` URL on every ntfy alert so
+tapping a notification deep-links straight into the relevant panel section
+(e.g. a gym alert opens directly to Gym Controls) — one integrated
+experience across the two apps instead of two disconnected ones.
+
+### Canvas sync via browser session, no token/cookie needed
+JHU disables self-service Canvas API tokens, and Canvas's session cookie is
+  `httpOnly` (unreadable from a page, confirmed by direct test — not a
+  permissions issue, a browser security boundary). Added `lifeops/canvas_browser.py`: a
   dedicated, persistent Chrome profile (`data/browser_profiles/canvas/`) that
   Playwright drives, hitting Canvas's own JSON REST API through the
   authenticated session's cookie jar — same response shapes as the
