@@ -51,6 +51,16 @@ def test_missing_id_or_title_skipped():
     out = chore_engine.plan({"completed": [no_id, no_title], "processed": []})
     assert out["creates"] == []
 
+def test_missing_title_marked_processed_not_retried_forever():
+    # regression: a record missing "title" (valid cycle tag + completed_date,
+    # so not caught by the malformed-date guard) was skipped WITHOUT being
+    # added to processed -- meaning it would be refetched and re-skipped on
+    # every single future run indefinitely instead of being handled once.
+    no_title = {**BASE, "id": "c9"}; no_title.pop("title")
+    out = chore_engine.plan({"completed": [no_title], "processed": []})
+    assert out["creates"] == []
+    assert "c9" in out["processed"], "malformed record must be marked processed, not retried forever"
+
 def test_marks_as_processed():
     out = chore_engine.plan({"completed": [BASE], "processed": []})
     assert "c1" in out["processed"]

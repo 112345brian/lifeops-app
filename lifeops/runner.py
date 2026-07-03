@@ -127,8 +127,12 @@ def run_gym(fs, yn, now):
     today = now.date().isoformat()
     now_iso = now.isoformat()
     did_today = bool(history.days_with("gym", today, today))
-    for t in [t for t in fs.list_items(itemType="task", query="Gym", completed=False).get("items", [])
-              if (t.get("title") or "").startswith("Gym")]:
+    # Fetch once and reuse for gather.gym_input below (same query it would
+    # otherwise re-issue) — just filter out whatever this cleanup pass deletes.
+    gym_open = [t for t in fs.list_items(itemType="task", query="Gym", completed=False).get("items", [])
+                if (t.get("title") or "").startswith("Gym")]
+    deleted_ids = set()
+    for t in gym_open:
         sd = t.get("startDateTime") or ""
         ed = t.get("endDateTime") or ""
         d = sd[:10]
@@ -139,14 +143,17 @@ def run_gym(fs, yn, now):
                 slot = "morning" if (sd[11:13] or "12") < "11" else "evening"
                 history.append("gym_missed", ts=(sd[:19] or None), source="cleanup",
                                meta={"slot": slot})
-            try: fs.delete_item(t["id"]); _touch()
+            try:
+                fs.delete_item(t["id"]); _touch(); deleted_ids.add(t["id"])
             except Exception: pass
+    if deleted_ids:
+        gym_open = [t for t in gym_open if t["id"] not in deleted_ids]
     gym_state_path = os.path.join(history.ROOT, "logs", "gym_state.json")
     try:
         sick_until = json.load(open(gym_state_path, encoding="utf-8")).get("sick_until")
     except Exception:
         sick_until = None
-    inp = gather.gym_input(fs, now, sick_until=sick_until)
+    inp = gather.gym_input(fs, now, sick_until=sick_until, gym_open=gym_open)
     out = gym_engine.plan(inp)
     gym_engine.log(inp, out)
     have = {s["date"] for s in inp["scheduled"]}
@@ -335,27 +342,31 @@ def run_social(fs, yn, now):
     print(f"[social] lock-check done; proposed {len(out['creates'])}; nudges {len(out['nudges'])}")
 
 def run_meal(fs, yn, now):
-    # Cheap local check FIRST: meal is only "live" (worth reacting to a skip
-    # tap) from when it becomes due until Groceries/Meal prep get completed —
-    # a handful of days out of the week. Outside that window there is nothing
-    # to skip, so don't spend a network round-trip on every ~10-min tick this
-    # domain runs on now — that's the exact redundant-fetch pattern this same
-    # session's tier rebalance was supposed to eliminate (it moved `spend`
-    # OUT of tick for precisely this reason).
+    # Always drain the ntfy "meal-skip" cursor every tick, even when not due —
+    # it's a single cheap poll, and freezing st["lastSkip"] while not due (an
+    # earlier version of this fix did exactly that) let a stray tap sit
+    # unconsumed for days, then replay against a LATER week the moment `due`
+    # flips true again, spuriously wiping that week's freshly-created tasks.
+    sp = os.path.join(history.ROOT, "logs", "meal_state.json")
+    st = {"lastSkip": 0}
+    try: st.update(json.load(open(sp, encoding="utf-8")))
+    except Exception: pass
+    skipped = any((m.get("message") or "").strip().lower() == "meal-skip"
+                  for m in ntfy.poll(since=st["lastSkip"]))
+    st["lastSkip"] = int(now.timestamp())
+    os.makedirs(os.path.dirname(sp), exist_ok=True); json.dump(st, open(sp, "w", encoding="utf-8"))
+
+    # Everything past this point is FlowSavvy work (the actually expensive,
+    # rate-limited part) — only worth doing while meal is genuinely due. A
+    # skip tap that arrives outside the due window is drained above (so it
+    # can't replay later) but intentionally not acted on: there's nothing to
+    # delete yet, and honoring it here would incorrectly reset the "handled
+    # this week" timer for a week that hasn't started.
     last = history.last("meal")
     due = not last or (now - datetime.datetime.fromisoformat(last)).days >= 6
     if not due:
         print("[meal] not due"); return
 
-    sp = os.path.join(history.ROOT, "logs", "meal_state.json")
-    st = {"lastSkip": 0}
-    try: st.update(json.load(open(sp, encoding="utf-8")))
-    except Exception: pass
-    # Handle a "Have leftovers — skip" button tap: clear this week's tasks.
-    skipped = any((m.get("message") or "").strip().lower() == "meal-skip"
-                  for m in ntfy.poll(since=st["lastSkip"]))
-    st["lastSkip"] = int(now.timestamp())
-    os.makedirs(os.path.dirname(sp), exist_ok=True); json.dump(st, open(sp, "w", encoding="utf-8"))
     if skipped:
         for t in fs.list_items(itemType="task", completed=False).get("items", []):
             if t.get("title") in ("Groceries", "Meal prep") and "LifeOps" in (t.get("notes") or ""):
@@ -496,10 +507,15 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now):
 
     modules_data = []
     for mod in modules:
-        num_match = re.search(r"\d+", mod.get("name", "") or "")
+        name = mod.get("name", "") or ""
+        # Prefer a number immediately after "Module"/"M" (however the course
+        # names them) over the first digit ANYWHERE in the string — a name
+        # like "Week 3: Module 12" would otherwise mis-extract 3, not 12,
+        # silently mis-numbering/deduping the wrong module.
+        num_match = re.search(r"(?:module|m)\s*#?\s*(\d+)", name, re.I) or re.search(r"\d+", name)
         if not num_match:
             continue   # unnumbered utility module ("Start Here", "Syllabus", ...) — nothing to sync
-        num = int(num_match.group())
+        num = int(num_match.group(1) if num_match.lastindex else num_match.group())
         unlock_str = mod.get("unlock_at") or mod.get("published_at") or ""
         unlock_date = canvas_engine._parse_date(unlock_str) or today
         if num in synced or unlock_date > today:

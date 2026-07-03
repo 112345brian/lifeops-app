@@ -33,6 +33,9 @@ def plan(inp):
         except (ValueError, TypeError):
             continue           # malformed record: skip it, don't abort the batch
         if not c.get("title"):
+            # Malformed forever, not transiently — mark processed so this
+            # exact record isn't refetched and re-skipped on every future run.
+            processed.append(cid); seen.add(cid)
             continue
         nextd = comp + n * DAY
         t = c.get("dueTime") or "20:00"

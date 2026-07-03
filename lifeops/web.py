@@ -10,7 +10,7 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from . import config, history
+from . import config, history, gather
 from .flowsavvy import FlowSavvy
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -46,7 +46,9 @@ async def _auth(request: Request, call_next):
 
 ROOT              = history.ROOT
 DOMAINS_FILE      = os.path.join(ROOT, "logs", "domains.json")
-GYM_BLOCKS_FILE   = os.path.join(ROOT, "logs", "gym_blocks.json")
+# Shared with gather.py's engine-feed reader — must be the SAME path so the
+# writer (this UI) and reader (gather.gym_input) can never silently diverge.
+GYM_BLOCKS_FILE   = gather.GYM_BLOCKS_FILE
 GYM_STATE_FILE    = os.path.join(ROOT, "logs", "gym_state.json")
 SCHED_BLOCKS_FILE = os.path.join(ROOT, "logs", "schedule_blocks.json")
 ENV               = os.path.join(ROOT, ".env")

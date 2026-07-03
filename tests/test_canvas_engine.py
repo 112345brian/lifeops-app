@@ -48,6 +48,18 @@ def test_spread_preserves_ordering_when_clamped_not_just_today():
     assert len(set(dates[:3])) == 3, "first 3 phases collapsed onto the same date"
     assert dates[-1] == due
 
+def test_spread_already_overdue_deadline_does_not_predate_today():
+    # regression: min(d, final_due) was applied AFTER max(d, floor), so when
+    # final_due itself is already in the past (late sync -- lifeops was down,
+    # or the assignment unlocked already overdue), every phase collapsed onto
+    # that past date instead of today -- recreating the exact "born overdue"
+    # bug the clamping exists to prevent.
+    due = TODAY - datetime.timedelta(days=5)   # already overdue
+    dates = ce._spread(due, [14, 9, 5, 0], TODAY)
+    for d in dates[:-1]:
+        assert d == TODAY, f"phase dated {d}, expected clamped to today ({TODAY})"
+    assert dates[-1] == due, "final due date itself should stay truthful, not hidden"
+
 
 # ── split_assignment ────────────────────────────────────────────────────────────
 

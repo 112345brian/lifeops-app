@@ -49,6 +49,15 @@ def _spread(final_due, gaps_before, today=None):
     they legitimately collapse onto that final date — there's no more
     calendar left to spread across.
     """
+    if today is not None and final_due < today:
+        # The real deadline has already passed (late sync — lifeops was down,
+        # or the assignment was already overdue when unlocked). min(d, final_due)
+        # below would otherwise override every max(d, floor) clamp and collapse
+        # every phase onto that past date, recreating the exact "born overdue"
+        # bug this clamping exists to prevent. There's no calendar left to
+        # spread across at all — put every phase on today; final_due itself
+        # stays truthful (it's genuinely overdue, no point hiding that).
+        return [today] * len(gaps_before) + [final_due]
     dates = []
     floor = today
     for d in [final_due - datetime.timedelta(days=g) for g in gaps_before]:

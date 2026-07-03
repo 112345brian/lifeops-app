@@ -1,8 +1,13 @@
 """Turn live FlowSavvy data + history into the structured inputs engines expect.
 All personal identifiers come from config (.env) — none hardcoded here.
 """
-import datetime
+import datetime, json, os
 from . import history, config, adherence
+
+# Canonical path — web.py imports this instead of re-deriving it, so the
+# writer (web UI "block this day") and reader (this module's engine feed)
+# can never silently diverge onto two different files.
+GYM_BLOCKS_FILE = os.path.join(history.ROOT, "logs", "gym_blocks.json")
 
 def _d(iso):  return (iso or "")[:10]
 def _hm(iso): return (iso or "")[11:16]
@@ -39,15 +44,15 @@ def _sleep_ok(now):
 
 def _gym_blocked_dates():
     """Dates manually marked 'no gym' via the web UI."""
-    import json, os
-    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                        "logs", "gym_blocks.json")
     try:
-        return set(json.load(open(path, encoding="utf-8")))
+        return set(json.load(open(GYM_BLOCKS_FILE, encoding="utf-8")))
     except Exception:
         return set()
 
-def gym_input(fs, now, sick_until=None):
+def gym_input(fs, now, sick_until=None, gym_open=None):
+    """gym_open: pre-fetched "Gym"-titled open tasks, if the caller already has
+    them (run_gym does, for its own cleanup pass) — avoids re-issuing the same
+    FlowSavvy query a second time on every ~10-min tick. Fetches fresh if None."""
     today = now.date()
     # ROLLING 7-day windows, not the calendar week. The target is "≈N sessions in
     # any trailing 7 days" — so count workouts done in the last 7 days and blocks
@@ -60,8 +65,9 @@ def gym_input(fs, now, sick_until=None):
     trail_end = today.isoformat()
     gym_blocked = _gym_blocked_dates()
 
-    gym_open = [t for t in fs.list_items(itemType="task", query="Gym", completed=False).get("items", [])
-                if (t.get("title") or "").startswith("Gym")]
+    if gym_open is None:
+        gym_open = [t for t in fs.list_items(itemType="task", query="Gym", completed=False).get("items", [])
+                    if (t.get("title") or "").startswith("Gym")]
 
     scheduled, sched_dates = [], set()
     for t in gym_open:
@@ -75,13 +81,16 @@ def gym_input(fs, now, sick_until=None):
     # workouts actually done in the trailing 7 days, minus any flagged "don't count"
     # (gym-nocount). A day that's both done and still on the calendar counts once, so
     # subtract scheduled dates here to avoid double-counting the today overlap.
-    done_dates = (history.days_with("gym", trail_start, trail_end)
-                  - history.days_with("gym_skip", trail_start, trail_end))
+    # history.days_with() re-parses the whole history.jsonl per call, so query
+    # it once for "gym" and derive both completed_count and completed_dates
+    # from that single result instead of scanning the file twice.
+    gym_dates = history.days_with("gym", trail_start, trail_end)
+    done_dates = gym_dates - history.days_with("gym_skip", trail_start, trail_end)
     completed_count = len(done_dates - sched_dates)
     # days he PHYSICALLY trained in the trailing week (skips included — his
     # muscles don't care about scorekeeping) so the engine's consecutive-day
     # cap sees them, same window as completed_count above.
-    completed_dates = sorted(history.days_with("gym", trail_start, trail_end))
+    completed_dates = sorted(gym_dates)
 
     # An event only BLOCKS the gym if it overlaps the 18:00-21:00 evening window;
     # any social event still marks the day as a "show" (for recovery + late-night).
