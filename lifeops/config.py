@@ -68,11 +68,10 @@ BLOCK_CAL  = os.environ.get("BLOCK_CAL",  "")          # calendar for UI-created
 # ?token=... (a cookie is set after that). Unset = open (localhost-only use).
 WEB_TOKEN  = os.environ.get("WEB_TOKEN", "")
 
-# Canvas LMS — CANVAS_TOKEN (API token) preferred; CANVAS_COOKIE (the browser
-# session cookie header, e.g. "canvas_session=...") works when the school
-# doesn't hand out tokens. Cookies expire under SSO — re-export periodically.
+# Canvas LMS — CANVAS_TOKEN (API token) preferred. If unset (JHU disables
+# self-service tokens), lifeops.canvas_browser drives an authenticated browser
+# session instead (see scripts/canvas_login.py for the one-time setup).
 CANVAS_TOKEN     = os.environ.get("CANVAS_TOKEN", "")
-CANVAS_COOKIE    = os.environ.get("CANVAS_COOKIE", "")
 CANVAS_BASE_URL  = os.environ.get("CANVAS_BASE_URL", "https://jhu.instructure.com")
 CANVAS_COURSE_ID = os.environ.get("CANVAS_COURSE_ID", "124987")
 SH_COURSE        = os.environ.get("SH_COURSE", "428026")  # FlowSavvy scheduling hours for coursework

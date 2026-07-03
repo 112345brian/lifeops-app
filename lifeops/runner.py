@@ -384,17 +384,46 @@ def run_digest(fs, yn, now):
 def run_canvas(fs, yn, now):
     """Sync newly-unlocked Canvas modules → FlowSavvy tasks.
 
-    Runs once per day. Skips silently if CANVAS_TOKEN is not configured.
+    Runs once per day. Two credential paths, tried in order:
+      1. CANVAS_TOKEN (real API token) — used directly if set.
+      2. lifeops.canvas_browser (authenticated Playwright session) — used
+         when no token exists (JHU disables self-service tokens). Requires
+         a one-time interactive login: `python scripts/canvas_login.py`.
+         If that session has since expired, alerts instead of failing quiet.
     State: logs/canvas_state.json — tracks which modules have been synced
     and which task titles already exist (prevents duplicates across runs).
     """
-    if not (config.CANVAS_TOKEN or config.CANVAS_COOKIE):
-        print("[canvas] skip (no CANVAS_TOKEN / CANVAS_COOKIE)"); return
-
-    from .canvas import Canvas, strip_html
+    from .canvas import strip_html
     from .engines import canvas_engine
     from . import llm
 
+    if config.CANVAS_TOKEN:
+        from .canvas import Canvas
+        _canvas_sync(Canvas(), strip_html, canvas_engine, llm, fs, now)
+        return
+
+    from . import canvas_browser
+    if not canvas_browser.profile_exists():
+        print("[canvas] skip (no CANVAS_TOKEN and no browser profile — "
+              "run `python scripts/canvas_login.py` once)")
+        return
+    try:
+        with canvas_browser.BrowserCanvas() as cv:
+            if not cv.logged_in():
+                _alert_once("canvas:session:" + now.date().isoformat(),
+                            "Canvas session expired — run `python scripts/canvas_login.py` "
+                            "to sign back in.", "high")
+                print("[canvas] skip (browser session expired)")
+                return
+            _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now)
+    except Exception as e:
+        print(f"[canvas] browser session error: {e}")
+
+
+def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now):
+    """Shared sync body — `cv` is either canvas.Canvas or
+    canvas_browser.BrowserCanvas; both expose the same modules/assignments/
+    page/announcements interface, so this logic doesn't care which."""
     sp = os.path.join(history.ROOT, "logs", "canvas_state.json")
     st = {"synced_modules": [], "task_titles": []}
     try:
@@ -428,8 +457,6 @@ def run_canvas(fs, yn, now):
         seen_titles.update(completed_cache)
     except Exception:
         pass
-
-    cv = Canvas()
 
     try:
         modules = cv.modules()
