@@ -89,11 +89,23 @@ def plan(inp):
             out["wind_down"].append({"date": (D(date) - DAY).isoformat(),
                                      "start": "21:00", "end": "23:00"})
 
-    # viable = chosen days + remaining candidates that still pass the consecutive
-    # cap (a day the cap always rejects is NOT viable — counting it under-warns)
-    viable_left = len(chosen) + sum(
-        1 for date, _ in cand
-        if date not in busy and run_length(date, busy | {date}) <= r["max_consecutive"])
+    # viable = chosen days + a greedy simulation of how many of the REMAINING
+    # candidates could actually be booked together under the consecutive-day
+    # cap. Checking each remaining candidate only against the frozen `busy`
+    # set (as before) misses that two candidates can be mutually adjacent to
+    # EACH OTHER — e.g. three back-to-back open days with max_consecutive=1
+    # can fit at most 2 of them, not all 3, even though each one individually
+    # looks fine against `busy` alone. Simulating the same greedy pick order
+    # cand is already sorted in makes this consistent with how `chosen` itself
+    # was built.
+    sim_busy = set(busy)
+    viable_left = len(chosen)
+    for date, _ in cand:
+        if date in sim_busy:
+            continue
+        if run_length(date, sim_busy | {date}) <= r["max_consecutive"]:
+            sim_busy.add(date)
+            viable_left += 1
     if floor_needed > viable_left:
         out["alert"] = {"level": "high",
                         "text": f"Heads up: set to miss {floor}x this week — only {viable_left} viable day(s) left."}

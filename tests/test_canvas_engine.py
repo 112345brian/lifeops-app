@@ -35,6 +35,19 @@ def test_spread_clamps_intermediates_to_today():
     assert dates[0] == TODAY            # clamped, not overdue-at-birth
     assert dates[-1] == due             # final due untouched
 
+def test_spread_preserves_ordering_when_clamped_not_just_today():
+    # regression: clamping every gap INDEPENDENTLY to `today` collapsed a
+    # 4-phase chain onto the same date, leaving chained-dependency tasks
+    # ("phase 2 blockedBy phase 1") all due the same day they could start --
+    # sequentially impossible. Ordering must survive: each clamped date is at
+    # least one day after the previous one, never past the real due date.
+    due = TODAY + datetime.timedelta(days=2)
+    dates = ce._spread(due, [14, 9, 5, 0], TODAY)
+    for a, b in zip(dates, dates[1:]):
+        assert a <= b, f"{dates} not monotonically non-decreasing"
+    assert len(set(dates[:3])) == 3, "first 3 phases collapsed onto the same date"
+    assert dates[-1] == due
+
 
 # ── split_assignment ────────────────────────────────────────────────────────────
 

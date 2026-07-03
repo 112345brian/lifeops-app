@@ -38,11 +38,25 @@ def _spread(final_due, gaps_before, today=None):
     """Intermediate due dates given days-before-final gaps, plus the final due.
     gaps_before = [days_before_for_phase_1, ..., days_before_for_second_to_last]
     final_due is a datetime.date. Intermediates are clamped to `today` so a
-    close deadline never emits phases that are already overdue at creation.
+    close deadline never emits phases that are already overdue at creation —
+    but clamping each date to `today` INDEPENDENTLY would collapse several
+    dependency-chained phases onto the identical due date (impossible to
+    actually sequence: each phase is blockedBy the previous one, so "due
+    today, due today, due today" for three chained tasks leaves zero time
+    between them). Instead each phase is clamped to be at least one day after
+    the previous (already-clamped) phase, so relative ordering survives a
+    late sync; only once phases run out of room before the real deadline do
+    they legitimately collapse onto that final date — there's no more
+    calendar left to spread across.
     """
-    dates = [final_due - datetime.timedelta(days=g) for g in gaps_before]
-    if today:
-        dates = [max(d, today) for d in dates]
+    dates = []
+    floor = today
+    for d in [final_due - datetime.timedelta(days=g) for g in gaps_before]:
+        if floor is not None:
+            d = max(d, floor)
+            d = min(d, final_due)   # never push a phase past the real deadline
+            floor = d + DAY
+        dates.append(d)
     return dates + [final_due]
 
 

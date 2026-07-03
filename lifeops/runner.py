@@ -327,6 +327,18 @@ def run_social(fs, yn, now):
     print(f"[social] lock-check done; proposed {len(out['creates'])}; nudges {len(out['nudges'])}")
 
 def run_meal(fs, yn, now):
+    # Cheap local check FIRST: meal is only "live" (worth reacting to a skip
+    # tap) from when it becomes due until Groceries/Meal prep get completed —
+    # a handful of days out of the week. Outside that window there is nothing
+    # to skip, so don't spend a network round-trip on every ~10-min tick this
+    # domain runs on now — that's the exact redundant-fetch pattern this same
+    # session's tier rebalance was supposed to eliminate (it moved `spend`
+    # OUT of tick for precisely this reason).
+    last = history.last("meal")
+    due = not last or (now - datetime.datetime.fromisoformat(last)).days >= 6
+    if not due:
+        print("[meal] not due"); return
+
     sp = os.path.join(history.ROOT, "logs", "meal_state.json")
     st = {"lastSkip": 0}
     try: st.update(json.load(open(sp, encoding="utf-8")))
@@ -345,9 +357,6 @@ def run_meal(fs, yn, now):
         _touch()
         print("[meal] skipped (leftovers) — cleared this week"); return
 
-    last = history.last("meal")
-    if last and (now - datetime.datetime.fromisoformat(last)).days < 6:
-        print("[meal] not due"); return
     if fs.list_items(itemType="task", query="Meal prep", completed=False).get("items", []):
         print("[meal] already planned"); return
     d0 = now.date().isoformat()
@@ -445,16 +454,19 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now):
                        if dt >= cutoff}
     seen_titles.update(completed_cache)
 
-    # pull live FlowSavvy titles — both incomplete and recently completed
+    # pull live FlowSavvy titles — both incomplete and recently completed.
+    # No `query` filter: LIST_COURSE is a dedicated Canvas-sourced list, so
+    # scoping by listId alone is sufficient — a substring filter like "M0"
+    # would silently stop matching once modules reach M10+.
     try:
         existing = fs.list_items(itemType="task", listId=config.LIST_COURSE,
-                                 completed=False, query="M0").get("items", [])
+                                 completed=False).get("items", [])
         seen_titles.update(t.get("title", "") for t in existing)
     except Exception:
         pass
     try:
         done = fs.list_items(itemType="task", listId=config.LIST_COURSE,
-                             completed=True, query="M0").get("items", [])
+                             completed=True).get("items", [])
         for t in done:
             title = t.get("title", "")
             if title and title not in completed_cache:
@@ -466,11 +478,20 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now):
     try:
         modules = cv.modules()
     except Exception as e:
+        # Same severity as the browser-session-expired path (both credential
+        # paths must alert identically on auth failure — a revoked/stale
+        # CANVAS_TOKEN should not degrade to print-only, which is silently
+        # discarded under pythonw).
+        _alert_once("canvas:token:" + now.date().isoformat(),
+                    f"Canvas sync failed (token may be revoked/expired): {e}", "high")
         print(f"[canvas] failed to fetch modules: {e}"); return
 
     modules_data = []
     for mod in modules:
-        num = int(re.search(r"\d+", mod.get("name", "0") or "0").group() or 0)
+        num_match = re.search(r"\d+", mod.get("name", "") or "")
+        if not num_match:
+            continue   # unnumbered utility module ("Start Here", "Syllabus", ...) — nothing to sync
+        num = int(num_match.group())
         unlock_str = mod.get("unlock_at") or mod.get("published_at") or ""
         unlock_date = canvas_engine._parse_date(unlock_str) or today
         if num in synced or unlock_date > today:
@@ -613,6 +634,11 @@ DOMAINS = {"gym": run_gym, "ynab": run_ynab, "chore": run_chore, "catchup": run_
 # only writes on change, so it's safe to run every ~10 min. DAILY holds the
 # heavier / LLM-touching work and runs once a morning.
 TIERS = {
+    # signal: the interactive path — a phone tap ("catchup") should re-pack the
+    # day in ~2 min, not wait for the 10-min tick. register_task.ps1 fires this
+    # every 2 minutes; it must stay a real key here or that scheduled task
+    # silently becomes a no-op (ingest-only, catchup never dispatches).
+    "signal": ["catchup"],
     # tick is signal-driven + cheap (every ~10 min). Scheduling/planning is NOT
     # here — it doesn't need 10-min churn and would keep reshuffling your calendar.
     # meal lives here so a "Have leftovers — skip" tap is honored within minutes,
