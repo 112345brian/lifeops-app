@@ -23,7 +23,7 @@ function Test-PortOpen($portNum) {
 # 1. Bootstrap: register the service if the scheduled task doesn't exist yet.
 $task = Get-ScheduledTask -TaskName "LifeOps-web" -ErrorAction SilentlyContinue
 if (-not $task) {
-    Write-Host "LifeOps-web task not found — bootstrapping..."
+    Write-Host "LifeOps-web task not found -- bootstrapping..."
     python -c "import fastapi, uvicorn" 2>$null
     if ($LASTEXITCODE -ne 0) {
         Write-Host "Installing dependencies..."
@@ -68,7 +68,7 @@ public class WinFinder {
         GetWindowText(hWnd, sb, 256);
         string title = sb.ToString();
         if (title.StartsWith("LifeOps") &&
-            (title.Contains("Chrome") || title.Contains("Edge") || title.Contains("Firefox") || title.Contains("Mozilla"))) {
+            (title.Contains("Chrome") || title.Contains("Edge") || title.Contains("Firefox") || title.Contains("Mozilla") || title.Contains("Zen"))) {
             Found = hWnd;
             return false;
         }
@@ -84,7 +84,7 @@ public class WinFinder {
 
 $existing = [WinFinder]::FindLifeOpsTab()
 if ($existing -ne [IntPtr]::Zero) {
-    Write-Host "LifeOps tab already open — bringing it to front."
+    Write-Host "LifeOps tab already open -- bringing it to front."
     [WinFinder]::ShowWindow($existing, 9) | Out-Null   # SW_RESTORE, in case minimized
     [WinFinder]::SetForegroundWindow($existing) | Out-Null
 } else {
