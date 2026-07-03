@@ -15,6 +15,8 @@ def D(s):
     return datetime.date.fromisoformat(s)
 
 def slot_for(day, r):
+    if day.get("gym_blocked"):
+        return None
     es, ee = r.get("evening_start", "19:00"), r.get("evening_end", "20:00")
     allow_m = r.get("allow_morning", True)   # adherence: suppress mornings he never does
     def morning():
@@ -58,17 +60,21 @@ def plan(inp):
     needed = max(0, target - have)
     floor_needed = max(0, floor - have)
     sched_dates = {g["date"] for g in scheduled}
+    # days he ACTUALLY trained recently — the consecutive cap must count these,
+    # not just scheduled blocks, or we book a real 3rd straight day after the
+    # fact (completed sessions aren't in `scheduled` anymore).
+    done_dates = set(inp.get("completed_dates", []))
 
     cand = []
     for day in inp.get("days", []):
-        if day["date"] in sched_dates:
+        if day["date"] in sched_dates or day["date"] in done_dates:
             continue
         s = slot_for(day, r)
         if s:
             cand.append((day["date"], s))
     cand.sort(key=lambda c: c[0])
 
-    chosen, busy = [], set(sched_dates)
+    chosen, busy = [], set(sched_dates) | done_dates
     for date, slot in cand:
         if len(chosen) >= needed:
             break
@@ -83,7 +89,23 @@ def plan(inp):
             out["wind_down"].append({"date": (D(date) - DAY).isoformat(),
                                      "start": "21:00", "end": "23:00"})
 
-    viable_left = len(cand)
+    # viable = chosen days + a greedy simulation of how many of the REMAINING
+    # candidates could actually be booked together under the consecutive-day
+    # cap. Checking each remaining candidate only against the frozen `busy`
+    # set (as before) misses that two candidates can be mutually adjacent to
+    # EACH OTHER — e.g. three back-to-back open days with max_consecutive=1
+    # can fit at most 2 of them, not all 3, even though each one individually
+    # looks fine against `busy` alone. Simulating the same greedy pick order
+    # cand is already sorted in makes this consistent with how `chosen` itself
+    # was built.
+    sim_busy = set(busy)
+    viable_left = len(chosen)
+    for date, _ in cand:
+        if date in sim_busy:
+            continue
+        if run_length(date, sim_busy | {date}) <= r["max_consecutive"]:
+            sim_busy.add(date)
+            viable_left += 1
     if floor_needed > viable_left:
         out["alert"] = {"level": "high",
                         "text": f"Heads up: set to miss {floor}x this week — only {viable_left} viable day(s) left."}

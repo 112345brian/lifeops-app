@@ -62,6 +62,24 @@ PARTNER_TASK = os.environ.get("PARTNER_TASK", f"{PARTNER_NAME} time")   # FlowSa
 PARTNER_SIGNAL = os.environ.get("PARTNER_SIGNAL", f"saw {PARTNER_NAME.lower()}")  # ntfy body
 FRIENDS_TASK = os.environ.get("FRIENDS_TASK", "Friends")
 SOCIAL_CAL = os.environ.get("SOCIAL_CAL", "")          # partner's FlowSavvy calendar id
+BLOCK_CAL  = os.environ.get("BLOCK_CAL",  "")          # calendar for UI-created busy blocks
+
+# Web panel shared secret. If set, every request must present it once as
+# ?token=... (a cookie is set after that). Unset = open (localhost-only use).
+WEB_TOKEN  = os.environ.get("WEB_TOKEN", "")
+# Public URL of the panel (your Tailscale HTTPS hostname, e.g.
+# https://mypc.tailxxxx.ts.net) — used to deep-link ntfy notifications
+# straight into the relevant panel section. Blank = notifications just
+# don't include a tap-through link.
+PANEL_URL  = os.environ.get("PANEL_URL", "")
+
+# Canvas LMS — CANVAS_TOKEN (API token) preferred. If unset (JHU disables
+# self-service tokens), lifeops.canvas_browser drives an authenticated browser
+# session instead (see scripts/canvas_login.py for the one-time setup).
+CANVAS_TOKEN     = os.environ.get("CANVAS_TOKEN", "")
+CANVAS_BASE_URL  = os.environ.get("CANVAS_BASE_URL", "https://jhu.instructure.com")
+CANVAS_COURSE_ID = os.environ.get("CANVAS_COURSE_ID", "124987")
+SH_COURSE        = os.environ.get("SH_COURSE", "428026")  # FlowSavvy scheduling hours for coursework
 PROPOSE_AHEAD_DAYS = int(os.environ.get("PROPOSE_AHEAD_DAYS", "21"))  # propose hangouts ~3 weeks out
 PLAN_LEAD_DAYS = int(os.environ.get("PLAN_LEAD_DAYS", "14"))          # "Plan it" task ~2 weeks before
 HEARTBEAT_URL = os.environ.get("HEARTBEAT_URL", "")   # healthchecks.io ping (dead-man's switch)

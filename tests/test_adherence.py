@@ -1,4 +1,5 @@
 import datetime
+import pytest
 from unittest.mock import patch
 from lifeops import adherence
 
@@ -86,4 +87,31 @@ def test_streak_dedupes_same_day():
         assert adherence.streak("gym") == 2
 
 
-import pytest
+def test_streak_stale_reports_zero_with_now():
+    # last gym 5 days ago — a "current streak" of 3 is a lie; with now it's 0
+    events = [
+        {"action": "gym", "ts": "2026-07-01T19:00:00", "source": "test"},
+        {"action": "gym", "ts": "2026-06-30T19:00:00", "source": "test"},
+        {"action": "gym", "ts": "2026-06-29T19:00:00", "source": "test"},
+    ]
+    with patch("lifeops.adherence.history") as h:
+        h.events.return_value = events
+        assert adherence.streak("gym") == 3            # legacy behavior preserved
+        assert adherence.streak("gym", now=NOW) == 0   # honest with now
+
+def test_streak_yesterday_still_counts_with_now():
+    events = [{"action": "gym", "ts": "2026-07-05T19:00:00", "source": "test"}]
+    with patch("lifeops.adherence.history") as h:
+        h.events.return_value = events
+        assert adherence.streak("gym", now=NOW) == 1
+
+def test_hour_handles_offsets_space_and_garbage():
+    assert adherence._hour("2026-07-06T09:30:00+00:00") == 9
+    assert adherence._hour("2026-07-06 19:30:00") == 19
+    assert adherence._hour("2026-07-06T07:00:00Z") == 7
+    assert adherence._hour("garbage") == 12       # neutral fallback, no crash
+    assert adherence._hour(None) == 12
+
+def test_slot_with_offset_timestamp():
+    assert adherence._slot("2026-07-06T08:00:00-07:00") == "morning"
+    assert adherence._slot("2026-07-06T19:00:00-07:00") == "evening"

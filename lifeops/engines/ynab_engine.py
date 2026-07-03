@@ -25,11 +25,19 @@ def plan(categories, history, unapproved, month, cover_order=(), no_assign=()):
         if amt > 0 or t.get("transfer_account_id"):
             continue                                  # income / transfer / refund — leave it
         cid = t.get("category_id")
+        if cid and cid in no_assign_ids:
+            # Pre-categorized straight into a pure fund (import rule / fat-finger).
+            # A card swipe is never "Savings" — hold it for review, never auto-approve.
+            holds.append({"id": t["id"], "why": "assigned to protected fund"})
+            continue
         if not cid:
             counts = pmap.get((t.get("payee_name") or "").lower())
             if counts:
                 best, n = counts.most_common(1)[0]
-                ok = (n >= 3 and n / sum(counts.values()) >= 0.7) or sum(counts.values()) <= 2
+                total = sum(counts.values())
+                # confident: 3+ sightings at >=70%, or a UNANIMOUS small sample of 2+.
+                # (a single historical txn is not a rule — that goes to the LLM)
+                ok = (n >= 3 and n / total >= 0.7) or (n == total and n >= 2)
                 if ok and best not in no_assign_ids:   # never auto-assign a pure fund
                     cid = best
             if not cid:

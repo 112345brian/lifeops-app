@@ -37,6 +37,16 @@ def _sleep_ok(now):
         return False
     return True
 
+def _gym_blocked_dates():
+    """Dates manually marked 'no gym' via the web UI."""
+    import json, os
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "logs", "gym_blocks.json")
+    try:
+        return set(json.load(open(path, encoding="utf-8")))
+    except Exception:
+        return set()
+
 def gym_input(fs, now, sick_until=None):
     today = now.date()
     # ROLLING 7-day windows, not the calendar week. The target is "≈N sessions in
@@ -48,6 +58,7 @@ def gym_input(fs, now, sick_until=None):
     hset = {d.isoformat() for d in horizon}
     trail_start = (today - datetime.timedelta(days=6)).isoformat()
     trail_end = today.isoformat()
+    gym_blocked = _gym_blocked_dates()
 
     gym_open = [t for t in fs.list_items(itemType="task", query="Gym", completed=False).get("items", [])
                 if (t.get("title") or "").startswith("Gym")]
@@ -67,6 +78,10 @@ def gym_input(fs, now, sick_until=None):
     done_dates = (history.days_with("gym", trail_start, trail_end)
                   - history.days_with("gym_skip", trail_start, trail_end))
     completed_count = len(done_dates - sched_dates)
+    # days he PHYSICALLY trained in the trailing week (skips included — his
+    # muscles don't care about scorekeeping) so the engine's consecutive-day
+    # cap sees them, same window as completed_count above.
+    completed_dates = sorted(history.days_with("gym", trail_start, trail_end))
 
     # An event only BLOCKS the gym if it overlaps the 18:00-21:00 evening window;
     # any social event still marks the day as a "show" (for recovery + late-night).
@@ -115,7 +130,8 @@ def gym_input(fs, now, sick_until=None):
                      "day_after_show": prev in shows,
                      "prior_night_blocked": prev in blocked,
                      "deadline_heavy": _heavy(ds),
-                     "sleep_ok": sleep_ok if near else True})
+                     "sleep_ok": sleep_ok if near else True,
+                     "gym_blocked": ds in gym_blocked})
 
     # adherence: stop scheduling slots he doesn't honor; use his real evening time
     adh = adherence.gym(now)
@@ -126,6 +142,7 @@ def gym_input(fs, now, sick_until=None):
              "evening_end": f"{int(es[:2]) + 1:02d}:00"}
     return {"today": today.isoformat(), "now": now.isoformat(timespec="seconds"),
             "sick_until": sick_until, "completed_count": completed_count,
+            "completed_dates": completed_dates,
             "scheduled": scheduled, "days": days, "rules": rules}
 
 def homework_input(fs, now):

@@ -3,3 +3,4 @@ logs/
 *.state.json
 **/__pycache__/
 *.pyc
+data/browser_profiles/

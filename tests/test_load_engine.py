@@ -51,3 +51,14 @@ def test_both_alerts_can_fire():
     bulk = [_assignment(f"HW {i}", due_in_h=100, remaining_min=360) for i in range(5)]
     out = load_engine.plan([heavy] + bulk)
     assert len(out["alerts"]) >= 2
+
+def test_malformed_assignment_does_not_crash():
+    out = load_engine.plan([{}, {"title": None, "due_in_h": None,
+                                 "remaining_min": None, "due_in_days": None}])
+    assert out["alerts"] == []
+
+def test_partial_fields_still_evaluated():
+    # a valid heavy+soon one among garbage still alerts
+    good = _assignment("Real HW", due_in_h=24, remaining_min=180)
+    out = load_engine.plan([{}, good])
+    assert len(out["alerts"]) == 1

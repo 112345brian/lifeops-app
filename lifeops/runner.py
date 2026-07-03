@@ -6,7 +6,7 @@ The LLM (lifeops.llm) is touched only for the judgment slivers.
 Run:  python -m lifeops.runner          # all wired domains
       python -m lifeops.runner gym      # one domain
 """
-import sys, os, json, datetime
+import sys, os, re, io, json, datetime, contextlib
 from . import config, ntfy, gather, lock, history, adherence
 from .flowsavvy import FlowSavvy
 from .ynab import YNAB
@@ -51,6 +51,9 @@ def _classify(title):
                  ("studio", "studio")]:
         if k in t:
             return v
+    # coursework: canvas-created tasks look like "M07: ... [AS.470.703.81.SU26]"
+    if re.match(r"^m\d{2}\b", t) or "[as." in t:
+        return "course"
     return None
 
 def ingest(fs, now):
@@ -94,9 +97,12 @@ def ingest(fs, now):
     os.makedirs(os.path.dirname(sp), exist_ok=True)
     json.dump(st, open(sp, "w", encoding="utf-8"))
 
-def _alert_once(key, text, priority="default", tags=None, actions=None):
+def _alert_once(key, text, priority="default", tags=None, actions=None, click_anchor=""):
     """Send an alert at most once per calendar day per key. The tick runs every
-    10 min — without this, advisory alerts would spam."""
+    10 min — without this, advisory alerts would spam. click_anchor: panel
+    section to deep-link into when the notification is tapped (e.g. "gym") —
+    "" links to the panel root, which is still useful (opens the app).
+    Omitted entirely if PANEL_URL isn't configured."""
     sp = os.path.join(history.ROOT, "logs", "alert_state.json")
     st = {}
     try:
@@ -106,7 +112,8 @@ def _alert_once(key, text, priority="default", tags=None, actions=None):
     today = datetime.date.today().isoformat()
     if st.get(key) == today:
         return
-    ntfy.alert(text, priority=priority, tags=tags, actions=actions)
+    ntfy.alert(text, priority=priority, tags=tags, actions=actions,
+              click=ntfy.panel_url(click_anchor))
     st[key] = today
     os.makedirs(os.path.dirname(sp), exist_ok=True)
     json.dump(st, open(sp, "w", encoding="utf-8"))
@@ -134,7 +141,12 @@ def run_gym(fs, yn, now):
                                meta={"slot": slot})
             try: fs.delete_item(t["id"]); _touch()
             except Exception: pass
-    inp = gather.gym_input(fs, now)
+    gym_state_path = os.path.join(history.ROOT, "logs", "gym_state.json")
+    try:
+        sick_until = json.load(open(gym_state_path, encoding="utf-8")).get("sick_until")
+    except Exception:
+        sick_until = None
+    inp = gather.gym_input(fs, now, sick_until=sick_until)
     out = gym_engine.plan(inp)
     gym_engine.log(inp, out)
     have = {s["date"] for s in inp["scheduled"]}
@@ -165,7 +177,7 @@ def run_gym(fs, yn, now):
     lvl = out["alert"]["level"]
     if lvl != "none":
         _alert_once("gym:" + lvl, out["alert"]["text"], _PRIO[lvl],
-                    ["rotating_light"] if lvl == "urgent" else None)
+                    ["rotating_light"] if lvl == "urgent" else None, click_anchor="gym")
     print(f"[gym] {out['summary']}")
 
 def run_ynab(fs, yn, now):
@@ -205,7 +217,7 @@ def run_ynab(fs, yn, now):
            f"{len(out['novel'])} novel, {len(out['holds'])} held, covered {len(out['cover'])} cat(s)")
     print("[ynab] " + msg)
     if appr or out["holds"]:
-        ntfy.alert(msg)
+        ntfy.alert(msg, click=ntfy.panel_url())
 
 def run_chore(fs, yn, now):
     sp = os.path.join(history.ROOT, "logs", "chore_state.json")
@@ -247,7 +259,8 @@ def run_catchup(fs, yn, now):
                 for m in ntfy.poll(since=st["lastHandled"]))
     if fired:
         fs.recalculate(reschedule_past=True)
-        ntfy.alert("Catch-up: re-packed your whole schedule around what's left.")
+        ntfy.alert("Catch-up: re-packed your whole schedule around what's left.",
+                  click=ntfy.panel_url())
         print("[catchup] re-packed")
     else:
         print("[catchup] no trigger")
@@ -322,6 +335,18 @@ def run_social(fs, yn, now):
     print(f"[social] lock-check done; proposed {len(out['creates'])}; nudges {len(out['nudges'])}")
 
 def run_meal(fs, yn, now):
+    # Cheap local check FIRST: meal is only "live" (worth reacting to a skip
+    # tap) from when it becomes due until Groceries/Meal prep get completed —
+    # a handful of days out of the week. Outside that window there is nothing
+    # to skip, so don't spend a network round-trip on every ~10-min tick this
+    # domain runs on now — that's the exact redundant-fetch pattern this same
+    # session's tier rebalance was supposed to eliminate (it moved `spend`
+    # OUT of tick for precisely this reason).
+    last = history.last("meal")
+    due = not last or (now - datetime.datetime.fromisoformat(last)).days >= 6
+    if not due:
+        print("[meal] not due"); return
+
     sp = os.path.join(history.ROOT, "logs", "meal_state.json")
     st = {"lastSkip": 0}
     try: st.update(json.load(open(sp, encoding="utf-8")))
@@ -340,9 +365,6 @@ def run_meal(fs, yn, now):
         _touch()
         print("[meal] skipped (leftovers) — cleared this week"); return
 
-    last = history.last("meal")
-    if last and (now - datetime.datetime.fromisoformat(last)).days < 6:
-        print("[meal] not due"); return
     if fs.list_items(itemType="task", query="Meal prep", completed=False).get("items", []):
         print("[meal] already planned"); return
     d0 = now.date().isoformat()
@@ -381,22 +403,292 @@ def run_digest(fs, yn, now):
     except Exception as e:
         print(f"[digest] error: {e}")
 
+def run_canvas(fs, yn, now):
+    """Sync newly-unlocked Canvas modules → FlowSavvy tasks.
+
+    Runs once per day. Two credential paths, tried in order:
+      1. CANVAS_TOKEN (real API token) — used directly if set.
+      2. lifeops.canvas_browser (authenticated Playwright session) — used
+         when no token exists (JHU disables self-service tokens). Requires
+         a one-time interactive login: `python scripts/canvas_login.py`.
+         If that session has since expired, alerts instead of failing quiet.
+    State: logs/canvas_state.json — tracks which modules have been synced
+    and which task titles already exist (prevents duplicates across runs).
+    """
+    from .canvas import strip_html
+    from .engines import canvas_engine
+    from . import llm
+
+    if config.CANVAS_TOKEN:
+        from .canvas import Canvas
+        _canvas_sync(Canvas(), strip_html, canvas_engine, llm, fs, now)
+        return
+
+    from . import canvas_browser
+    if not canvas_browser.profile_exists():
+        print("[canvas] skip (no CANVAS_TOKEN and no browser profile — "
+              "run `python scripts/canvas_login.py` once)")
+        return
+    try:
+        with canvas_browser.BrowserCanvas() as cv:
+            if not cv.logged_in():
+                _alert_once("canvas:session:" + now.date().isoformat(),
+                            "Canvas session expired — run `python scripts/canvas_login.py` "
+                            "to sign back in.", "high")
+                print("[canvas] skip (browser session expired)")
+                return
+            _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now)
+    except Exception as e:
+        print(f"[canvas] browser session error: {e}")
+
+
+def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now):
+    """Shared sync body — `cv` is either canvas.Canvas or
+    canvas_browser.BrowserCanvas; both expose the same modules/assignments/
+    page/announcements interface, so this logic doesn't care which."""
+    sp = os.path.join(history.ROOT, "logs", "canvas_state.json")
+    st = {"synced_modules": [], "task_titles": []}
+    try:
+        st.update(json.load(open(sp, encoding="utf-8")))
+    except Exception:
+        pass
+    synced  = set(st["synced_modules"])
+    seen_titles = set(st["task_titles"])
+    today = now.date()
+
+    # 20-day rolling cache of completed task titles (avoids re-fetching history each run)
+    cutoff = (today - datetime.timedelta(days=20)).isoformat()
+    completed_cache = {title: dt for title, dt in st.get("completed_cache", {}).items()
+                       if dt >= cutoff}
+    seen_titles.update(completed_cache)
+
+    # pull live FlowSavvy titles — both incomplete and recently completed.
+    # No `query` filter: LIST_COURSE is a dedicated Canvas-sourced list, so
+    # scoping by listId alone is sufficient — a substring filter like "M0"
+    # would silently stop matching once modules reach M10+.
+    try:
+        existing = fs.list_items(itemType="task", listId=config.LIST_COURSE,
+                                 completed=False).get("items", [])
+        seen_titles.update(t.get("title", "") for t in existing)
+    except Exception:
+        pass
+    try:
+        done = fs.list_items(itemType="task", listId=config.LIST_COURSE,
+                             completed=True).get("items", [])
+        for t in done:
+            title = t.get("title", "")
+            if title and title not in completed_cache:
+                completed_cache[title] = (t.get("lastModified") or today.isoformat())[:10]
+        seen_titles.update(completed_cache)
+    except Exception:
+        pass
+
+    try:
+        modules = cv.modules()
+    except Exception as e:
+        # Same severity as the browser-session-expired path (both credential
+        # paths must alert identically on auth failure — a revoked/stale
+        # CANVAS_TOKEN should not degrade to print-only, which is silently
+        # discarded under pythonw).
+        _alert_once("canvas:token:" + now.date().isoformat(),
+                    f"Canvas sync failed (token may be revoked/expired): {e}", "high")
+        print(f"[canvas] failed to fetch modules: {e}"); return
+
+    modules_data = []
+    for mod in modules:
+        num_match = re.search(r"\d+", mod.get("name", "") or "")
+        if not num_match:
+            continue   # unnumbered utility module ("Start Here", "Syllabus", ...) — nothing to sync
+        num = int(num_match.group())
+        unlock_str = mod.get("unlock_at") or mod.get("published_at") or ""
+        unlock_date = canvas_engine._parse_date(unlock_str) or today
+        if num in synced or unlock_date > today:
+            continue
+
+        items = mod.get("items") or []
+        modules_data.append({
+            "module_num":  num,
+            "unlock_date": unlock_date,
+            "_mod_items":  items,
+            "_mod_id":     mod["id"],
+        })
+
+    if not modules_data:
+        print("[canvas] no new modules to sync"); return
+
+    # bulk fetch all assignments once
+    try:
+        all_assignments = {a["id"]: a for a in cv.assignments()}
+    except Exception as e:
+        print(f"[canvas] failed to fetch assignments: {e}"); return
+
+    # populate assignments + readings per module
+    for mod in modules_data:
+        items = mod.pop("_mod_items")
+        mod_id = mod.pop("_mod_id")
+
+        asgns = []
+        reading_page_slugs = []
+        for item in items:
+            if item.get("type") == "Assignment":
+                cid = item.get("content_id")
+                if cid and cid in all_assignments:
+                    asgns.append(all_assignments[cid])
+            elif item.get("type") == "Page":
+                t = (item.get("title") or "").lower()
+                if any(w in t for w in ("reading", "resource", "material")):
+                    slug = item.get("page_url") or item.get("url", "").split("/pages/")[-1]
+                    if slug:
+                        reading_page_slugs.append(slug)
+
+        # extract readings from pages via LLM
+        readings = []
+        for slug in reading_page_slugs:
+            try:
+                page = cv.page(slug)
+                text = strip_html(page.get("body") or "")
+                if text:
+                    readings.extend(llm.extract_readings(text, mod["module_num"]))
+            except Exception as e:
+                print(f"[canvas] page {slug}: {e}")
+
+        mod["assignments"] = asgns
+        mod["readings"]    = readings
+
+    # plan
+    result = canvas_engine.plan(modules_data, seen_titles, today)
+
+    # apply: create tasks in FlowSavvy
+    created_titles = {}   # title → id (for dependency wiring)
+    for spec in result["creates"]:
+        dep_title = spec.pop("_dep_title", None)
+        kwargs = {
+            "listId":            config.LIST_COURSE,
+            "schedulingHoursId": config.SH_COURSE,
+            "isAutoScheduled":   True,
+            **spec,
+        }
+        if dep_title and dep_title in created_titles:
+            # FlowSavvy's real dependency field (same one run_meal uses)
+            kwargs["blockedByIds"] = [created_titles[dep_title]]
+        try:
+            r = fs.create_task(**kwargs)
+            tid = (r or {}).get("id") or (r or {}).get("item", {}).get("id")
+            if tid:
+                created_titles[spec["title"]] = tid
+            # durable audit trail — creations must survive discarded stdout
+            history.append("course_task", source="canvas",
+                           meta={"id": tid, "title": spec["title"]})
+            _touch()
+        except Exception as e:
+            print(f"[canvas] create failed for {spec.get('title','?')}: {e}")
+
+    # check for due-date changes in already-synced assignments
+    try:
+        for a in all_assignments.values():
+            name = a.get("name", "")
+            new_due = a.get("due_at", "")
+            if not new_due:
+                continue
+            # search FlowSavvy for matching title fragments
+            for item in fs.list_items(itemType="task", listId=config.LIST_COURSE,
+                                      completed=False, query=name[:30]).get("items", []):
+                # only the unsplit / final task carries the Canvas due date;
+                # phase tasks ("… — Draft") have staggered dues — leave them be
+                title = item.get("title") or ""
+                bare = title.rstrip("]").split(" [")[0]     # strip "[AS.…]" course tag
+                if not (title.endswith(name) or bare.endswith(name)):
+                    continue
+                fs_due = (item.get("dueDateTime") or "")[:10]
+                canvas_due = new_due[:10]
+                if fs_due and canvas_due and fs_due != canvas_due:
+                    fs.update_task(item["id"], dueDateTime=f"{canvas_due}T23:59:00")
+                    _touch()
+                    print(f"[canvas] updated due date for {title}: {fs_due}→{canvas_due}")
+    except Exception as e:
+        print(f"[canvas] change-check error: {e}")
+
+    # check announcements
+    try:
+        import datetime as _dt
+        since = (_dt.date.today() - _dt.timedelta(days=7)).isoformat()
+        announcements = cv.announcements(since_date=since)
+        for ann in announcements[:3]:
+            title = ann.get("title", "")
+            posted = (ann.get("posted_at") or "")[:10]
+            print(f"[canvas] announcement ({posted}): {title}")
+    except Exception:
+        pass
+
+    # save state
+    for mod in modules_data:
+        synced.add(mod["module_num"])
+    seen_titles.update(created_titles.keys())
+    st["synced_modules"]  = sorted(synced)
+    st["task_titles"]     = sorted(seen_titles)
+    st["completed_cache"] = completed_cache
+    os.makedirs(os.path.dirname(sp), exist_ok=True)
+    json.dump(st, open(sp, "w", encoding="utf-8"))
+
+    n = len(created_titles)
+    print(f"[canvas] {n} task(s) created\n{result['report']}")
+
+
 DOMAINS = {"gym": run_gym, "ynab": run_ynab, "chore": run_chore, "catchup": run_catchup,
            "homework": run_homework, "spend": run_spend, "social": run_social,
-           "meal": run_meal, "digest": run_digest}
+           "meal": run_meal, "digest": run_digest, "canvas": run_canvas}
 
 # Tiers are keyed by latency need, not just cost. ingest() runs before every tier
 # (so phone signals + completions are recorded each cycle no matter which fires).
 TIERS = {
-    # signal: the interactive path — a phone tap ("catchup") should re-pack the day
-    # in ~2 min, not wait for the 10-min tick. Cheap: ntfy poll + ingest only.
+    # signal: the interactive path — a phone tap ("catchup") should re-pack the
+    # day in ~2 min, not wait for the 10-min tick. register_task.ps1 fires this
+    # every 2 minutes; it must stay a real key here or that scheduled task
+    # silently becomes a no-op (ingest-only, catchup never dispatches).
     "signal": ["catchup"],
-    # tick: all-day deterministic loop. gym lives here so a slot blocked mid-day gets
-    # re-planned the same day; the engine only writes on real change, so no churn.
-    "tick":   ["catchup", "spend", "gym"],
-    # daily: heavier / LLM-touching work, once each morning.
-    "daily":  ["ynab", "homework", "social", "chore", "meal", "digest"],
+    # tick (~10 min): gym lives here so a slot blocked mid-day gets re-planned
+    # the same day (engine only writes on real change, so frequent runs don't
+    # churn the calendar); meal lives here so a "Have leftovers — skip" tap is
+    # honored within minutes instead of at tomorrow's 7:10am (its weekly-create
+    # path checks due-ness locally first, so most ticks are a no-op read).
+    # spend and canvas are NOT here — spend only ever alerts once/day (10-min
+    # YNAB+FlowSavvy fetches were 143 wasted round-trips/day), and canvas syncs
+    # at most once/day by nature (new modules unlock at most daily).
+    "tick":  ["catchup", "meal", "gym"],
+    "daily": ["ynab", "homework", "social", "chore", "meal", "spend", "digest", "canvas"],
 }
+
+def _capture(fn, *args):
+    """Run fn with stdout captured so its one-line summaries survive pythonw
+    (where prints are silently discarded). Echoes to a real console if any."""
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            fn(*args)
+    finally:
+        txt = buf.getvalue()
+        if sys.__stdout__:
+            try:
+                sys.__stdout__.write(txt); sys.__stdout__.flush()
+            except Exception:
+                pass
+    return txt.strip()
+
+RUNS_LOG_MAX = 2_000_000   # ~2MB before trimming to the newest 2000 runs
+
+def _append_run_log(rec):
+    """Durable per-run audit trail: what each domain actually did every cycle."""
+    p = os.path.join(history.ROOT, "logs", "runs.jsonl")
+    try:
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec) + "\n")
+        if os.path.getsize(p) > RUNS_LOG_MAX:
+            lines = open(p, encoding="utf-8").read().splitlines()
+            with open(p, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines[-2000:]) + "\n")
+    except Exception:
+        pass
 
 def main():
     try:
@@ -427,10 +719,12 @@ def _run():
     except Exception:
         pass
 
-    try:
-        ingest(fs, now)               # always update the completion history first
+    details = {}
+    try:                              # always update the completion history first
+        details["ingest"] = _capture(ingest, fs, now)
     except Exception as e:
-        errors["ingest"] = str(e); print(f"[ingest] ERROR: {e}")
+        errors["ingest"] = str(e); details["ingest"] = f"ERROR: {e}"
+        print(f"[ingest] ERROR: {e}")
 
     names, explicit = [], set()
     for a in (sys.argv[1:] or ["tick"]):
@@ -448,9 +742,10 @@ def _run():
         if not fn:
             continue
         try:
-            fn(fs, yn, now)
+            details[name] = _capture(fn, fs, yn, now)
         except Exception as e:
-            errors[name] = str(e); print(f"[{name}] ERROR: {e}")
+            errors[name] = str(e); details[name] = f"ERROR: {e}"
+            print(f"[{name}] ERROR: {e}")
 
     if _DIRTY[0]:                      # ONE recalc per run, only if something changed
         try: fs.recalculate()
@@ -461,9 +756,11 @@ def _run():
                     "⚠️ LifeOps errors — " + "; ".join(f"{k}: {v[:40]}" for k, v in errors.items()),
                     "high")
     _heartbeat(not errors)
+    rec = {"ts": now.isoformat(timespec="seconds"), "args": sys.argv[1:],
+           "ran": names, "errors": errors, "details": details}
     os.makedirs(os.path.dirname(hp), exist_ok=True)
-    json.dump({"ts": now.isoformat(timespec="seconds"), "ran": names, "errors": errors},
-              open(hp, "w", encoding="utf-8"))
+    json.dump(rec, open(hp, "w", encoding="utf-8"))
+    _append_run_log(rec)
 
 if __name__ == "__main__":
     main()

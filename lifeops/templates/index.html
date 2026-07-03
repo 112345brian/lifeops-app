@@ -1,0 +1,633 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LifeOps</title>
+<link rel="manifest" href="/static/manifest.json">
+<link rel="icon" href="/static/icons/favicon-32.png" sizes="32x32">
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+<meta name="theme-color" content="#0f1117">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="LifeOps">
+<style>
+:root {
+  --bg: #0f1117;
+  --surface: #1a1d27;
+  --surface2: #23263a;
+  --border: #2e3148;
+  --text: #e2e4f0;
+  --muted: #6b7280;
+  --accent: #5b8cff;
+  --green: #4ade80;
+  --yellow: #fbbf24;
+  --red: #f87171;
+  --radius: 8px;
+  --font: system-ui, -apple-system, sans-serif;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.6;
+  padding: 0 1rem 4rem;
+  max-width: 920px;
+  margin: 0 auto;
+}
+
+/* ── header ── */
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 0 .75rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 1.5rem;
+  gap: 1rem;
+}
+.logo { font-size: 1.25rem; font-weight: 700; letter-spacing: -.5px; }
+.logo span { color: var(--accent); }
+#status-bar {
+  font-size: 12px;
+  color: var(--muted);
+  flex: 1;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── layout ── */
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+@media (max-width: 620px) { .grid-2 { grid-template-columns: 1fr; } }
+
+.section { margin-bottom: 1rem; }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem;
+}
+
+.card-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--muted);
+  margin-bottom: .75rem;
+}
+
+/* ── stat pills ── */
+.stats-row { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: 1rem; }
+.stat-pill {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: .3rem .8rem;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+}
+.stat-pill .num { font-weight: 700; color: var(--text); }
+.stat-pill .lbl { color: var(--muted); font-size: 12px; }
+
+/* ── domain rows ── */
+.domain-row {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .35rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.domain-row:last-child { border-bottom: none; }
+.domain-icon { width: 1.6rem; text-align: center; font-size: 15px; }
+.domain-name { flex: 1; font-weight: 500; }
+
+.badge {
+  display: inline-block;
+  padding: .15rem .55rem;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  border: none;
+  letter-spacing: .05em;
+  line-height: 1.6;
+}
+.badge-on  { background: #1a3a2a; color: var(--green);  border: 1px solid #2d5a3a; }
+.badge-off { background: #2a2d3a; color: var(--muted);  border: 1px solid var(--border); }
+
+/* ── buttons ── */
+.btn {
+  padding: .3rem .7rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  font-family: var(--font);
+  transition: background .12s;
+  white-space: nowrap;
+  line-height: 1.5;
+}
+.btn:hover { background: #2e3148; }
+.btn-ghost { background: transparent; border-color: transparent; color: var(--accent); padding-left: .3rem; padding-right: .3rem; }
+.btn-ghost:hover { background: #1a2040; }
+.btn-sm   { padding: .2rem .55rem; font-size: 12px; }
+.btn-xs   { padding: .1rem .4rem;  font-size: 11px; }
+.btn-danger       { color: var(--red); }
+.btn-danger:hover { background: #2a1a1a; }
+.btn-primary      { background: var(--accent); color: #fff; border-color: var(--accent); }
+.btn-primary:hover{ background: #4070ee; }
+
+/* ── forms ── */
+.f-inline { display: inline; }
+.f-row    { display: inline-flex; gap: .3rem; align-items: center; }
+
+input[type=text], input:not([type]) {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 5px;
+  padding: .25rem .5rem;
+  font-size: 13px;
+  font-family: var(--font);
+}
+input[type=text]:focus, input:not([type]):focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: transparent;
+}
+.w-sm  { width: 3.8rem; }
+.w-md  { width: 8rem; }
+.w-lg  { width: 220px; }
+.w-xl  { width: 300px; }
+
+.add-form {
+  display: flex;
+  gap: .5rem;
+  flex-wrap: wrap;
+  align-items: center;
+  padding-top: .75rem;
+  border-top: 1px solid var(--border);
+  margin-top: .75rem;
+}
+.add-form label { font-size: 12px; color: var(--muted); }
+
+/* ── table ── */
+table { width: 100%; border-collapse: collapse; }
+th {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--muted);
+  text-align: left;
+  padding: .4rem .5rem;
+  border-bottom: 1px solid var(--border);
+}
+td { padding: .4rem .5rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
+tr:last-child td { border-bottom: none; }
+
+/* ── config ── */
+.cfg-key {
+  font-size: 12px;
+  font-family: monospace;
+  color: var(--accent);
+  white-space: nowrap;
+  padding-right: 1rem;
+  width: 1px;
+}
+
+/* ── history ── */
+.hist-scroll { max-height: 420px; overflow-y: auto; }
+.hist-row {
+  display: flex;
+  align-items: baseline;
+  gap: .5rem;
+  padding: .3rem 0;
+  border-bottom: 1px solid #1e2030;
+  font-size: 13px;
+}
+.hist-row:last-child { border-bottom: none; }
+.hist-ts     { color: var(--muted); font-size: 11px; min-width: 78px; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.hist-dot    { font-size: 7px; flex-shrink: 0; }
+.hist-action { font-weight: 500; }
+.hist-meta   { color: var(--muted); font-size: 12px; }
+
+/* ── gym controls ── */
+.gym-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+@media (max-width: 620px) { .gym-grid { grid-template-columns: 1fr; } }
+
+.gym-control-group { display: flex; flex-direction: column; gap: .4rem; }
+.gym-label { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.gym-note  { font-size: 11px; color: var(--muted); line-height: 1.4; }
+.gym-note.warn { color: var(--yellow); }
+
+.gym-blocked-list { display: flex; flex-direction: column; gap: .3rem; margin-top: .2rem; }
+.gym-blocked-row  { display: flex; align-items: center; justify-content: space-between;
+                    background: var(--surface2); border: 1px solid var(--border);
+                    border-radius: 6px; padding: .3rem .6rem; font-size: 13px; }
+
+input[type=date] {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 5px;
+  padding: .25rem .5rem;
+  font-size: 13px;
+  font-family: var(--font);
+  color-scheme: dark;
+}
+input[type=date]:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent; }
+
+/* ── misc ── */
+.muted  { color: var(--muted); }
+.danger { color: var(--red); }
+.actions-row {
+  display: flex;
+  gap: .5rem;
+  flex-wrap: wrap;
+  padding-top: .75rem;
+  margin-top: .75rem;
+  border-top: 1px solid var(--border);
+}
+.divider { border-top: 1px solid var(--border); margin: .75rem 0; }
+.text-sm { font-size: 13px; line-height: 2; }
+</style>
+</head>
+<body>
+
+<!-- ── Header ── -->
+<header>
+  <div class="logo">Life<span>Ops</span></div>
+  <div id="status-bar">{{ status_dot }} {{ status_text }}</div>
+</header>
+
+{% if flash %}
+<div style="background:#3b2f13;border:1px solid #a16207;color:#fde68a;
+            border-radius:8px;padding:.6rem .9rem;margin:.6rem 0;font-size:14px;">
+  {{ flash }}
+</div>
+{% endif %}
+
+<div id="install-hint" style="display:none;background:var(--surface2);border:1px solid var(--border);
+            border-radius:8px;padding:.6rem .9rem;margin:.6rem 0;font-size:13px;
+            align-items:center;justify-content:space-between;gap:.75rem;">
+  <span id="install-hint-text"></span>
+  <button onclick="document.getElementById('install-hint').style.display='none'"
+          style="background:none;border:none;color:var(--muted);font-size:16px;cursor:pointer;padding:0 .25rem;">×</button>
+</div>
+
+<!-- ── Stat pills ── -->
+<div class="stats-row">
+  <div class="stat-pill">
+    <span>🏋️</span>
+    <span class="num">{{ gym_stats.this_week }}</span>
+    <span class="lbl">gym this week</span>
+  </div>
+  <div class="stat-pill">
+    <span>🌅</span>
+    <span class="num">{{ gym_stats.morning }}AM</span>
+    <span class="lbl">· {{ gym_stats.evening }}PM (4 weeks)</span>
+  </div>
+  <div class="stat-pill">
+    <span>📊</span>
+    <span class="num">{{ gym_stats.total_4w }}</span>
+    <span class="lbl">sessions (4w)</span>
+  </div>
+</div>
+
+<!-- ── Two-col grid: Domains + Reference ── -->
+<div class="grid-2 section">
+
+  <!-- Domains -->
+  <div class="card">
+    <div class="card-title">Domains</div>
+    {% for d in domains %}
+    <div class="domain-row">
+      <span class="domain-icon">{{ d.icon }}</span>
+      <span class="domain-name">{{ d.name }}</span>
+      <form method="post" action="/domain" class="f-inline">
+        <input type="hidden" name="name" value="{{ d.name }}">
+        <button name="on" value="{{ 0 if d.enabled else 1 }}"
+                class="badge {{ 'badge-on' if d.enabled else 'badge-off' }}">
+          {{ 'ON' if d.enabled else 'off' }}
+        </button>
+      </form>
+      <form method="post" action="/run" class="f-inline">
+        <input type="hidden" name="name" value="{{ d.name }}">
+        <button class="btn btn-ghost btn-sm">▶ run</button>
+      </form>
+    </div>
+    {% endfor %}
+    <div class="actions-row">
+      <form method="post" action="/recalc" class="f-inline">
+        <button class="btn btn-sm">↻ recalculate</button>
+      </form>
+      <form method="post" action="/gym-nocount" class="f-inline">
+        <button class="btn btn-sm">🏋️ don't count today</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Reference / last run -->
+  <div class="card">
+    <div class="card-title">Tiers</div>
+    <div class="text-sm muted">
+      <div>⚡ <b style="color:var(--text)">signal</b> — catchup · ~2 min</div>
+      <div>⏱️ <b style="color:var(--text)">tick</b> — gym, spend · ~10 min</div>
+      <div>🌅 <b style="color:var(--text)">daily</b> — all domains · 7:10am</div>
+    </div>
+
+    {% if last_run_domains %}
+    <div class="divider"></div>
+    <div class="card-title">Last run</div>
+    <div class="text-sm">{{ last_run_domains }}</div>
+    {% endif %}
+
+    {% if last_run_errors %}
+    <div class="divider"></div>
+    <div class="card-title danger">Errors</div>
+    <div class="text-sm danger">{{ last_run_errors }}</div>
+    {% endif %}
+  </div>
+
+</div>
+
+<!-- ── Scheduling Controls ── -->
+<div class="card section" id="scheduling">
+  <div class="card-title">Scheduling Controls</div>
+  <div class="gym-grid">
+
+    <!-- Recalculate -->
+    <div class="gym-control-group">
+      <div class="gym-label">Reschedule everything</div>
+      <form method="post" action="/recalc" class="f-inline">
+        <button class="btn btn-primary btn-sm">↻ recalculate now</button>
+      </form>
+      <div class="gym-note">Reruns FlowSavvy's auto-scheduler across all tasks.</div>
+    </div>
+
+    <!-- Block a day -->
+    <div class="gym-control-group">
+      <div class="gym-label">Block a day</div>
+      <form method="post" action="/schedule/block-day" class="f-row">
+        <input type="date" name="date" value="{{ tomorrow }}" min="{{ today }}">
+        <button class="btn btn-sm">block day</button>
+      </form>
+      {% if not block_cal_set %}
+      <div class="gym-note warn">Set BLOCK_CAL in config to also block FlowSavvy tasks. Gym is always blocked.</div>
+      {% endif %}
+      {% if sched_blocks %}
+      <div class="gym-blocked-list">
+        {% for b in sched_blocks %}
+        <div class="gym-blocked-row">
+          <span>🚫 {{ b.label }}</span>
+          <form method="post" action="/schedule/unblock-day" class="f-inline">
+            <input type="hidden" name="date" value="{{ b.date }}">
+            <button class="btn btn-xs btn-danger">unblock</button>
+          </form>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+
+  </div>
+</div>
+
+<!-- ── Gym Controls ── -->
+<div class="card section" id="gym">
+  <div class="card-title">Gym Controls</div>
+  <div class="gym-grid">
+
+    <!-- Re-plan -->
+    <div class="gym-control-group">
+      <div class="gym-label">Re-plan</div>
+      <form method="post" action="/run" class="f-inline">
+        <input type="hidden" name="name" value="gym">
+        <button class="btn btn-primary btn-sm">↻ re-plan gym now</button>
+      </form>
+    </div>
+
+    <!-- Sick until -->
+    <div class="gym-control-group">
+      <div class="gym-label">Sick / rest week</div>
+      <form method="post" action="/gym/sick-until" class="f-row">
+        <input type="date" name="date" value="{{ gym_sick_until }}" min="{{ today }}">
+        <button class="btn btn-sm">set</button>
+        {% if gym_sick_until %}
+        <button class="btn btn-sm btn-danger" name="date" value="">clear</button>
+        {% endif %}
+      </form>
+      {% if gym_sick_until %}
+      <div class="gym-note warn">Gym paused until {{ gym_sick_until }}</div>
+      {% endif %}
+    </div>
+
+    <!-- Block a date -->
+    <div class="gym-control-group">
+      <div class="gym-label">Skip a specific day</div>
+      <form method="post" action="/gym/block-date" class="f-row">
+        <input type="date" name="date" value="{{ tomorrow }}" min="{{ today }}">
+        <button class="btn btn-sm">block date</button>
+      </form>
+      {% if gym_blocks %}
+      <div class="gym-blocked-list">
+        {% for b in gym_blocks %}
+        <div class="gym-blocked-row">
+          <span>🚫 {{ b.label }}</span>
+          <form method="post" action="/gym/unblock-date" class="f-inline">
+            <input type="hidden" name="date" value="{{ b.date }}">
+            <button class="btn btn-xs btn-danger">unblock</button>
+          </form>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- No-count -->
+    <div class="gym-control-group">
+      <div class="gym-label">Today's session</div>
+      <form method="post" action="/gym-nocount" class="f-inline">
+        <button class="btn btn-sm">don't count today's gym</button>
+      </form>
+      <div class="gym-note">Use after a forced/partial session you don't want counted toward your weekly target.</div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── Recurring Tasks ── -->
+<div class="card section">
+  <div class="card-title">Recurring Tasks
+    <span class="muted" style="text-transform:none;font-weight:400;font-size:10px">
+      — complete N days after done
+    </span>
+  </div>
+  <table>
+    <thead>
+      <tr><th>task</th><th>cycle</th><th>dur</th><th>next due</th><th></th></tr>
+    </thead>
+    <tbody>
+    {% if cycle_tasks %}
+      {% for c in cycle_tasks %}
+      <tr>
+        <td>{{ c.title }}</td>
+        <td>
+          <form method="post" action="/cycle/edit" class="f-row">
+            <input type="hidden" name="id" value="{{ c.id }}">
+            <input name="days" value="{{ c.days }}" class="w-sm">d
+            <button class="btn btn-xs">save</button>
+          </form>
+        </td>
+        <td class="muted">{{ c.dur or '—' }}m</td>
+        <td class="muted">{{ c.due or '—' }}</td>
+        <td>
+          <form method="post" action="/cycle/del" class="f-inline"
+                onsubmit="return confirm('Delete \'{{ c.title }}\'?')">
+            <input type="hidden" name="id" value="{{ c.id }}">
+            <button class="btn btn-xs btn-danger">×</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    {% else %}
+      <tr><td colspan="5" class="muted">no recurring tasks yet</td></tr>
+    {% endif %}
+    </tbody>
+  </table>
+
+  <form method="post" action="/cycle/new" class="add-form">
+    <input name="title" placeholder="Task title" class="w-xl" required>
+    <label>every</label>
+    <input name="days" value="7" class="w-sm">d
+    <label>dur</label>
+    <input name="duration" value="30" class="w-sm">m
+    <label>list</label>
+    <input name="listId" value="{{ list_personal }}" class="w-md">
+    <button class="btn btn-primary btn-sm">+ add</button>
+  </form>
+</div>
+
+<!-- ── Config ── -->
+<div class="card section" id="config">
+  <div class="card-title">Config
+    <span class="muted" style="text-transform:none;font-weight:400;font-size:10px">
+      — restart app to apply
+    </span>
+  </div>
+  <table>
+    <tbody>
+    {% for item in config_items %}
+    <tr>
+      <td class="cfg-key">{{ item.key }}</td>
+      <td>
+        <form method="post" action="/config" class="f-row">
+          <input type="hidden" name="key" value="{{ item.key }}">
+          <input name="value" value="{{ item.value }}" class="w-xl">
+          <button class="btn btn-xs">save</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<!-- ── History ── -->
+<div class="card section">
+  <div class="card-title">History
+    <span class="muted" style="text-transform:none;font-weight:400;font-size:10px">
+      — last {{ history|length }} events
+    </span>
+  </div>
+  <div class="hist-scroll">
+    {% if history %}
+      {% for e in history %}
+      <div class="hist-row">
+        <span class="hist-ts">{{ e.display_ts }}</span>
+        <span class="hist-dot" style="color:{{ e.color }}">●</span>
+        <span class="hist-action">{{ e.action }}</span>
+        {% if e.source %}<span class="hist-meta">({{ e.source }})</span>{% endif %}
+        {% if e.meta_str %}<span class="hist-meta">· {{ e.meta_str }}</span>{% endif %}
+      </div>
+      {% endfor %}
+    {% else %}
+      <div class="muted">nothing logged yet</div>
+    {% endif %}
+  </div>
+</div>
+
+<script>
+async function refreshStatus() {
+  try {
+    const r = await fetch('/api/status');
+    const d = await r.json();
+    const lr = d.last_run;
+    if (!lr) return;
+    const mins = lr.age_mins;
+    let dot = '⚫', text = lr.ts || '?';
+    if (mins !== null && mins !== undefined) {
+      if (mins < 20)       { dot = '🟢'; text = mins + 'm ago'; }
+      else if (mins < 120) { dot = '🟡'; text = mins + 'm ago'; }
+      else                 { dot = '🔴'; text = Math.floor(mins / 60) + 'h ago'; }
+      const errs = Object.keys(lr.errors || {});
+      if (errs.length) text += ' · errors: ' + errs.join(', ');
+      if ((lr.ran || []).length) text += ' · ran: ' + lr.ran.join(', ');
+    }
+    document.getElementById('status-bar').textContent = dot + ' ' + text;
+  } catch(e) {}
+}
+setInterval(refreshStatus, 60000);
+
+// --- PWA install ---
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
+
+(function () {
+  const isStandalone = window.matchMedia('(display-mode: standalone)').matches
+                      || window.navigator.standalone === true;
+  if (isStandalone) return;   // already installed, nothing to hint at
+
+  const hint = document.getElementById('install-hint');
+  const text = document.getElementById('install-hint-text');
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+
+  if (isIOS) {
+    // iOS has no install prompt API -- Safari only offers Share -> Add to
+    // Home Screen, so this is the only way to surface the option at all.
+    text.textContent = '📲 Add LifeOps to your Home Screen: tap Share, then "Add to Home Screen".';
+    hint.style.display = 'flex';
+  } else {
+    // Android/Chrome: capture the native prompt and offer a one-tap install
+    // instead of waiting for the browser's own (easy to miss) mini-infobar.
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      text.innerHTML = '📲 Install LifeOps as an app — <a href="#" id="install-btn" style="color:var(--accent);">tap here</a>.';
+      hint.style.display = 'flex';
+      document.getElementById('install-btn').onclick = async (ev) => {
+        ev.preventDefault();
+        e.prompt();
+        await e.userChoice;
+        hint.style.display = 'none';
+      };
+    });
+  }
+})();
+</script>
+
+</body>
+</html>
