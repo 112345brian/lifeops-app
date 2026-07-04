@@ -444,8 +444,9 @@ def run_canvas(fs, yn, now):
         with canvas_browser.BrowserCanvas() as cv:
             if not cv.logged_in():
                 _alert_once("canvas:session:" + now.date().isoformat(),
-                            "Canvas session expired — run `python scripts/canvas_login.py` "
-                            "to sign back in.", "high")
+                            "Canvas session expired — tap to re-login from the control panel, "
+                            "or run `python scripts/canvas_login.py`.", "high",
+                            click_anchor="accounts")
                 print("[canvas] skip (browser session expired)")
                 return
             _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now)

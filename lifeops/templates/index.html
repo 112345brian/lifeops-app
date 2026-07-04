@@ -364,6 +364,27 @@ input[type=date]:focus { outline: 2px solid var(--accent); outline-offset: 1px; 
 
 </div>
 
+<!-- ── Accounts ── -->
+<div class="card section" id="accounts">
+  <div class="card-title">Accounts</div>
+  <div class="domain-row">
+    <span class="domain-icon">🎓</span>
+    <span class="domain-name">Canvas</span>
+    {% if canvas_status.needs_relogin %}
+      <span class="badge badge-off" style="color:var(--yellow);cursor:default;">⚠ session expired</span>
+    {% elif canvas_status.profile_exists %}
+      <span class="badge badge-on" style="cursor:default;">connected</span>
+    {% else %}
+      <span class="badge badge-off" style="cursor:default;">not set up</span>
+    {% endif %}
+    <form method="post" action="/account/canvas/relogin" class="f-inline">
+      <button class="btn btn-sm">🔑 re-login</button>
+    </form>
+  </div>
+  <div class="gym-note">Opens a real Chrome window on this PC using the Canvas sign-in profile.
+    Log in with JHU SSO + Duo — the session saves automatically once it detects you're through.</div>
+</div>
+
 <!-- ── Scheduling Controls ── -->
 <div class="card section" id="scheduling">
   <div class="card-title">Scheduling Controls</div>

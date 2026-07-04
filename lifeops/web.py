@@ -51,6 +51,7 @@ DOMAINS_FILE      = os.path.join(ROOT, "logs", "domains.json")
 GYM_BLOCKS_FILE   = gather.GYM_BLOCKS_FILE
 GYM_STATE_FILE    = os.path.join(ROOT, "logs", "gym_state.json")
 SCHED_BLOCKS_FILE = os.path.join(ROOT, "logs", "schedule_blocks.json")
+ALERT_STATE_FILE  = os.path.join(ROOT, "logs", "alert_state.json")
 ENV               = os.path.join(ROOT, ".env")
 
 ALL_DOMAINS  = ["gym", "ynab", "chore", "catchup", "homework", "spend", "social", "meal", "canvas"]
@@ -189,6 +190,27 @@ def _save_sched_blocks(entries):
     os.makedirs(os.path.dirname(SCHED_BLOCKS_FILE), exist_ok=True)
     json.dump(pruned, open(SCHED_BLOCKS_FILE, "w", encoding="utf-8"))
 
+def _canvas_status():
+    """Cheap status for the Accounts card — reads the same dedup log runner.py
+    writes to (logs/alert_state.json) instead of launching a browser on every
+    page load. `needs_relogin` is only a same-day signal: it's set once the
+    daily sync alerts that the session expired, and cleared the next day
+    regardless of whether you actually re-logged in."""
+    from . import canvas_browser
+    today = datetime.date.today().isoformat()
+    try:
+        st = json.load(open(ALERT_STATE_FILE, encoding="utf-8"))
+    except Exception:
+        st = {}
+    return {
+        "profile_exists": canvas_browser.profile_exists(),
+        "needs_relogin":  st.get("canvas:session:" + today) == today,
+    }
+
+def _relogin_canvas():
+    subprocess.Popen([sys.executable, os.path.join(ROOT, "scripts", "canvas_relogin.py")],
+                     cwd=ROOT, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
 def _build_context(fs):
     lr  = _last_run()
     dom = _domains()
@@ -269,6 +291,7 @@ def _build_context(fs):
         "tomorrow":         (today + datetime.timedelta(days=1)).isoformat(),
         "sched_blocks":     sched_block_display,
         "block_cal_set":    bool(config.BLOCK_CAL),
+        "canvas_status":    _canvas_status(),
     }
 
 
@@ -458,6 +481,15 @@ def gym_sick_until(date: str = Form("")):
 def recalc():
     FlowSavvy().recalculate()
     return RedirectResponse("/", 303)
+
+@app.post("/account/canvas/relogin")
+def account_canvas_relogin():
+    """Opens a real, visible Chrome window on this machine (the same
+    persistent profile the Canvas sync uses) for the user to sign back in —
+    triggered from the control panel after a 'Canvas session expired' ntfy
+    alert, since that alert can't itself open a browser on the PC."""
+    _relogin_canvas()
+    return RedirectResponse(f"/?msg={quote('Opening Chrome for Canvas — sign in, then it saves automatically.')}#accounts", 303)
 
 
 # ── main page ──────────────────────────────────────────────────────────────────
