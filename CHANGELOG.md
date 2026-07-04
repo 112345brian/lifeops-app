@@ -4,6 +4,27 @@ Notable changes, newest first. Personal project, versioned simply (see
 `VERSION` / `lifeops.__version__`) — dates and the reasoning behind each
 change matter more here than semver strictness.
 
+## [1.1.0] — 2026-07-04
+
+### Added
+- **Canvas re-login button in the control panel.** The "Canvas session
+  expired" ntfy alert previously just told you to run
+  `python scripts/canvas_login.py` from a terminal — no way to act on it
+  from your phone. Added an **Accounts** card to the control panel
+  (`#accounts`) with a live status badge (connected / session expired / not
+  set up) and a "🔑 re-login" button that launches a real, visible Chrome
+  window on the PC using Canvas's persistent sign-in profile.
+  - New `scripts/canvas_relogin.py`: same profile/flow as the manual
+    `canvas_login.py`, but polls for a successful login in the background
+    instead of blocking on `input()`, since it's spawned by the web server
+    with no attached console.
+  - New `POST /account/canvas/relogin` endpoint in `lifeops/web.py`.
+  - Status badge reads the existing alert-dedup log
+    (`logs/alert_state.json`) rather than launching a browser on every page
+    load, so rendering the panel stays cheap.
+  - The ntfy alert's Click link now deep-links straight to `#accounts`
+    instead of the panel root.
+
 ## [1.0.0] — 2026-07-03
 
 First consolidated release: everything below (control panel, all 9 domains,
