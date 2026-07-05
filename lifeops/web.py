@@ -526,7 +526,7 @@ def home(request: Request):
     fs  = FlowSavvy()
     ctx = _build_context(fs)
     ctx["flash"] = (request.query_params.get("msg") or "")[:200]
-    return TEMPLATES.TemplateResponse("index.html", {"request": request, **ctx})
+    return TEMPLATES.TemplateResponse(request, "index.html", ctx)
 
 
 def main():
