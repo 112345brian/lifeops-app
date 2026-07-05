@@ -27,6 +27,15 @@ change matter more here than semver strictness.
   (`TypeError: unhashable type: 'dict'`). Caught this live when restarting
   the panel to deploy the gym fixes above — updated the one call site in
   `lifeops/web.py`.
+- **The Config card's restart button silently did nothing.** `_restart_server`
+  spawned its detached PowerShell helper (the one that runs `schtasks /end`
+  then `/run`, needed because ending the task kills this process before it
+  can restart itself) with `DETACHED_PROCESS`. With no console at all,
+  `powershell.exe` exits immediately without running the script — so the
+  endpoint always returned a success redirect while never actually cycling
+  the task. Switched to `CREATE_NO_WINDOW` (a real, hidden console), which
+  the helper actually needs to execute; verified an end-to-end restart and a
+  back-to-back double-restart both now work.
 
 ## [1.1.0] — 2026-07-04
 

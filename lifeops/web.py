@@ -215,7 +215,12 @@ def _restart_server():
     """Restarts the LifeOps-web scheduled task from a detached helper process,
     since stopping the task kills this process before it could run the restart
     itself. Falls back to just exiting if it's not running as that service
-    (e.g. a manual `uvicorn` dev run) — nothing else will bring it back up."""
+    (e.g. a manual `uvicorn` dev run) — nothing else will bring it back up.
+
+    Uses CREATE_NO_WINDOW rather than DETACHED_PROCESS for the helper: with no
+    console at all (DETACHED_PROCESS), powershell.exe silently exits without
+    running the script — CREATE_NO_WINDOW gives it a real (hidden) console so
+    it actually executes."""
     check = subprocess.run(["schtasks", "/query", "/tn", "LifeOps-web"],
                            capture_output=True,
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -225,8 +230,7 @@ def _restart_server():
                   'Start-Sleep -Seconds 2; '
                   'schtasks /run /tn "LifeOps-web"')
         subprocess.Popen(["powershell", "-NoProfile", "-Command", script],
-                         creationflags=getattr(subprocess, "DETACHED_PROCESS", 0)
-                                     | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     else:
         os._exit(0)
 
