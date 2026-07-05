@@ -20,6 +20,13 @@ change matter more here than semver strictness.
   with no visible signal. Now collects delete errors and raises a
   `RuntimeError` after the tick's summary is printed, so failures surface
   instead of failing silently.
+- **Control panel 500'd on every page load.** A Starlette upgrade deprecated
+  the old `TemplateResponse(name, context)` call form in favor of
+  `TemplateResponse(request, name, context)`; the old form silently passed
+  the context dict as `name`, which jinja2's template cache can't hash
+  (`TypeError: unhashable type: 'dict'`). Caught this live when restarting
+  the panel to deploy the gym fixes above — updated the one call site in
+  `lifeops/web.py`.
 
 ## [1.1.0] — 2026-07-04
 
