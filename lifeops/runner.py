@@ -132,6 +132,7 @@ def run_gym(fs, yn, now):
     gym_open = [t for t in fs.list_items(itemType="task", query="Gym", completed=False).get("items", [])
                 if (t.get("title") or "").startswith("Gym")]
     deleted_ids = set()
+    delete_errors = []
     for t in gym_open:
         sd = t.get("startDateTime") or ""
         ed = t.get("endDateTime") or ""
@@ -139,13 +140,14 @@ def run_gym(fs, yn, now):
         past_day = bool(d) and d < today
         elapsed_today = d == today and bool(ed) and ed < now_iso and not did_today
         if past_day or elapsed_today:
-            if not history.days_with("gym", d, d):
+            if not history.days_with("gym", d, d) and not history.days_with("gym_missed", d, d):
                 slot = "morning" if (sd[11:13] or "12") < "11" else "evening"
                 history.append("gym_missed", ts=(sd[:19] or None), source="cleanup",
                                meta={"slot": slot})
             try:
                 fs.delete_item(t["id"]); _touch(); deleted_ids.add(t["id"])
-            except Exception: pass
+            except Exception as e:
+                delete_errors.append(f"{t['id']}: {e}")
     if deleted_ids:
         gym_open = [t for t in gym_open if t["id"] not in deleted_ids]
     gym_state_path = os.path.join(history.ROOT, "logs", "gym_state.json")
@@ -186,6 +188,8 @@ def run_gym(fs, yn, now):
         _alert_once("gym:" + lvl, out["alert"]["text"], _PRIO[lvl],
                     ["rotating_light"] if lvl == "urgent" else None, click_anchor="gym")
     print(f"[gym] {out['summary']}")
+    if delete_errors:
+        raise RuntimeError("gym cleanup: failed to delete stale item(s) — " + "; ".join(delete_errors))
 
 def run_ynab(fs, yn, now):
     import datetime as _dt

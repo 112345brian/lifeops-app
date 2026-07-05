@@ -4,6 +4,23 @@ Notable changes, newest first. Personal project, versioned simply (see
 `VERSION` / `lifeops.__version__`) — dates and the reasoning behind each
 change matter more here than semver strictness.
 
+## Unreleased
+
+### Fixed
+- **Gym cleanup could re-log the same missed session on every tick.**
+  `run_gym` recorded a `gym_missed` history entry whenever a stale/elapsed
+  Gym task was found, but only checked `history.days_with("gym", ...)` first
+  — if the FlowSavvy delete then failed (or hadn't run yet), the same day
+  got a fresh `gym_missed` entry on every subsequent tick. Now also checks
+  `history.days_with("gym_missed", ...)` before logging, so a day is
+  recorded as missed once.
+- **Failed Gym task deletions were silently swallowed.** `fs.delete_item`
+  errors during stale-task cleanup were caught and discarded (`except
+  Exception: pass`), so a persistently undeletable task would loop forever
+  with no visible signal. Now collects delete errors and raises a
+  `RuntimeError` after the tick's summary is printed, so failures surface
+  instead of failing silently.
+
 ## [1.1.0] — 2026-07-04
 
 ### Added
