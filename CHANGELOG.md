@@ -36,6 +36,21 @@ change matter more here than semver strictness.
   the task. Switched to `CREATE_NO_WINDOW` (a real, hidden console), which
   the helper actually needs to execute; verified an end-to-end restart and a
   back-to-back double-restart both now work.
+- **Canvas login/re-login always hit a Cloudflare block.** The interactive
+  login step navigated to Canvas's login redirect
+  (`jhu.instructure.com/login` → ... → `canvas.jhu.edu`) through Playwright,
+  and that redirect chain sits behind Cloudflare Bot Fight Mode, which
+  hard-blocks any CDP-attached navigation — confirmed vanilla Playwright,
+  patchright, and manual anti-detection launch args all still got "Sorry,
+  you have been blocked," while a genuinely bare `chrome.exe` process (no
+  CDP attached) sailed through. `scripts/canvas_login.py` and
+  `scripts/canvas_relogin.py` now open the login page via a new
+  `canvas_browser.launch_manual_login()` helper (a plain subprocess) instead
+  of a Playwright-driven page; Playwright is only used afterward, for
+  `logged_in()` verification and the daily sync's raw API requests — neither
+  of which triggers the block, since authenticated requests never redirect
+  off-domain and the daily sync hits Canvas's JSON API directly with no
+  rendered page for Cloudflare's browser checks to see.
 
 ## [1.1.0] — 2026-07-04
 

@@ -15,8 +15,24 @@ nothing is "kept alive" artificially. One-time setup: run scripts/canvas_login.p
 and log in by hand (JHU SSO + Duo can never be automated). When that session
 eventually expires, logged_in() detects it and the runner alerts you to redo
 the one-time login instead of silently failing.
+
+The unauthenticated login redirect (jhu.instructure.com/login -> ... ->
+canvas.jhu.edu) sits behind Cloudflare Bot Fight Mode, which hard-blocks any
+page navigation with Chrome DevTools Protocol attached — even a real Chrome
+binary, even with anti-detection patches (verified: vanilla Playwright,
+patchright, and manual navigator.webdriver/CDP-hiding args all still got
+"Sorry, you have been blocked"; a genuinely bare `chrome.exe` process with no
+CDP attached sails through). So the interactive login step
+(launch_manual_login, used by scripts/canvas_login.py and
+scripts/canvas_relogin.py) launches a plain subprocess instead of going
+through Playwright — only the post-login verification (logged_in(), and the
+daily sync's raw API requests) uses Playwright, and neither of those triggers
+the block: authenticated requests to jhu.instructure.com never redirect
+off-domain, and the daily sync hits Canvas's JSON API directly via
+`context.request` (no rendered page, no JS, nothing for Cloudflare's browser
+checks to see).
 """
-import os
+import os, subprocess
 from pathlib import Path
 from . import config
 
@@ -49,10 +65,30 @@ def profile_exists():
     """False until scripts/canvas_login.py has been run once."""
     return PROFILE_DIR.exists() and any(PROFILE_DIR.iterdir())
 
+def modules_url():
+    base = (config.CANVAS_BASE_URL or "https://jhu.instructure.com").rstrip("/")
+    return f"{base}/courses/{config.CANVAS_COURSE_ID}/modules"
+
+def launch_manual_login(url):
+    """Open the persistent Canvas profile in a bare, non-CDP Chrome process
+    for the human to log in through. See the module docstring: any
+    CDP-attached navigation through the login redirect gets hard-blocked by
+    Cloudflare, but a plain subprocess isn't. Caller must wait for the user
+    to close this window (releasing the profile's lock file) before opening
+    a Playwright session against the same profile — e.g. for logged_in()."""
+    os.makedirs(PROFILE_DIR, exist_ok=True)
+    _clear_stale_locks()
+    exe = _chrome_path()
+    if not exe:
+        raise RuntimeError("Chrome not found — Canvas login needs the real Chrome binary")
+    return subprocess.Popen([exe, f"--user-data-dir={PROFILE_DIR}", "--new-window", url])
+
 
 class BrowserCanvas:
-    """Context manager. `with BrowserCanvas() as cv: cv.modules()`.
-    headless=False is only for the interactive login script."""
+    """Context manager. `with BrowserCanvas() as cv: cv.modules()`. Always
+    headless now — the interactive login step uses launch_manual_login()
+    instead, so BrowserCanvas only ever does headless verification/API
+    calls."""
 
     def __init__(self, headless=True):
         self.headless = headless
