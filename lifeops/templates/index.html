@@ -549,6 +549,9 @@ input[type=date]:focus { outline: 2px solid var(--accent); outline-offset: 1px; 
       — restart app to apply
     </span>
   </div>
+  <form method="post" action="/system/restart" class="f-inline" style="margin-bottom:10px">
+    <button class="btn btn-sm btn-danger" onclick="return confirm('Restart the LifeOps server now?')">⟳ restart server</button>
+  </form>
   <table>
     <tbody>
     {% for item in config_items %}

@@ -211,6 +211,25 @@ def _relogin_canvas():
     subprocess.Popen([sys.executable, os.path.join(ROOT, "scripts", "canvas_relogin.py")],
                      cwd=ROOT, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
+def _restart_server():
+    """Restarts the LifeOps-web scheduled task from a detached helper process,
+    since stopping the task kills this process before it could run the restart
+    itself. Falls back to just exiting if it's not running as that service
+    (e.g. a manual `uvicorn` dev run) — nothing else will bring it back up."""
+    check = subprocess.run(["schtasks", "/query", "/tn", "LifeOps-web"],
+                           capture_output=True,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    if check.returncode == 0:
+        script = ('Start-Sleep -Milliseconds 800; '
+                  'schtasks /end /tn "LifeOps-web"; '
+                  'Start-Sleep -Seconds 2; '
+                  'schtasks /run /tn "LifeOps-web"')
+        subprocess.Popen(["powershell", "-NoProfile", "-Command", script],
+                         creationflags=getattr(subprocess, "DETACHED_PROCESS", 0)
+                                     | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+    else:
+        os._exit(0)
+
 def _build_context(fs):
     lr  = _last_run()
     dom = _domains()
@@ -490,6 +509,14 @@ def account_canvas_relogin():
     alert, since that alert can't itself open a browser on the PC."""
     _relogin_canvas()
     return RedirectResponse(f"/?msg={quote('Opening Chrome for Canvas — sign in, then it saves automatically.')}#accounts", 303)
+
+@app.post("/system/restart")
+def system_restart():
+    """Restarts the control panel itself. Triggered from the Config card
+    after editing a setting, since env-var changes only take effect on
+    process start."""
+    _restart_server()
+    return RedirectResponse(f"/?msg={quote('Restarting server — give it a few seconds, then refresh.')}#config", 303)
 
 
 # ── main page ──────────────────────────────────────────────────────────────────
