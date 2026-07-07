@@ -23,6 +23,18 @@ change matter more here than semver strictness.
     `gym_missed` entry before logging a fresh `gym`.
 
 ### Fixed
+- **Canvas sync could create a duplicate task for an assignment/reading that
+  already existed under a slightly different title.** `canvas_engine.plan()`
+  deduped against `existing_titles` with raw string equality, but FlowSavvy
+  decorates course-list task titles with a trailing `[COURSE.CODE]` suffix
+  (e.g. ` [AS.470.703.81.SU26]`) that the engine never generates — confirmed
+  in `logs/canvas_state.json`, where "M02: NYC Open Data Analysis" and
+  "M02: NYC Open Data Analysis [AS.470.703.81.SU26]" both exist as separate
+  completed tasks for the same assignment. Added `_normalize_title()` (strips
+  the bracket suffix, casefolds) plus a similarity-ratio fallback
+  (`difflib.SequenceMatcher`, threshold 0.93) for near-identical titles that
+  survive normalization. Skipped duplicates now show up in the sync report
+  instead of vanishing silently.
 - **Gym cleanup could re-log the same missed session on every tick.**
   `run_gym` recorded a `gym_missed` history entry whenever a stale/elapsed
   Gym task was found, but only checked `history.days_with("gym", ...)` first

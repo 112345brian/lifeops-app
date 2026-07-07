@@ -3,9 +3,38 @@
 Pure decision logic: no I/O, no API calls. Given structured module data
 (assignments + readings), returns FlowSavvy task specs ready to POST.
 """
-import re, datetime
+import re, datetime, difflib
 
 DAY = datetime.timedelta(days=1)
+
+# ── dedup: FlowSavvy decorates course-list task titles with a trailing
+# " [COURSE.CODE]" suffix that this engine never generates, so a raw
+# title-equality check misses that pair and creates a duplicate (confirmed
+# in logs/canvas_state.json: "M02: NYC Open Data Analysis" and
+# "M02: NYC Open Data Analysis [AS.470.703.81.SU26]" both exist as separate
+# completed tasks for the same assignment). Normalize away the suffix, and
+# fall back to a similarity ratio to catch near-identical titles that
+# survive normalization (minor rewording/typos across a re-sync). ──────────
+
+_SUFFIX_RE = re.compile(r"\s*\[[\w.]+\]\s*$")
+_SIMILARITY_THRESHOLD = 0.93
+
+
+def _normalize_title(title):
+    return _SUFFIX_RE.sub("", title or "").strip().casefold()
+
+
+def _find_duplicate(title, existing_norms):
+    """Return the matched existing (normalized) title if `title` is an
+    exact (post-normalization) or near-duplicate of one already present,
+    else None."""
+    norm = _normalize_title(title)
+    if norm in existing_norms:
+        return norm
+    for e in existing_norms:
+        if difflib.SequenceMatcher(None, norm, e).ratio() >= _SIMILARITY_THRESHOLD:
+            return e
+    return None
 
 # ── assignment classification ──────────────────────────────────────────────────
 
@@ -207,6 +236,8 @@ def plan(modules_data, existing_titles, today):
     """
     creates = []
     report_lines = []
+    skipped_dupes = []
+    existing_norms = {_normalize_title(t) for t in existing_titles}
 
     for mod in modules_data:
         num         = mod.get("module_num") or 0
@@ -231,10 +262,13 @@ def plan(modules_data, existing_titles, today):
         for r in readings:
             t = reading_task(num, r.get("author",""), r.get("title",""),
                              r.get("type","article"), unlock, readings_due, today)
-            if t["title"] not in existing_titles:
+            dup = _find_duplicate(t["title"], existing_norms)
+            if dup is None:
                 creates.append(t)
-                existing_titles.add(t["title"])
+                existing_norms.add(_normalize_title(t["title"]))
                 mod_lines.append(f"  + {t['title']} ({t['durationMinutes']}m)")
+            else:
+                skipped_dupes.append(t["title"])
 
         # assignments
         for a in assignments:
@@ -243,14 +277,21 @@ def plan(modules_data, existing_titles, today):
             due   = _parse_date(a.get("due_at"))
             specs = split_assignment(num, name, atype, due, unlock, readings_due, today)
             for spec in specs:
-                if spec["title"] not in existing_titles:
+                dup = _find_duplicate(spec["title"], existing_norms)
+                if dup is None:
                     creates.append(spec)
-                    existing_titles.add(spec["title"])
+                    existing_norms.add(_normalize_title(spec["title"]))
                     mod_lines.append(f"  + {spec['title']} ({spec['durationMinutes']}m)")
+                else:
+                    skipped_dupes.append(spec["title"])
 
         if mod_lines:
             report_lines.append(f"M{num:02d} (+{len(mod_lines)} tasks):")
             report_lines.extend(mod_lines)
+
+    if skipped_dupes:
+        report_lines.append(f"skipped {len(skipped_dupes)} duplicate(s):")
+        report_lines.extend(f"  ~ {t}" for t in skipped_dupes)
 
     return {
         "creates":      creates,

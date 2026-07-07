@@ -142,6 +142,36 @@ def test_plan_dedups_against_existing_titles():
     out = ce.plan([mod], existing, TODAY)
     assert out["creates"] == []
 
+
+def test_plan_dedups_against_course_code_suffix_variant():
+    # regression: FlowSavvy decorates course-list titles with a trailing
+    # " [AS.470.703.81.SU26]" the engine never emits — a raw equality check
+    # missed this and created a real duplicate (see canvas_state.json:
+    # "M02: NYC Open Data Analysis" vs "... [AS.470.703.81.SU26]").
+    mod = _module(readings=[{"author": "Perry, W.", "title": "RAND", "type": "article"}])
+    existing = {"M07: Read Perry, RAND [AS.470.703.81.SU26]"}
+    out = ce.plan([mod], existing, TODAY)
+    assert out["creates"] == []
+    assert "skipped 1 duplicate" in out["report"]
+
+
+def test_plan_dedups_near_identical_title_via_similarity():
+    mod = _module(readings=[{"author": "Perry, W.", "title": "RAND", "type": "article"}])
+    # trivial rewording of the same reading task, not byte-identical
+    existing = {"M07: Read Perry,  RAND"}
+    out = ce.plan([mod], existing, TODAY)
+    assert out["creates"] == []
+
+
+def test_plan_does_not_suppress_genuinely_different_titles():
+    mod = _module(readings=[
+        {"author": "Walker, K.", "title": "Analyzing U.S. Census Data", "type": "book"},
+        {"author": "Walker, K.", "title": "Tidycensus Documentation", "type": "documentation"},
+    ])
+    out = ce.plan([mod], set(), TODAY)
+    assert len(out["creates"]) == 2
+    assert "skipped" not in out["report"]
+
 def test_plan_assignment_with_missing_due_survives():
     mod = _module(assignments=[{"name": "Mystery Paper", "due_at": None},
                                {"name": "Real Reply", "due_at": "2026-07-05T23:59:59Z"}])
