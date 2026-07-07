@@ -35,6 +35,17 @@ change matter more here than semver strictness.
   (`difflib.SequenceMatcher`, threshold 0.93) for near-identical titles that
   survive normalization. Skipped duplicates now show up in the sync report
   instead of vanishing silently.
+- **A transient network blip to FlowSavvy failed the whole domain tick and
+  paged a false-alarm health alert.** `⚠️ LifeOps errors — gym:
+  HTTPSConnectionPool(...) SSLEOFError` — a one-off TLS handshake failure
+  that never reached the server, confirmed self-resolved by the very next
+  tick (`logs/runs.jsonl` shows exactly one occurrence). `FlowSavvy`'s HTTP
+  methods now retry up to twice (0.5s/1s backoff) on
+  `requests.exceptions.ConnectionError` specifically — i.e. only when the
+  request never reached the server. Does **not** retry on an actual HTTP
+  error response (4xx/5xx), since that means the server already saw the
+  request; blindly retrying a `POST`/`PUT` there risks creating a duplicate
+  task server-side, the same class of bug as the Canvas dedup fix above.
 - **Gym cleanup could re-log the same missed session on every tick.**
   `run_gym` recorded a `gym_missed` history entry whenever a stale/elapsed
   Gym task was found, but only checked `history.days_with("gym", ...)` first
