@@ -46,3 +46,17 @@ def days_with(action, start_date, end_date):
     """Distinct dates (YYYY-MM-DD) an action happened within [start,end] inclusive."""
     return {e["ts"][:10] for e in events(action)
             if start_date <= e["ts"][:10] <= end_date}
+
+def remove_day(action, date):
+    """Delete every entry for `action` on `date` (YYYY-MM-DD), regardless of
+    source. Used to undo a manual log/unlog toggle from the UI."""
+    try:
+        with open(HIST, encoding="utf-8") as f:
+            recs = [json.loads(line) for line in f if line.strip()]
+    except FileNotFoundError:
+        return
+    kept = [r for r in recs
+            if not (r.get("action") == action and r.get("ts", "")[:10] == date)]
+    with open(HIST, "w", encoding="utf-8") as f:
+        for r in kept:
+            f.write(json.dumps(r) + "\n")

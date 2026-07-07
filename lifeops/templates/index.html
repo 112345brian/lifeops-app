@@ -311,6 +311,33 @@ tr:last-child td { border-bottom: none; }
                     background: var(--md-surface-container-high);
                     border-radius: var(--shape-sm); padding: .4rem .7rem; font-size: 13px; }
 
+/* ── gym calendar ── */
+.cal-weekdays, .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: .35rem; }
+.cal-weekdays { margin-bottom: .4rem; }
+.cal-weekdays span { text-align: center; font-size: 11px; font-weight: 600; color: var(--md-on-surface-variant); }
+.cal-grid > form { display: contents; }
+.cal-day {
+  aspect-ratio: 1;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--shape-sm);
+  border: 1px solid var(--md-outline);
+  background: var(--md-surface);
+  color: var(--md-on-surface);
+  font-family: var(--font);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.cal-day:hover { background: rgba(255,255,255,.06); }
+.cal-day-went    { background: var(--green); border-color: var(--green); color: #0f1117; font-weight: 700; }
+.cal-day-went:hover    { filter: brightness(1.08); }
+.cal-day-skip    { background: var(--md-surface-container-high); color: var(--md-on-surface-variant); text-decoration: line-through; }
+.cal-day-blocked { background: var(--md-error-container); color: var(--md-on-error-container); border-color: var(--md-error); }
+.cal-day-today   { outline: 2px solid var(--md-primary); outline-offset: 1px; }
+
 input[type=date] {
   background: var(--md-surface);
   border: 1px solid var(--md-outline);
@@ -495,6 +522,25 @@ input[type=date]:focus { outline: 2px solid var(--md-primary); outline-offset: 1
     </div>
 
   </div>
+</div>
+
+<!-- ── Gym Calendar ── -->
+<div class="card section" id="gym-calendar">
+  <div class="card-title">Gym Calendar</div>
+  <div class="cal-weekdays">
+    <span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span>
+  </div>
+  <div class="cal-grid">
+    {% for d in gym_calendar %}
+    <form method="post" action="/gym/cycle-date" class="f-inline">
+      <input type="hidden" name="date" value="{{ d.date }}">
+      <button type="submit" class="cal-day cal-day-{{ d.state }} {{ 'cal-day-today' if d.today else '' }}"
+              title="{{ d.date }}">{{ d.day }}</button>
+    </form>
+    {% endfor %}
+  </div>
+  <div class="gym-note">Tap a past/today cell to cycle went ✅ → didn't go → blank.
+    Tap a today/future cell that's already blank to mark it don't-schedule 🚫 → blank.</div>
 </div>
 
 <!-- ── Gym Controls ── -->

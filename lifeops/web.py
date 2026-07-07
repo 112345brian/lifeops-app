@@ -141,6 +141,34 @@ def _gym_stats():
     return {"total_4w": len(real), "morning": morning,
             "evening": len(real) - morning, "this_week": this_week}
 
+def _gym_calendar():
+    """Mon-aligned 2-week grid: last week + this week (which runs a few days
+    into the future). Past/today cells cycle went -> didn't-go -> blank;
+    today/future cells cycle blank -> don't-schedule -> blank. Backed by the
+    same history actions and gym_blocks list the other gym controls use."""
+    today          = datetime.date.today()
+    monday_this_wk = today - datetime.timedelta(days=today.weekday())
+    start          = monday_this_wk - datetime.timedelta(weeks=1)
+    end            = monday_this_wk + datetime.timedelta(days=6)
+    went    = history.days_with("gym",      start.isoformat(), end.isoformat())
+    skipped = history.days_with("gym_skip", start.isoformat(), end.isoformat())
+    blocked = set(_gym_blocks())
+    days = []
+    for i in range((end - start).days + 1):
+        d  = start + datetime.timedelta(days=i)
+        ds = d.isoformat()
+        if ds in blocked:
+            state = "blocked"
+        elif ds in went:
+            state = "went"
+        elif ds in skipped:
+            state = "skip"
+        else:
+            state = "neutral"
+        days.append({"date": ds, "day": d.day, "state": state,
+                     "today": d == today, "future": d > today})
+    return days
+
 def _gym_blocks():
     """Future-only blocked dates, sorted."""
     today = datetime.date.today().isoformat()
@@ -308,6 +336,7 @@ def _build_context(fs):
         "list_personal":    config.LIST_PERSONAL,
         "last_run_domains": ", ".join(lr["ran"]) if lr and lr["ran"] else "",
         "last_run_errors":  str(lr["errors"]) if lr and lr["errors"] else "",
+        "gym_calendar":     _gym_calendar(),
         "gym_blocks":       gym_block_display,
         "gym_sick_until":   sick_until,
         "today":            today.isoformat(),
@@ -414,12 +443,11 @@ def gym_nocount():
     _run_domain("gym")     # re-plan immediately, consistent with the other gym controls
     return RedirectResponse("/", 303)
 
-@app.post("/schedule/block-day")
-def schedule_block_day(date: str = Form(...)):
-    try:
-        datetime.date.fromisoformat(date)
-    except ValueError:
-        return RedirectResponse(f"/?msg={quote('invalid date')}", 303)
+def _block_day(date):
+    """Blocks a day for EVERYTHING: a FlowSavvy busy event (if BLOCK_CAL is
+    configured) plus entries in both sched_blocks and gym_blocks. This is the
+    'all domains' block -- gym's own narrower /gym/block-date only touches
+    gym_blocks. Returns a warning string (possibly empty)."""
     event_id, warn = None, ""
     if config.BLOCK_CAL:
         try:
@@ -439,22 +467,21 @@ def schedule_block_day(date: str = Form(...)):
     if not any(e["date"] == date for e in entries):
         entries.append({"date": date, "event_id": event_id})
     _save_sched_blocks(entries)
-    # also block gym engine for the same day
     gym_dates = _gym_blocks()
     if date not in gym_dates:
         gym_dates.append(date)
     _save_gym_blocks(gym_dates)
-    _run_domain("gym")
-    return RedirectResponse(f"/?msg={quote(warn)}" if warn else "/", 303)
+    return warn
 
-@app.post("/schedule/unblock-day")
-def schedule_unblock_day(date: str = Form(...)):
+def _unblock_day(date):
+    """Inverse of _block_day: clears sched_blocks + gym_blocks and deletes any
+    tracked FlowSavvy busy event. Safe to call even if the day was only ever
+    gym-blocked (no sched_blocks entry, nothing to delete)."""
     entries = _sched_blocks()
     to_remove = [e for e in entries if e["date"] == date]
     entries = [e for e in entries if e["date"] != date]
     _save_sched_blocks(entries)
     warn = ""
-    # delete FlowSavvy event if we stored one
     if config.BLOCK_CAL:
         try:
             fs = FlowSavvy()
@@ -464,8 +491,22 @@ def schedule_unblock_day(date: str = Form(...)):
             fs.recalculate()
         except Exception as e:
             warn = f"⚠️ Couldn't delete the FlowSavvy busy event ({str(e)[:80]}) — remove it manually."
-    # also unblock gym engine
     _save_gym_blocks([d for d in _gym_blocks() if d != date])
+    return warn
+
+@app.post("/schedule/block-day")
+def schedule_block_day(date: str = Form(...)):
+    try:
+        datetime.date.fromisoformat(date)
+    except ValueError:
+        return RedirectResponse(f"/?msg={quote('invalid date')}", 303)
+    warn = _block_day(date)
+    _run_domain("gym")
+    return RedirectResponse(f"/?msg={quote(warn)}" if warn else "/", 303)
+
+@app.post("/schedule/unblock-day")
+def schedule_unblock_day(date: str = Form(...)):
+    warn = _unblock_day(date)
     _run_domain("gym")
     return RedirectResponse(f"/?msg={quote(warn)}" if warn else "/", 303)
 
@@ -488,6 +529,42 @@ def gym_unblock_date(date: str = Form(...)):
     _save_gym_blocks(dates)
     _run_domain("gym")
     return RedirectResponse("/", 303)
+
+@app.post("/gym/cycle-date")
+def gym_cycle_date(date: str = Form(...)):
+    """Advances one calendar cell through its state cycle on each click.
+    The default action is the general 'all domains' block (same as
+    /schedule/block-day) -- gym is just the one category with an extra,
+    domain-specific went/didn't-go layer on top for days already in the past:
+      past/today:    neutral -> went -> didn't go -> neutral
+      today/future:  neutral -> don't schedule (everything) -> neutral
+    """
+    try:
+        d = datetime.date.fromisoformat(date)
+    except ValueError:
+        return RedirectResponse(f"/?msg={quote('invalid date')}#gym-calendar", 303)
+
+    today = datetime.date.today()
+    warn  = ""
+    if date in _gym_blocks():
+        warn = _unblock_day(date)
+    elif d > today:
+        warn = _block_day(date)
+    elif any(e["ts"][:10] == date for e in history.events("gym")):
+        history.remove_day("gym", date)
+        history.append("gym_skip", ts=f"{date}T12:00:00", source="ui")
+    elif any(e["ts"][:10] == date for e in history.events("gym_skip")):
+        history.remove_day("gym_skip", date)
+    else:
+        # The calendar only shows gym/gym_skip, not the nightly cleanup's
+        # separate "gym_missed" marker (runner.py) -- so a day the cleanup
+        # already auto-logged missed still reads as neutral here. Clear it
+        # before logging "went", or adherence.gym()'s rate() would double-count
+        # this date as both done and missed.
+        history.remove_day("gym_missed", date)
+        history.append("gym", ts=f"{date}T12:00:00", source="ui")
+    _run_domain("gym")
+    return RedirectResponse(f"/?msg={quote(warn)}#gym-calendar" if warn else "/#gym-calendar", 303)
 
 @app.post("/gym/sick-until")
 def gym_sick_until(date: str = Form("")):

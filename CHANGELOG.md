@@ -6,6 +6,22 @@ change matter more here than semver strictness.
 
 ## Unreleased
 
+### Added
+- **Gym Calendar in the control panel.** A Mon-aligned 2-week grid
+  (`#gym-calendar`) backed by the same history actions and `gym_blocks` list
+  the other gym controls use. Tap a past/today cell to cycle went ✅ →
+  didn't go → blank; tap a today/future blank cell to mark it don't-schedule
+  🚫 → blank. New `POST /gym/cycle-date` endpoint and `history.remove_day()`
+  helper (deletes every entry for an action on a given date, regardless of
+  source — used to undo a manual log/unlog toggle from the UI).
+  - Fixed during review: the calendar only reads `gym`/`gym_skip` history,
+    not the nightly cleanup's separate `gym_missed` marker (`runner.py`), so
+    a day the cleanup already auto-logged as missed still read as blank.
+    Marking it "went" from the calendar would then leave both a `gym` and a
+    `gym_missed` entry for the same date, double-counting it in
+    `adherence.gym()`'s rate calculation. `/gym/cycle-date` now clears any
+    `gym_missed` entry before logging a fresh `gym`.
+
 ### Fixed
 - **Gym cleanup could re-log the same missed session on every tick.**
   `run_gym` recorded a `gym_missed` history entry whenever a stale/elapsed
