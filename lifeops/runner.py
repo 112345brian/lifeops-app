@@ -572,6 +572,8 @@ def run_briefing(fs, yn, now):
     # (reuse the homework watcher's own inputs so the two never disagree)
     hw = gather.homework_input(fs, now)
     risks = [t for t, _lvl in load_engine.plan(hw)["alerts"]]
+    # generalized "won't fit" crunch across ALL deadline tasks (not just coursework)
+    risks += [t for t, _lvl in load_engine.deadline_risk(gather.deadline_input(fs, now))["alerts"]]
     due_today = [a["title"] for a in hw if 0 <= a.get("due_in_h", 1e9) <= 24]
     load_7d_h = round(sum(a.get("remaining_min", 0) for a in hw
                           if a.get("due_in_days", 99) <= 7) / 60.0, 1)
@@ -606,6 +608,42 @@ def run_briefing(fs, yn, now):
     os.makedirs(os.path.dirname(bp), exist_ok=True)
     _save_json_atomic(bp, {"date": today.isoformat(), "text": text, "facts": facts})
     print("[briefing] sent")
+
+def run_deadlines(fs, yn, now):
+    """Generalized deadline-risk watchdog (Motion-style) over ALL deadline-bearing
+    tasks, not just coursework: alerts when the cumulative work due by a deadline
+    can't realistically fit before it. deadline_risk emits only the earliest
+    binding deadline, so this pushes at most one crunch alert per day."""
+    from .engines import load_engine
+    out = load_engine.deadline_risk(gather.deadline_input(fs, now))
+    for text, lvl in out["alerts"]:
+        _alert_once("deadline:" + now.date().isoformat(), text, lvl)
+    print(f"[deadlines] {len(out['alerts'])} at-risk")
+
+def run_cashflow(fs, yn, now):
+    """Panel-ONLY forward discretionary-balance projection (Monarch-style). No
+    notifications by design — persists a 4-week curve the panel renders, from the
+    current discretionary balance minus known upcoming paid social events."""
+    try:
+        sp = gather.spend_input(fs, yn, now)
+    except Exception as e:
+        print(f"[cashflow] gather error: {e}"); return
+    bal = round(sp.get("fun_money", 0))
+    events = sorted(sp.get("events", []), key=lambda e: e.get("days_until", 999))
+    running, weeks = bal, []
+    for w in range(4):
+        spent = sum(e.get("cost", 0) for e in events
+                    if w * 7 <= e.get("days_until", 999) < (w + 1) * 7)
+        running -= spent
+        weeks.append({"week": w + 1, "spent": spent, "balance": round(running)})
+    proj = {"date": now.date().isoformat(), "start_balance": bal, "weeks": weeks,
+            "dips_below_zero": any(wk["balance"] < 0 for wk in weeks),
+            "events": [{"label": e.get("label"), "days_until": e.get("days_until"),
+                        "cost": e.get("cost")} for e in events[:6]]}
+    bp = os.path.join(history.ROOT, "logs", "cashflow.json")
+    os.makedirs(os.path.dirname(bp), exist_ok=True)
+    _save_json_atomic(bp, proj)
+    print(f"[cashflow] 4wk projected; dips={proj['dips_below_zero']}")
 
 def run_canvas(fs, yn, now):
     """Sync newly-unlocked Canvas modules → FlowSavvy tasks.
@@ -936,7 +974,7 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now):
 DOMAINS = {"gym": run_gym, "ynab": run_ynab, "chore": run_chore, "catchup": run_catchup,
            "homework": run_homework, "spend": run_spend, "social": run_social,
            "meal": run_meal, "digest": run_digest, "canvas": run_canvas,
-           "briefing": run_briefing}
+           "briefing": run_briefing, "deadlines": run_deadlines, "cashflow": run_cashflow}
 
 # Tiers are keyed by latency need, not just cost. ingest() runs before every tier
 # (so phone signals + completions are recorded each cycle no matter which fires).
@@ -959,7 +997,8 @@ TIERS = {
     # of the day (the morning one) sends it and later runs are no-ops. It reads
     # homework/spend/gym state the other daily domains refresh, so it's ordered
     # last to brief on the freshest numbers.
-    "daily": ["ynab", "homework", "social", "chore", "meal", "spend", "digest", "canvas", "briefing"],
+    "daily": ["ynab", "homework", "social", "chore", "meal", "spend", "digest", "canvas",
+              "deadlines", "cashflow", "briefing"],
 }
 
 def _capture(fn, *args):

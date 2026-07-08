@@ -54,10 +54,11 @@ SCHED_BLOCKS_FILE = os.path.join(ROOT, "logs", "schedule_blocks.json")
 ALERT_STATE_FILE  = os.path.join(ROOT, "logs", "alert_state.json")
 ENV               = os.path.join(ROOT, ".env")
 
-ALL_DOMAINS  = ["gym", "ynab", "chore", "catchup", "homework", "spend", "social", "meal", "canvas", "briefing"]
+ALL_DOMAINS  = ["gym", "ynab", "chore", "catchup", "homework", "spend", "social", "meal", "canvas",
+                "briefing", "deadlines", "cashflow"]
 DOMAIN_ICON  = {"gym": "🏋️", "ynab": "💰", "chore": "🧹", "catchup": "⚡",
                 "homework": "📚", "spend": "💸", "social": "👫", "meal": "🍽️", "canvas": "🎓",
-                "briefing": "☀️"}
+                "briefing": "☀️", "deadlines": "⏰", "cashflow": "📈"}
 EDITABLE     = ["PARTNER_NAME", "PARTNER_SIGNAL", "PROPOSE_AHEAD_DAYS", "PLAN_LEAD_DAYS",
                 "DISCRETIONARY", "OUTING_COSTS", "YNAB_COVER_ORDER", "YNAB_NO_ASSIGN",
                 "EVENT_CALS", "SOCIAL_CAL", "BLOCK_CAL"]
@@ -259,6 +260,22 @@ def _today_briefing():
         return None
     return {"text": b.get("text", ""), "facts": b.get("facts") or {}}
 
+def _cashflow():
+    """Panel-only forward discretionary-balance projection (run_cashflow writes
+    logs/cashflow.json; no notifications by design). Adds a `bar_pct` per week
+    for a simple inline bar, scaled to the starting balance. Today's only."""
+    try:
+        c = json.load(open(os.path.join(ROOT, "logs", "cashflow.json"), encoding="utf-8"))
+    except Exception:
+        return None
+    if c.get("date") != datetime.date.today().isoformat():
+        return None
+    peak = max([c.get("start_balance", 0)] + [w.get("balance", 0) for w in c.get("weeks", [])] + [1])
+    for w in c.get("weeks", []):
+        w["bar_pct"] = max(0, min(100, round(100 * w.get("balance", 0) / peak))) if peak else 0
+        w["negative"] = w.get("balance", 0) < 0
+    return c
+
 def _relogin_canvas():
     subprocess.Popen([sys.executable, os.path.join(ROOT, "scripts", "canvas_relogin.py")],
                      cwd=ROOT, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -371,6 +388,7 @@ def _build_context(fs):
         "canvas_pending":   _canvas_pending(),
         "recent_actions":   actions.recent(15),
         "briefing":         _today_briefing(),
+        "cashflow":         _cashflow(),
     }
 
 

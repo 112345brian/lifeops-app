@@ -7,6 +7,23 @@ change matter more here than semver strictness.
 ## Unreleased
 
 ### Added
+- **Generalized deadline-risk watchdog** (`deadlines` domain) — the second
+  research feature (Motion's "At Risk / won't fit"). `load_engine.deadline_risk`
+  walks ALL deadline-bearing tasks (not just coursework, via
+  `gather.deadline_input`) in due-date order and flags the earliest deadline
+  where cumulative remaining work exceeds the hours realistically free before it
+  (days × `DAILY_CAPACITY_H`). Pushes at most one crunch alert per day; also
+  feeds the daily briefing. Uses *estimated* durations FlowSavvy already has —
+  no manual time-tracking required.
+- **Forward cash-flow projection** (`cashflow` domain) — Monarch-style running
+  discretionary-balance curve. **Panel-only, no notifications by design**:
+  `run_cashflow` projects the next 4 weeks from the current discretionary
+  balance minus known upcoming paid social events and persists it to
+  `logs/cashflow.json`; the panel renders a weekly bar (`#cashflow`) that turns
+  red if the balance goes negative, with the outings that cause it. (Deliberately
+  dropped the estimate-calibration and chore-bundling ideas from the research —
+  the former needs actual durations you'd have to hand-enter; the latter wasn't
+  worth it.)
 - **Daily morning briefing** (`briefing` domain) — the daily counterpart to the
   weekly Sunday digest, and the first feature from a competitor-research pass
   (inspired by Motion's deadline-risk surfacing + Sunsama's morning plan). Once

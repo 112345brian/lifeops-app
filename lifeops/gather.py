@@ -171,6 +171,27 @@ def homework_input(fs, now):
                     "remaining_min": max(0, dur - prog), "progress": prog})
     return out
 
+def deadline_input(fs, now):
+    """All incomplete tasks with a real due date, across every list — the input
+    for the generalized deadline-risk watchdog (homework_input is coursework-only).
+    Bounded to the actionable window (skip long-overdue and far-future)."""
+    out = []
+    for t in fs.list_items(itemType="task", completed=False).get("items", []):
+        due = t.get("dueDateTime")
+        if not due:
+            continue
+        try:
+            h = (datetime.datetime.fromisoformat(due) - now).total_seconds() / 3600
+        except ValueError:
+            continue
+        if h < -24 or h > 24 * 21:          # skip long-overdue and >3-weeks-out
+            continue
+        dur = t.get("durationMinutes") or 0
+        prog = t.get("progressMinutes") or 0
+        out.append({"title": t.get("title") or "", "due_in_h": h, "due_in_days": h / 24,
+                    "remaining_min": max(0, dur - prog), "listId": t.get("listId")})
+    return out
+
 def spend_input(fs, yn, now):
     caltype = config.EVENT_CALS
     start = now.date().isoformat(); end = (now.date() + datetime.timedelta(days=21)).isoformat()

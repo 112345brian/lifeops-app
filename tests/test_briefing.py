@@ -24,6 +24,7 @@ def sandbox(tmp_path, monkeypatch):
         {"title": "M09 Reading", "due_in_h": 100, "due_in_days": 4.2,
          "remaining_min": 60, "progress": 0},
     ])
+    monkeypatch.setattr(gather, "deadline_input", lambda fs, now: [])   # generalized crunch: none extra
     monkeypatch.setattr(gather, "spend_input", lambda fs, yn, now: {
         "fun_money": 42.0,
         "events": [{"label": "Concert", "days_until": 3, "cost": 40, "type": "concert"}]})

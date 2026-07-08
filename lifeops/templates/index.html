@@ -425,6 +425,30 @@ input[type=date]:focus { outline: 2px solid var(--md-primary); outline-offset: 1
 </div>
 {% endif %}
 
+{% if cashflow %}
+<!-- ── Cash-flow projection (run_cashflow; panel-only, no notifications) ── -->
+<div class="card section" id="cashflow"{% if cashflow.dips_below_zero %} style="border:1px solid var(--md-error);"{% endif %}>
+  <div class="card-title">📈 Discretionary projection
+    <span class="muted" style="text-transform:none;font-weight:400;font-size:10px">
+      — next 4 weeks · start ${{ cashflow.start_balance }}
+    </span>
+  </div>
+  {% for w in cashflow.weeks %}
+  <div class="hist-row" style="align-items:center;gap:.5rem;">
+    <span class="hist-ts" style="min-width:3.5rem;">wk {{ w.week }}</span>
+    <span style="flex:1;height:10px;border-radius:5px;background:var(--md-surface-container-high);overflow:hidden;">
+      <span style="display:block;height:100%;width:{{ w.bar_pct }}%;background:{{ 'var(--md-error)' if w.negative else 'var(--green)' }};"></span>
+    </span>
+    <span style="min-width:4rem;text-align:right;{% if w.negative %}color:var(--md-error);{% endif %}">${{ w.balance }}</span>
+    {% if w.spent %}<span class="hist-meta">−${{ w.spent }}</span>{% endif %}
+  </div>
+  {% endfor %}
+  {% if cashflow.dips_below_zero %}
+  <div class="gym-note" style="color:var(--md-error);">Discretionary goes negative within 4 weeks — the upcoming outings are why.</div>
+  {% endif %}
+</div>
+{% endif %}
+
 <!-- ── Stat pills ── -->
 <div class="stats-row">
   <div class="stat-pill">
