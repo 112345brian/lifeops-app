@@ -129,6 +129,101 @@ def _alert_once(key, text, priority="default", tags=None, actions=None, click_an
     os.makedirs(os.path.dirname(sp), exist_ok=True)
     _save_json_atomic(sp, st)
 
+_GYM_AUTO_MARKER = "Auto-scheduled by LifeOps"          # system-created gym blocks carry this
+_GYM_DONE_KW = ("completed", "went", "did it", "attended", "✅")
+_GYM_BACKFILL_TTL_DAYS = 14
+
+
+def _gym_backfill(fs, now, gym_tasks):
+    """Log a manually-added gym item as attendance ("I went").
+
+    Lets a past session be backfilled by dropping a gym event/task on the
+    calendar (e.g. from your phone), instead of only via the control-panel
+    calendar. HYBRID detection: a gym item you created — i.e. one WITHOUT the
+    "Auto-scheduled by LifeOps" marker — counts automatically once its slot is
+    in the PAST/elapsed; an explicit completed/went/✅ keyword in the title or
+    notes forces it regardless of date (so you can log a session you'll do
+    later today, or a future-dated slot you actually attended).
+
+    A future gym item with no keyword is treated as a *plan*, not attendance,
+    and left alone.
+
+    Logged items are tracked in gym_state.json and pruned after
+    _GYM_BACKFILL_TTL_DAYS (~2 weeks) — kept meanwhile as visible confirmation
+    the session registered (tasks are also renamed "✅ … (logged)"). Idempotent:
+    an id already in logged_backfills is never re-logged, so every tick is safe.
+
+    `gym_tasks`: the open "Gym"-titled tasks run_gym already fetched (reused to
+    avoid a duplicate query). Events are fetched here. Returns the set of ids
+    handled this run so run_gym's cleanup pass skips them (they are attendance,
+    not misses to delete).
+    """
+    sp = os.path.join(history.ROOT, "logs", "gym_state.json")
+    try:
+        st = json.load(open(sp, encoding="utf-8"))
+    except Exception:
+        st = {}
+    logged = dict(st.get("logged_backfills", {}))   # id -> date logged (iso)
+    today_iso = now.date().isoformat()
+    now_iso = now.isoformat()
+
+    # ── prune items logged more than TTL days ago (kept until then as receipts) ──
+    for iid, logged_on in list(logged.items()):
+        try:
+            age = (now.date() - datetime.date.fromisoformat(logged_on)).days
+        except Exception:
+            age = 0
+        if age >= _GYM_BACKFILL_TTL_DAYS:
+            try:
+                fs.delete_item(iid); _touch()
+            except Exception:
+                pass
+            logged.pop(iid, None)
+
+    # ── detect new manual backfills among gym-titled tasks + events ──
+    candidates = list(gym_tasks)
+    try:
+        candidates += fs.list_items(itemType="event", query="Gym",
+                                    completed=False).get("items", [])
+    except Exception:
+        pass
+
+    handled = set()
+    for it in candidates:
+        iid = it.get("id")
+        title = (it.get("title") or "").strip()
+        if not iid or iid in logged or not title.lower().startswith("gym"):
+            continue
+        notes = it.get("notes") or ""
+        if _GYM_AUTO_MARKER in notes:
+            continue   # a system-scheduled block, not a manual log
+        start = it.get("startDateTime") or it.get("dueDateTime") or ""
+        d = start[:10]
+        end = it.get("endDateTime") or start
+        elapsed = bool(d) and (d < today_iso or (d == today_iso and bool(end) and end < now_iso))
+        has_kw = any(k in (title + " " + notes).lower() for k in _GYM_DONE_KW)
+        if not (elapsed or has_kw):
+            continue   # a future planned gym with no explicit "went" — leave it
+
+        day = d or today_iso
+        if not history.days_with("gym", day, day):   # don't double-log a day already recorded
+            history.append("gym", ts=(start[:19] or None), source="manual")
+        logged[iid] = today_iso
+        handled.add(iid)
+        # visible confirmation on tasks (the client has no update_event)
+        if it.get("itemType") == "task" and not title.startswith("✅"):
+            try:
+                fs.update_task(iid, title=f"✅ {title} (logged)")
+            except Exception:
+                pass
+
+    if handled or logged != st.get("logged_backfills", {}):
+        st["logged_backfills"] = logged
+        os.makedirs(os.path.dirname(sp), exist_ok=True)
+        _save_json_atomic(sp, st)
+    return handled
+
+
 def run_gym(fs, yn, now):
     # clean up stale gym blocks; record genuine misses (no ping that day) so
     # adherence learning has data — by slot, to learn what he actually honors.
@@ -142,6 +237,13 @@ def run_gym(fs, yn, now):
     # otherwise re-issue) — just filter out whatever this cleanup pass deletes.
     gym_open = [t for t in fs.list_items(itemType="task", query="Gym", completed=False).get("items", [])
                 if (t.get("title") or "").startswith("Gym")]
+    # Turn any manually-added gym item into logged attendance BEFORE the cleanup
+    # below — otherwise a past session you dropped on the calendar would be
+    # deleted and recorded as a miss. Handled items are dropped from gym_open so
+    # cleanup leaves them (they're receipts, pruned on their own ~2-week TTL).
+    backfilled = _gym_backfill(fs, now, gym_open)
+    if backfilled:
+        gym_open = [t for t in gym_open if t.get("id") not in backfilled]
     deleted_ids = set()
     delete_errors = []
     for t in gym_open:
