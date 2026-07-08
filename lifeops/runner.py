@@ -14,6 +14,17 @@ from .engines import gym_engine, ynab_engine
 
 _PRIO = {"urgent": "urgent", "high": "high", "none": "default"}
 
+def _save_json_atomic(path, data):
+    """Write via a temp file + os.replace so a kill/crash mid-write (pythonw
+    under a task-scheduler timeout, no different) can't leave a truncated or
+    empty state file -- the exact failure mode behind canvas_state.json
+    going missing twice (2026-07-03, 2026-07-06) and canvas sync silently
+    re-extracting the whole course from scratch each time."""
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+    os.replace(tmp, path)
+
 _DIRTY = [False]
 def _touch():
     """Mark the schedule changed. _run() recalculates ONCE at the end instead of
@@ -482,12 +493,29 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now):
     # No `query` filter: LIST_COURSE is a dedicated Canvas-sourced list, so
     # scoping by listId alone is sufficient — a substring filter like "M0"
     # would silently stop matching once modules reach M10+.
+    existing = []
     try:
         existing = fs.list_items(itemType="task", listId=config.LIST_COURSE,
                                  completed=False).get("items", [])
         seen_titles.update(t.get("title", "") for t in existing)
     except Exception:
         pass
+
+    # `synced_modules` empty while FlowSavvy already holds a real course
+    # list is the signature of a lost/corrupted canvas_state.json (happened
+    # 2026-07-03 and again 2026-07-06 -- the latter silently re-extracted
+    # every unlocked module via the LLM and created 5 near-duplicate M07
+    # readings that differed from the originals by more than the title dedup
+    # could catch, since re-extraction isn't byte-stable). This can't
+    # reliably be recovered from here (we don't know which modules were
+    # truly already synced) but it should never again fail silently.
+    if not synced and len(existing) >= 5:
+        _alert_once("canvas:state-reset:" + today.isoformat(),
+                    f"⚠️ Canvas sync state looks lost (0 modules marked "
+                    f"synced, but {len(existing)} tasks already exist in "
+                    f"FlowSavvy) — about to re-extract every unlocked "
+                    f"module from scratch. Check logs/canvas_state.json "
+                    f"before this creates near-duplicates.", "high")
     try:
         done = fs.list_items(itemType="task", listId=config.LIST_COURSE,
                              completed=True).get("items", [])
@@ -649,7 +677,7 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now):
     st["task_titles"]     = sorted(seen_titles)
     st["completed_cache"] = completed_cache
     os.makedirs(os.path.dirname(sp), exist_ok=True)
-    json.dump(st, open(sp, "w", encoding="utf-8"))
+    _save_json_atomic(sp, st)
 
     n = len(created_titles)
     print(f"[canvas] {n} task(s) created\n{result['report']}")

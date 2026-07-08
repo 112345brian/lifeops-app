@@ -23,6 +23,27 @@ change matter more here than semver strictness.
     `gym_missed` entry before logging a fresh `gym`.
 
 ### Fixed
+- **Found the actual cause of the M07 Canvas duplicates the fix below didn't
+  stop: `canvas_state.json` losing its `synced_modules` silently triggers a
+  full course re-sync.** `logs/history.jsonl` shows `_canvas_sync`
+  re-extracted and re-created ~59 tasks for modules 1–7 on 2026-07-06 — one
+  day after the previous state-loss incident (2026-07-03) — because
+  `synced_modules` had reset to empty again. Most re-extracted titles came
+  back byte-identical from the LLM and got deduped; 5 M07 readings didn't
+  (different author attribution, different truncation — e.g. "Read
+  Crawford, ... Toward a Framework to Re" vs "Read Crawford & Schultz,
+  ..."), similar enough for a human to recognize as the same reading but
+  different enough that the similarity-ratio dedup below didn't catch them
+  either. The state file is gitignored (never versioned) and was written
+  non-atomically (`open(path, "w")` truncates before the JSON body is fully
+  written) — a kill/crash mid-write (e.g. a task-scheduler timeout under
+  `pythonw`) leaves it empty or corrupt, and the loader silently treats that
+  as "first sync ever." `_canvas_sync` now fires a high-priority alert when
+  it sees 0 synced modules but FlowSavvy's course list already has tasks,
+  instead of quietly re-extracting the whole course; state saves go through
+  a new `_save_json_atomic()` (temp file + `os.replace`) instead of the
+  truncate-in-place write. Manually deleted the 5 duplicate tasks created by
+  the 07-06 incident (ids 20019757–20019761) from FlowSavvy.
 - **Canvas sync could create a duplicate task for an assignment/reading that
   already existed under a slightly different title.** `canvas_engine.plan()`
   deduped against `existing_titles` with raw string equality, but FlowSavvy
@@ -34,7 +55,9 @@ change matter more here than semver strictness.
   the bracket suffix, casefolds) plus a similarity-ratio fallback
   (`difflib.SequenceMatcher`, threshold 0.93) for near-identical titles that
   survive normalization. Skipped duplicates now show up in the sync report
-  instead of vanishing silently.
+  instead of vanishing silently. **Known limitation** (see the entry above):
+  this only helps when a re-extracted title survives close to byte-identical
+  — it's not a substitute for `synced_modules` staying intact.
 - **A transient network blip to FlowSavvy failed the whole domain tick and
   paged a false-alarm health alert.** `⚠️ LifeOps errors — gym:
   HTTPSConnectionPool(...) SSLEOFError` — a one-off TLS handshake failure
