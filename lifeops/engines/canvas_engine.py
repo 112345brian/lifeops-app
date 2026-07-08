@@ -19,9 +19,29 @@ DAY = datetime.timedelta(days=1)
 _SUFFIX_RE = re.compile(r"\s*\[[\w.]+\]\s*$")
 _SIMILARITY_THRESHOLD = 0.93
 
+# split_assignment() emits dependency-chained phases as "{tag} — {phase}".
+# Two phases of the same assignment share an identical tag and differ only in
+# the phase word ("Draft" vs "Revise"), which are short and near-identical:
+# once the shared tag makes the normalized title long enough, the raw
+# similarity ratio crosses _SIMILARITY_THRESHOLD and the ratio fallback drops a
+# legitimately-distinct phase as a false duplicate (e.g. "— Revise" swallowed
+# by "— Draft"). So when both titles carry a phase suffix we compare ONLY the
+# tag and demand the phase match exactly — the ratio never fires across
+# distinct phases.
+_PHASE_SEP = " — "
+
 
 def _normalize_title(title):
     return _SUFFIX_RE.sub("", title or "").strip().casefold()
+
+
+def _split_phase(norm):
+    """(tag, phase) for a normalized "{tag} — {phase}" title, else (norm, None).
+    Uses the LAST separator so a tag containing " — " keeps the phase isolated."""
+    idx = norm.rfind(_PHASE_SEP)
+    if idx == -1:
+        return norm, None
+    return norm[:idx], norm[idx + len(_PHASE_SEP):]
 
 
 def _find_duplicate(title, existing_norms):
@@ -31,7 +51,18 @@ def _find_duplicate(title, existing_norms):
     norm = _normalize_title(title)
     if norm in existing_norms:
         return norm
+    norm_tag, norm_phase = _split_phase(norm)
     for e in existing_norms:
+        if norm_phase is not None:
+            e_tag, e_phase = _split_phase(e)
+            if e_phase is not None:
+                # Both are phased tasks: never a duplicate across distinct
+                # phases; for a matching phase, compare only the tag portion.
+                if e_phase != norm_phase:
+                    continue
+                if difflib.SequenceMatcher(None, norm_tag, e_tag).ratio() >= _SIMILARITY_THRESHOLD:
+                    return e
+                continue
         if difflib.SequenceMatcher(None, norm, e).ratio() >= _SIMILARITY_THRESHOLD:
             return e
     return None
@@ -297,6 +328,27 @@ def plan(modules_data, existing_titles, today):
         "creates":      creates,
         "report":       "\n".join(report_lines) if report_lines else "no new tasks",
     }
+
+
+# Prefer a number immediately after "Module"/"Mod"/"M" (however the course
+# names them) over the first digit ANYWHERE in the string — a name like
+# "Week 3: Module 12" would otherwise mis-extract 3, not 12. The keyword is
+# word-anchored (\b) so the "m" alternative matches a bare "M7" token but NOT
+# the trailing "m" of "Midterm"/"Exam"/"Zoom"/"Problem" ("Midterm 1 - Module 9"
+# must resolve to 9, not 1) — an un-anchored "m" silently mis-numbers modules.
+_MODULE_NUM_RE = re.compile(r"\b(?:module|mod|m)\s*#?\s*(\d+)", re.I)
+
+
+def module_number(name):
+    """Extract a module number from a Canvas module name, or None.
+
+    Falls back to the first digit anywhere only when no "Module N"/"M N"
+    keyword token is present.
+    """
+    m = _MODULE_NUM_RE.search(name or "") or re.search(r"\d+", name or "")
+    if not m:
+        return None
+    return int(m.group(1) if m.lastindex else m.group())
 
 
 def _parse_date(dt_str):

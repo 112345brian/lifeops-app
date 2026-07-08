@@ -61,6 +61,24 @@ def test_spread_already_overdue_deadline_does_not_predate_today():
     assert dates[-1] == due, "final due date itself should stay truthful, not hidden"
 
 
+# ── module_number ─────────────────────────────────────────────────────────────
+
+def test_module_number_extraction():
+    assert ce.module_number("Module 3") == 3
+    assert ce.module_number("Week 3: Module 12") == 12   # keyword beats leading digit
+    assert ce.module_number("M7") == 7                    # bare M-token still matches
+    assert ce.module_number("Start Here") is None         # unnumbered utility module
+
+def test_module_number_ignores_m_inside_words():
+    # regression: an un-anchored "m" alternative matched the trailing "m" of
+    # "Midterm"/"Exam"/"Zoom"/"Problem" followed by a space+digit, extracting the
+    # WRONG number and mis-numbering the module in synced_modules.
+    assert ce.module_number("Midterm 1 - Module 9") == 9
+    assert ce.module_number("Exam 2: Module 8") == 8
+    assert ce.module_number("Zoom 5 Recording - Module 4") == 4
+    assert ce.module_number("Problem Set 5 Module 2") == 2
+
+
 # ── split_assignment ────────────────────────────────────────────────────────────
 
 def _split(atype, name="Thing", due=D(2026, 7, 20)):
@@ -171,6 +189,23 @@ def test_plan_does_not_suppress_genuinely_different_titles():
     out = ce.plan([mod], set(), TODAY)
     assert len(out["creates"]) == 2
     assert "skipped" not in out["report"]
+
+def test_plan_paper_phases_not_dropped_by_similarity_dedup():
+    # regression: "{tag} — Draft" and "{tag} — Revise" share an identical tag
+    # and differ only in a short, near-identical phase word. Once the tag makes
+    # the normalized title long enough the similarity ratio crossed threshold
+    # and silently dropped "— Revise" as a false duplicate of "— Draft"
+    # (canvas_state.json "M07:  Predictive Policing Case Study/Evaluation Paper ").
+    name = "Predictive Policing Case Study/Evaluation Paper "
+    mod = _module(assignments=[{"name": name, "due_at": "2026-07-20T23:59:59Z"}])
+    assert ce.classify(name) == "paper"
+    out = ce.plan([mod], set(), TODAY)
+    tag = f"M07: {name}"
+    titles = {c["title"] for c in out["creates"]}
+    for phase in ("Outline & Notes", "Draft", "Revise"):
+        assert f"{tag} — {phase}" in titles
+    assert "skipped" not in out["report"]
+
 
 def test_plan_assignment_with_missing_due_survives():
     mod = _module(assignments=[{"name": "Mystery Paper", "due_at": None},

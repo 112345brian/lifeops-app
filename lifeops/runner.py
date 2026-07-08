@@ -479,8 +479,18 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now):
         st.update(json.load(open(sp, encoding="utf-8")))
     except Exception:
         pass
-    synced  = set(st["synced_modules"])
-    seen_titles = set(st["task_titles"])
+    synced  = set(st["synced_modules"])                 # legacy dedup key: module NUMBER (rename/collision-fragile)
+    synced_ids = set(st.get("synced_module_ids", []))   # stable dedup key: Canvas module id
+    # `task_titles` persists ONLY the titles THIS engine actually created (see the save block
+    # below). `seen_titles` is the run-local dedup working set: seeded from those persisted
+    # titles, then augmented with completed_cache + the live-fetched FlowSavvy titles for THIS
+    # run only. Those live sets are deliberately never persisted — folding them back into
+    # task_titles grew it without bound across the whole multi-semester course and, via
+    # canvas_engine's 0.93 fuzzy match, silently dropped a legitimately-new task as a
+    # "duplicate" of a long-gone one. It also defeated the 20-day completed_cache eviction: an
+    # evicted title lived on forever inside task_titles, so the cache never actually forgot.
+    created_persisted = set(st["task_titles"])
+    seen_titles = set(created_persisted)
     today = now.date()
 
     # 20-day rolling cache of completed task titles (avoids re-fetching history each run)
@@ -509,7 +519,7 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now):
     # could catch, since re-extraction isn't byte-stable). This can't
     # reliably be recovered from here (we don't know which modules were
     # truly already synced) but it should never again fail silently.
-    if not synced and len(existing) >= 5:
+    if not synced and not synced_ids and len(existing) >= 5:
         _alert_once("canvas:state-reset:" + today.isoformat(),
                     f"⚠️ Canvas sync state looks lost (0 modules marked "
                     f"synced, but {len(existing)} tasks already exist in "
@@ -539,19 +549,37 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now):
         print(f"[canvas] failed to fetch modules: {e}"); return
 
     modules_data = []
+    claimed_nums = set()   # legacy nums already matched to a stable id this run (collision guard)
     for mod in modules:
         name = mod.get("name", "") or ""
-        # Prefer a number immediately after "Module"/"M" (however the course
-        # names them) over the first digit ANYWHERE in the string — a name
-        # like "Week 3: Module 12" would otherwise mis-extract 3, not 12,
-        # silently mis-numbering/deduping the wrong module.
-        num_match = re.search(r"(?:module|m)\s*#?\s*(\d+)", name, re.I) or re.search(r"\d+", name)
-        if not num_match:
+        # Word-anchored keyword extraction ("Module N"/"M N"), first-digit fallback —
+        # see canvas_engine.module_number (an un-anchored "m" matched the trailing "m"
+        # of "Midterm 1 - Module 9" and returned 1, mis-numbering the module).
+        num = canvas_engine.module_number(name)
+        if num is None:
             continue   # unnumbered utility module ("Start Here", "Syllabus", ...) — nothing to sync
-        num = int(num_match.group(1) if num_match.lastindex else num_match.group())
+        mod_id = mod["id"]
+
+        # Dedup on the STABLE Canvas module id, not the number scraped from the
+        # (renameable) module name. Keying on `num` alone let a mid-term
+        # rename/renumber make an already-synced module look new (→ re-synced,
+        # duplicate tasks) and let a second module sharing a scraped number
+        # ("Supplementary readings for Module 5") get silently skipped forever.
+        if mod_id in synced_ids:
+            claimed_nums.add(num)   # this num is spoken for by a known id — free any collider below
+            continue
+        # Legacy migration: pre-id state only knows synced NUMBERS. Honor a legacy
+        # num ONCE per run (the first module bearing it is the one we actually synced
+        # before) and adopt that module's stable id, so future runs key on the id. A
+        # second module with the same num is a genuine collision, not the synced one.
+        if num in synced and num not in claimed_nums:
+            claimed_nums.add(num)
+            synced_ids.add(mod_id)
+            continue
+
         unlock_str = mod.get("unlock_at") or mod.get("published_at") or ""
         unlock_date = canvas_engine._parse_date(unlock_str) or today
-        if num in synced or unlock_date > today:
+        if unlock_date > today:
             continue
 
         items = mod.get("items") or []
@@ -559,13 +587,22 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now):
             "module_num":  num,
             "unlock_date": unlock_date,
             "_mod_items":  items,
-            "_mod_id":     mod["id"],
+            "_mod_id":     mod_id,
         })
 
     if not modules_data:
-        print("[canvas] no new modules to sync"); return
+        # No new modules to plan/create — but do NOT return here. The due-date
+        # change check and announcement check below must run on EVERY sync, not
+        # just when a module unlocks. Once a course is fully synced modules_data
+        # is empty every run, and an early return here silently disabled due-date
+        # re-sync for the rest of the semester (exactly when instructors most
+        # often shift deadlines). plan([]) and the create loop are no-ops on an
+        # empty list, so the flat flow below stays correct.
+        print("[canvas] no new modules to sync")
 
-    # bulk fetch all assignments once
+    # bulk fetch all assignments once — required both to create new-module tasks
+    # AND to re-check due dates on already-synced tasks below, so this fetch must
+    # happen even on the no-new-modules path.
     try:
         all_assignments = {a["id"]: a for a in cv.assignments()}
     except Exception as e:
@@ -574,7 +611,8 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now):
     # populate assignments + readings per module
     for mod in modules_data:
         items = mod.pop("_mod_items")
-        mod_id = mod.pop("_mod_id")
+        # keep "_mod_id" on the dict — needed at save time to persist the stable
+        # id into synced_module_ids. plan() ignores unknown keys.
 
         asgns = []
         reading_page_slugs = []
@@ -671,11 +709,18 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now):
 
     # save state
     for mod in modules_data:
-        synced.add(mod["module_num"])
-    seen_titles.update(created_titles.keys())
-    st["synced_modules"]  = sorted(synced)
-    st["task_titles"]     = sorted(seen_titles)
-    st["completed_cache"] = completed_cache
+        synced.add(mod["module_num"])       # legacy num set (display + state-loss heuristic)
+        synced_ids.add(mod["_mod_id"])      # stable id set (authoritative dedup key)
+    # Persist ONLY engine-created titles: what prior runs created plus what this run
+    # created. Deliberately NOT `seen_titles` — that also holds the live FlowSavvy
+    # incomplete/completed titles and the completed_cache, which are run-local dedup
+    # inputs, not a record of what this engine produced. Folding them in grew
+    # task_titles without bound and nullified the completed_cache eviction.
+    created_persisted.update(created_titles.keys())
+    st["synced_modules"]     = sorted(synced)
+    st["synced_module_ids"]  = sorted(synced_ids)
+    st["task_titles"]        = sorted(created_persisted)
+    st["completed_cache"]    = completed_cache
     os.makedirs(os.path.dirname(sp), exist_ok=True)
     _save_json_atomic(sp, st)
 
