@@ -10,7 +10,7 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from . import config, history, gather
+from . import config, history, gather, actions
 from .flowsavvy import FlowSavvy
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -357,6 +357,7 @@ def _build_context(fs):
         "block_cal_set":    bool(config.BLOCK_CAL),
         "canvas_status":    _canvas_status(),
         "canvas_pending":   _canvas_pending(),
+        "recent_actions":   actions.recent(15),
     }
 
 
@@ -632,6 +633,19 @@ def canvas_dismiss_pending():
     except Exception:
         pass
     return RedirectResponse(f"/?msg={quote('Dismissed the held Canvas sync.')}#canvas", 303)
+
+@app.post("/action/undo")
+def action_undo(item_id: str = Form(...)):
+    """Undo a reversible LifeOps action — currently 'created a task' → delete it.
+    Idempotent: marks the id undone so the feed won't offer it again, and a
+    missing task (already gone) is treated as success."""
+    try:
+        FlowSavvy().delete_item(item_id)
+    except Exception as e:
+        return RedirectResponse(f"/?msg={quote('Undo failed: ' + str(e)[:60])}#activity", 303)
+    actions.mark_undone(item_id)
+    actions.log("panel", "undid a creation", item_id, item_id=None, undoable=False)
+    return RedirectResponse(f"/?msg={quote('Undone — task removed.')}#activity", 303)
 
 @app.post("/system/restart")
 def system_restart():
