@@ -106,7 +106,7 @@ def ingest(fs, now):
         logged.add(key)
     st["logged_ids"] = list(logged)[-1000:]
     os.makedirs(os.path.dirname(sp), exist_ok=True)
-    json.dump(st, open(sp, "w", encoding="utf-8"))
+    _save_json_atomic(sp, st)
 
 def _alert_once(key, text, priority="default", tags=None, actions=None, click_anchor=""):
     """Send an alert at most once per calendar day per key. The tick runs every
@@ -127,7 +127,7 @@ def _alert_once(key, text, priority="default", tags=None, actions=None, click_an
               click=ntfy.panel_url(click_anchor))
     st[key] = today
     os.makedirs(os.path.dirname(sp), exist_ok=True)
-    json.dump(st, open(sp, "w", encoding="utf-8"))
+    _save_json_atomic(sp, st)
 
 def run_gym(fs, yn, now):
     # clean up stale gym blocks; record genuine misses (no ping that day) so
@@ -269,7 +269,7 @@ def run_chore(fs, yn, now):
     if out["creates"]:
         _touch()
     st["processed"] = out["processed"]; st["lastRunUtc"] = _utc_iso()
-    os.makedirs(os.path.dirname(sp), exist_ok=True); json.dump(st, open(sp, "w", encoding="utf-8"))
+    os.makedirs(os.path.dirname(sp), exist_ok=True); _save_json_atomic(sp, st)
     print(f"[chore] cycled {len(out['creates'])}")
 
 def run_catchup(fs, yn, now):
@@ -287,7 +287,7 @@ def run_catchup(fs, yn, now):
     else:
         print("[catchup] no trigger")
     st["lastHandled"] = int(now.timestamp())
-    os.makedirs(os.path.dirname(sp), exist_ok=True); json.dump(st, open(sp, "w", encoding="utf-8"))
+    os.makedirs(os.path.dirname(sp), exist_ok=True); _save_json_atomic(sp, st)
 
 def run_homework(fs, yn, now):
     from .engines import load_engine
@@ -330,7 +330,7 @@ def run_social(fs, yn, now):
                 _alert_once(f"lock:{base}:{now.date()}", f"🔒 Locked in: {base}")
                 break
     st["lastLock"] = _utc_iso()
-    os.makedirs(os.path.dirname(sp), exist_ok=True); json.dump(st, open(sp, "w", encoding="utf-8"))
+    os.makedirs(os.path.dirname(sp), exist_ok=True); _save_json_atomic(sp, st)
 
     inp = gather.social_input(fs, now)
     out = social_engine.plan(inp["partner_days"], inp["friend_days"], inp["has_partner"],
@@ -369,7 +369,7 @@ def run_meal(fs, yn, now):
     skipped = any((m.get("message") or "").strip().lower() == "meal-skip"
                   for m in ntfy.poll(since=st["lastSkip"]))
     st["lastSkip"] = int(now.timestamp())
-    os.makedirs(os.path.dirname(sp), exist_ok=True); json.dump(st, open(sp, "w", encoding="utf-8"))
+    os.makedirs(os.path.dirname(sp), exist_ok=True); _save_json_atomic(sp, st)
 
     # Everything past this point is FlowSavvy work (the actually expensive,
     # rate-limited part) — only worth doing while meal is genuinely due. A

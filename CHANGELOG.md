@@ -23,6 +23,10 @@ change matter more here than semver strictness.
     `gym_missed` entry before logging a fresh `gym`.
 
 ### Fixed
+- **The other 6 runner.py state files (`ingest`, `alert_state`, `chore`,
+  `catchup`, `social`, `meal`) had the same non-atomic write as
+  `canvas_state.json` below.** Same crash-mid-write corruption risk, just
+  hadn't bitten yet. All now go through `_save_json_atomic()`.
 - **Found the actual cause of the M07 Canvas duplicates the fix below didn't
   stop: `canvas_state.json` losing its `synced_modules` silently triggers a
   full course re-sync.** `logs/history.jsonl` shows `_canvas_sync`
