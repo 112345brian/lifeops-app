@@ -7,12 +7,18 @@ Run:  python -m lifeops.runner          # all wired domains
       python -m lifeops.runner gym      # one domain
 """
 import sys, os, re, io, json, datetime, contextlib
-from . import config, ntfy, gather, lock, history, adherence
+from . import config, ntfy, gather, lock, history, adherence, actions
 from .flowsavvy import FlowSavvy
 from .ynab import YNAB
 from .engines import gym_engine, ynab_engine
 
 _PRIO = {"urgent": "urgent", "high": "high", "none": "default"}
+
+# Canvas flood guard: a healthy incremental sync creates a handful of tasks; the
+# two duplicate-flood incidents (2026-07-03/06) each tried to create ~59 in one
+# run after a state-loss re-sync. More than this in a single run is almost always
+# a re-sync, not that many real new tasks — so hold and ask instead of flooding.
+_CANVAS_FLOOD_MAX = 8
 
 def _save_json_atomic(path, data):
     """Write via a temp file + os.replace so a kill/crash mid-write (pythonw
@@ -24,6 +30,15 @@ def _save_json_atomic(path, data):
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f)
     os.replace(tmp, path)
+
+def _logged_create(fs, domain, op="created", **kwargs):
+    """fs.create_task + an audit-log entry ("LifeOps added X"), returning the
+    raw response so callers can still wire dependencies off the new id. The
+    created task is marked undoable (undo = delete it) when an id came back."""
+    r = fs.create_task(**kwargs)
+    tid = (r or {}).get("id") or (r or {}).get("item", {}).get("id")
+    actions.log(domain, op, kwargs.get("title", "?"), item_id=tid, undoable=True)
+    return r
 
 _DIRTY = [False]
 def _touch():
@@ -259,6 +274,8 @@ def run_gym(fs, yn, now):
                                meta={"slot": slot})
             try:
                 fs.delete_item(t["id"]); _touch(); deleted_ids.add(t["id"])
+                actions.log("gym", f"removed stale gym block {d}",
+                            t.get("title", "Gym"), item_id=t["id"], undoable=False)
             except Exception as e:
                 delete_errors.append(f"{t['id']}: {e}")
     if deleted_ids:
@@ -274,7 +291,8 @@ def run_gym(fs, yn, now):
     have = {s["date"] for s in inp["scheduled"]}
     for a in out["actions"]:
         if a["op"] == "create" and a["date"] not in have:
-            fs.create_task(title="Gym", listId=config.LIST_PERSONAL, isAutoScheduled=False,
+            _logged_create(fs, "gym", op=f"scheduled gym {a['date']}",
+                           title="Gym", listId=config.LIST_PERSONAL, isAutoScheduled=False,
                            startDateTime=f"{a['date']}T{a['start']}:00",
                            endDateTime=f"{a['date']}T{a['end']}:00",
                            bufferBeforeMinutes=a["buffer_before"],
@@ -290,7 +308,8 @@ def run_gym(fs, yn, now):
                     for i in fs.list_items(query="Wind down").get("items", [])}
         for w in out["wind_down"]:
             if w["date"] not in existing:
-                fs.create_task(title="Wind down — early gym", listId=config.LIST_PERSONAL,
+                _logged_create(fs, "gym", op=f"wind-down {w['date']}",
+                               title="Wind down — early gym", listId=config.LIST_PERSONAL,
                                isAutoScheduled=False,
                                startDateTime=f"{w['date']}T{w['start']}:00",
                                endDateTime=f"{w['date']}T{w['end']}:00")
@@ -363,7 +382,8 @@ def run_chore(fs, yn, now):
                           "dueTime": (t.get("dueDateTime") or "")[11:16] or "20:00"})
     out = chore_engine.plan({"completed": completed, "processed": st["processed"]})
     for c in out["creates"]:
-        fs.create_task(title=c["title"], listId=c["listId"], durationMinutes=c["durationMinutes"],
+        _logged_create(fs, "chore", op="cycled chore",
+                       title=c["title"], listId=c["listId"], durationMinutes=c["durationMinutes"],
                        minLengthMinutes=c["minLengthMinutes"], priority=c["priority"],
                        schedulingHoursId=c["schedulingHoursId"], notes=c["notes"],
                        dueDateTime=c["dueDateTime"], canBeStartedAt=c["canBeStartedAt"],
@@ -441,13 +461,15 @@ def run_social(fs, yn, now):
     for c in out["creates"]:
         base = config.PARTNER_TASK if c["kind"] == "partner" else config.FRIENDS_TASK
         date = c["date"]
-        fs.create_task(title=f"{base} (proposed)", listId=config.LIST_PERSONAL,
+        _logged_create(fs, "social", op=f"proposed {base} {date}",
+                       title=f"{base} (proposed)", listId=config.LIST_PERSONAL,
                        schedulingHoursId=config.SH_EVENINGS, durationMinutes=120,
                        priority=config.PRIO_SOCIAL_PROPOSED,
                        dueDateTime=f"{date}T21:00:00", canBeStartedAt=f"{date}T17:00:00",
                        isAutoIgnored=False, notes="Proposed hangout — complete the 'Plan ...' task to lock it in.")
         plan_due = (datetime.date.fromisoformat(date) - datetime.timedelta(days=config.PLAN_LEAD_DAYS)).isoformat()
-        fs.create_task(title=f"Plan {base}", listId=config.LIST_PERSONAL,
+        _logged_create(fs, "social", op=f"plan-task for {base}",
+                       title=f"Plan {base}", listId=config.LIST_PERSONAL,
                        schedulingHoursId=config.SH_EVENINGS, durationMinutes=15,
                        priority=config.PRIO_SOCIAL_PLAN,
                        dueDateTime=f"{plan_due}T21:00:00", isAutoIgnored=False,
@@ -498,12 +520,14 @@ def run_meal(fs, yn, now):
     d0 = now.date().isoformat()
     d3 = (now.date() + datetime.timedelta(days=3)).isoformat()
     d4 = (now.date() + datetime.timedelta(days=4)).isoformat()
-    g = fs.create_task(title="Groceries", listId=config.LIST_PERSONAL,
+    g = _logged_create(fs, "meal", op="added groceries",
+                       title="Groceries", listId=config.LIST_PERSONAL,
                        schedulingHoursId=config.SH_PERSONAL, durationMinutes=60,
                        priority=config.PRIO_MEAL, dueDateTime=f"{d3}T19:00:00",
                        canBeStartedAt=f"{d0}T00:00:00",
                        isAutoIgnored=False, notes="Meal-prep week (LifeOps).")
-    fs.create_task(title="Meal prep", listId=config.LIST_PERSONAL,
+    _logged_create(fs, "meal", op="added meal prep",
+                   title="Meal prep", listId=config.LIST_PERSONAL,
                    schedulingHoursId=config.SH_PERSONAL, durationMinutes=120,
                    priority=config.PRIO_MEAL, dueDateTime=f"{d4}T19:00:00",
                    canBeStartedAt=f"{d3}T00:00:00",
@@ -747,6 +771,31 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now):
     # plan
     result = canvas_engine.plan(modules_data, seen_titles, today)
 
+    # Flood guard — HOLD instead of flooding when a run wants to create an
+    # implausible number of tasks (the state-loss re-sync signature). Write the
+    # intended creates to a pending file, alert with a one-tap approve, and skip
+    # both creation AND the state save this run (so nothing is marked synced and
+    # the next unapproved run re-triggers the guard). Approving from the panel
+    # sets `flood_ack` = today in canvas_state.json and re-runs canvas; the guard
+    # bypasses for that day and creates normally — no replay logic needed.
+    creates = result.get("creates", [])
+    pp = os.path.join(history.ROOT, "logs", "canvas_pending.json")
+    if len(creates) > _CANVAS_FLOOD_MAX and st.get("flood_ack") != today.isoformat():
+        _save_json_atomic(pp, {"at": now.isoformat(), "count": len(creates),
+                               "report": result.get("report", ""),
+                               "titles": [c.get("title") for c in creates]})
+        _alert_once("canvas:flood:" + today.isoformat(),
+                    f"⚠️ Canvas sync wanted to create {len(creates)} tasks — held as suspicious "
+                    f"(usually a state-loss re-sync, not that many real new tasks). "
+                    f"Review + approve in the panel.", "high", click_anchor="canvas")
+        print(f"[canvas] HELD {len(creates)} creates (flood guard > {_CANVAS_FLOOD_MAX})")
+        return
+    # Cleared the guard: consume the one-shot ack and drop any stale pending file.
+    st.pop("flood_ack", None)
+    if os.path.exists(pp):
+        try: os.remove(pp)
+        except Exception: pass
+
     # apply: create tasks in FlowSavvy
     created_titles = {}   # title → id (for dependency wiring)
     for spec in result["creates"]:
@@ -768,6 +817,8 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now):
             # durable audit trail — creations must survive discarded stdout
             history.append("course_task", source="canvas",
                            meta={"id": tid, "title": spec["title"]})
+            actions.log("canvas", "created course task", spec["title"],
+                        item_id=tid, undoable=True)
             _touch()
         except Exception as e:
             print(f"[canvas] create failed for {spec.get('title','?')}: {e}")

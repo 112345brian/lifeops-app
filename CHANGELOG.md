@@ -26,6 +26,29 @@ change matter more here than semver strictness.
     can see it registered), then auto-pruned (`_GYM_BACKFILL_TTL_DAYS`).
     Idempotent — an id already logged is never re-counted, and a day already in
     history isn't double-logged.
+- **"Recent activity" feed + one-tap undo in the control panel.** A new
+  `lifeops/actions.py` audit log (`logs/actions.jsonl`) records every mutation
+  LifeOps makes to your calendar — distinct from `history.jsonl` (completions)
+  and `runs.jsonl` (per-run summaries). Domains create tasks through a
+  `_logged_create` wrapper, so canvas/gym/social/meal/chore creations (and stale
+  gym-block deletions) all show up as "canvas: created course task · M08
+  Reading" etc., newest first, in an `#activity` card. Reversible ones (a
+  created task) get an **undo** button (`POST /action/undo` → deletes the task,
+  marks it undone so the feed greys it out and won't double-undo). Directly
+  answers "what did LifeOps just do, and can I take it back" without digging
+  through FlowSavvy. Remaining domains adopt it with a one-line `actions.log`.
+- **Canvas sync flood guard.** A healthy incremental sync creates a handful of
+  tasks; the two duplicate-flood incidents (2026-07-03/06) each tried to create
+  ~59 in one run after the sync state was lost. `_canvas_sync` now HOLDS when a
+  run would create more than `_CANVAS_FLOOD_MAX` (8) tasks — it writes the
+  intended creates to `logs/canvas_pending.json`, fires a high-priority ntfy,
+  and skips both creation and the state save (so nothing is marked synced and an
+  unapproved re-run re-triggers the guard). The control panel shows a "Canvas
+  sync held" card (`#canvas`) listing what would be created, with **approve**
+  (`POST /canvas/approve-sync` sets a one-shot `flood_ack` and re-runs canvas
+  through the normal path — no replay logic) and **dismiss**
+  (`POST /canvas/dismiss-pending`). Turns the state-loss re-sync from
+  "warn, then flood" into "hold, then one tap."
 - **Gym Calendar in the control panel.** A Mon-aligned 2-week grid
   (`#gym-calendar`) backed by the same history actions and `gym_blocks` list
   the other gym controls use. Tap a past/today cell to cycle went ✅ →

@@ -10,7 +10,7 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from . import config, history, gather
+from . import config, history, gather, actions
 from .flowsavvy import FlowSavvy
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -235,6 +235,18 @@ def _canvas_status():
         "needs_relogin":  st.get("canvas:session:" + today) == today,
     }
 
+def _canvas_pending():
+    """The Canvas flood guard (runner.py) writes logs/canvas_pending.json and
+    HOLDS creation when a sync would make an implausible number of tasks (the
+    state-loss re-sync signature). Surface it so the panel can show what was
+    held and offer a one-tap approve. Returns None when nothing is pending."""
+    try:
+        p = json.load(open(os.path.join(ROOT, "logs", "canvas_pending.json"), encoding="utf-8"))
+    except Exception:
+        return None
+    return {"count": p.get("count"), "at": p.get("at"),
+            "titles": (p.get("titles") or [])[:30]}
+
 def _relogin_canvas():
     subprocess.Popen([sys.executable, os.path.join(ROOT, "scripts", "canvas_relogin.py")],
                      cwd=ROOT, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -344,6 +356,8 @@ def _build_context(fs):
         "sched_blocks":     sched_block_display,
         "block_cal_set":    bool(config.BLOCK_CAL),
         "canvas_status":    _canvas_status(),
+        "canvas_pending":   _canvas_pending(),
+        "recent_actions":   actions.recent(15),
     }
 
 
@@ -590,6 +604,48 @@ def account_canvas_relogin():
     alert, since that alert can't itself open a browser on the PC."""
     _relogin_canvas()
     return RedirectResponse(f"/?msg={quote('Opening Chrome for Canvas — sign in, then it saves automatically.')}#accounts", 303)
+
+@app.post("/canvas/approve-sync")
+def canvas_approve_sync():
+    """Approve a Canvas sync the flood guard held. Sets a one-shot `flood_ack`
+    (today) in canvas_state.json, then re-runs canvas — the guard bypasses for
+    the day and creates the held tasks through the normal path (no replay)."""
+    sp = os.path.join(ROOT, "logs", "canvas_state.json")
+    try:
+        st = json.load(open(sp, encoding="utf-8"))
+    except Exception:
+        st = {}
+    st["flood_ack"] = datetime.date.today().isoformat()
+    tmp = sp + ".tmp"
+    os.makedirs(os.path.dirname(sp), exist_ok=True)
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(st, f)
+    os.replace(tmp, sp)
+    _run_domain("canvas")
+    return RedirectResponse(f"/?msg={quote('Approved — creating the held Canvas tasks.')}#canvas", 303)
+
+@app.post("/canvas/dismiss-pending")
+def canvas_dismiss_pending():
+    """Discard a held Canvas sync without creating anything (e.g. you restored
+    canvas_state.json instead). Just removes the pending file."""
+    try:
+        os.remove(os.path.join(ROOT, "logs", "canvas_pending.json"))
+    except Exception:
+        pass
+    return RedirectResponse(f"/?msg={quote('Dismissed the held Canvas sync.')}#canvas", 303)
+
+@app.post("/action/undo")
+def action_undo(item_id: str = Form(...)):
+    """Undo a reversible LifeOps action — currently 'created a task' → delete it.
+    Idempotent: marks the id undone so the feed won't offer it again, and a
+    missing task (already gone) is treated as success."""
+    try:
+        FlowSavvy().delete_item(item_id)
+    except Exception as e:
+        return RedirectResponse(f"/?msg={quote('Undo failed: ' + str(e)[:60])}#activity", 303)
+    actions.mark_undone(item_id)
+    actions.log("panel", "undid a creation", item_id, item_id=None, undoable=False)
+    return RedirectResponse(f"/?msg={quote('Undone — task removed.')}#activity", 303)
 
 @app.post("/system/restart")
 def system_restart():
