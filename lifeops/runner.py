@@ -14,6 +14,12 @@ from .engines import gym_engine, ynab_engine
 
 _PRIO = {"urgent": "urgent", "high": "high", "none": "default"}
 
+# Canvas flood guard: a healthy incremental sync creates a handful of tasks; the
+# two duplicate-flood incidents (2026-07-03/06) each tried to create ~59 in one
+# run after a state-loss re-sync. More than this in a single run is almost always
+# a re-sync, not that many real new tasks — so hold and ask instead of flooding.
+_CANVAS_FLOOD_MAX = 8
+
 def _save_json_atomic(path, data):
     """Write via a temp file + os.replace so a kill/crash mid-write (pythonw
     under a task-scheduler timeout, no different) can't leave a truncated or
@@ -606,6 +612,31 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now):
 
     # plan
     result = canvas_engine.plan(modules_data, seen_titles, today)
+
+    # Flood guard — HOLD instead of flooding when a run wants to create an
+    # implausible number of tasks (the state-loss re-sync signature). Write the
+    # intended creates to a pending file, alert with a one-tap approve, and skip
+    # both creation AND the state save this run (so nothing is marked synced and
+    # the next unapproved run re-triggers the guard). Approving from the panel
+    # sets `flood_ack` = today in canvas_state.json and re-runs canvas; the guard
+    # bypasses for that day and creates normally — no replay logic needed.
+    creates = result.get("creates", [])
+    pp = os.path.join(history.ROOT, "logs", "canvas_pending.json")
+    if len(creates) > _CANVAS_FLOOD_MAX and st.get("flood_ack") != today.isoformat():
+        _save_json_atomic(pp, {"at": now.isoformat(), "count": len(creates),
+                               "report": result.get("report", ""),
+                               "titles": [c.get("title") for c in creates]})
+        _alert_once("canvas:flood:" + today.isoformat(),
+                    f"⚠️ Canvas sync wanted to create {len(creates)} tasks — held as suspicious "
+                    f"(usually a state-loss re-sync, not that many real new tasks). "
+                    f"Review + approve in the panel.", "high", click_anchor="canvas")
+        print(f"[canvas] HELD {len(creates)} creates (flood guard > {_CANVAS_FLOOD_MAX})")
+        return
+    # Cleared the guard: consume the one-shot ack and drop any stale pending file.
+    st.pop("flood_ack", None)
+    if os.path.exists(pp):
+        try: os.remove(pp)
+        except Exception: pass
 
     # apply: create tasks in FlowSavvy
     created_titles = {}   # title → id (for dependency wiring)

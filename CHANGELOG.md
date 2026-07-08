@@ -7,6 +7,18 @@ change matter more here than semver strictness.
 ## Unreleased
 
 ### Added
+- **Canvas sync flood guard.** A healthy incremental sync creates a handful of
+  tasks; the two duplicate-flood incidents (2026-07-03/06) each tried to create
+  ~59 in one run after the sync state was lost. `_canvas_sync` now HOLDS when a
+  run would create more than `_CANVAS_FLOOD_MAX` (8) tasks — it writes the
+  intended creates to `logs/canvas_pending.json`, fires a high-priority ntfy,
+  and skips both creation and the state save (so nothing is marked synced and an
+  unapproved re-run re-triggers the guard). The control panel shows a "Canvas
+  sync held" card (`#canvas`) listing what would be created, with **approve**
+  (`POST /canvas/approve-sync` sets a one-shot `flood_ack` and re-runs canvas
+  through the normal path — no replay logic) and **dismiss**
+  (`POST /canvas/dismiss-pending`). Turns the state-loss re-sync from
+  "warn, then flood" into "hold, then one tap."
 - **Gym Calendar in the control panel.** A Mon-aligned 2-week grid
   (`#gym-calendar`) backed by the same history actions and `gym_blocks` list
   the other gym controls use. Tap a past/today cell to cycle went ✅ →

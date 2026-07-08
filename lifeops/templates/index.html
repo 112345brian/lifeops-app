@@ -380,6 +380,30 @@ input[type=date]:focus { outline: 2px solid var(--md-primary); outline-offset: 1
 </div>
 {% endif %}
 
+{% if canvas_pending %}
+<div class="card section" id="canvas" style="border:1px solid var(--md-error);">
+  <div class="card-title">⚠️ Canvas sync held</div>
+  <div class="gym-note">A sync wanted to create <b>{{ canvas_pending.count }}</b> tasks —
+    held automatically because that many at once usually means the sync state was
+    lost and it's about to re-create the whole course, not that {{ canvas_pending.count }}
+    genuinely new tasks unlocked. Approve only if this looks right.</div>
+  <details style="margin:.4rem 0;">
+    <summary style="cursor:pointer;font-size:13px;">Show what it would create</summary>
+    <ul style="margin:.4rem 0 0 1rem;font-size:12px;color:var(--md-on-surface-variant);">
+      {% for t in canvas_pending.titles %}<li>{{ t }}</li>{% endfor %}
+    </ul>
+  </details>
+  <div class="domain-row">
+    <form method="post" action="/canvas/approve-sync" class="f-inline">
+      <button class="btn btn-sm">✅ approve &amp; create</button>
+    </form>
+    <form method="post" action="/canvas/dismiss-pending" class="f-inline">
+      <button class="btn btn-sm">✕ dismiss</button>
+    </form>
+  </div>
+</div>
+{% endif %}
+
 <div id="install-hint" class="banner" style="display:none;">
   <span id="install-hint-text"></span>
   <button class="banner-dismiss" onclick="document.getElementById('install-hint').style.display='none'">×</button>
