@@ -7,6 +7,25 @@ change matter more here than semver strictness.
 ## Unreleased
 
 ### Added
+- **Backfill a gym session by dropping it on the calendar.** Add a gym
+  event/task (title starting "Gym") on a past slot — e.g. from your phone —
+  and the next `run_gym` tick logs it as attendance (`history` `gym`, source
+  `manual`), so you don't have to open the control panel. Detection is
+  **hybrid**: an item you created is recognized because it lacks the
+  `"Auto-scheduled by LifeOps"` marker the engine stamps on its own blocks, so
+  a *past* one counts automatically; adding `completed`/`went`/`✅` to the
+  title or notes forces it regardless of date (log a session you'll do later
+  today, or a future-dated slot you actually attended). A future gym item with
+  no keyword is treated as a *plan* and left alone.
+  - Runs **before** the stale-block cleanup, which is the whole trick: without
+    this, a past "Gym" item you added would be deleted and recorded as a
+    *miss* (the exact opposite of "I went"). Handled items are dropped from the
+    cleanup pass.
+  - Logged backfills are tracked in `gym_state.json` (`logged_backfills`) and
+    kept ~2 weeks as a visible receipt (tasks are renamed `✅ … (logged)` so you
+    can see it registered), then auto-pruned (`_GYM_BACKFILL_TTL_DAYS`).
+    Idempotent — an id already logged is never re-counted, and a day already in
+    history isn't double-logged.
 - **Gym Calendar in the control panel.** A Mon-aligned 2-week grid
   (`#gym-calendar`) backed by the same history actions and `gym_blocks` list
   the other gym controls use. Tap a past/today cell to cycle went ✅ →
