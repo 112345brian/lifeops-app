@@ -54,9 +54,10 @@ SCHED_BLOCKS_FILE = os.path.join(ROOT, "logs", "schedule_blocks.json")
 ALERT_STATE_FILE  = os.path.join(ROOT, "logs", "alert_state.json")
 ENV               = os.path.join(ROOT, ".env")
 
-ALL_DOMAINS  = ["gym", "ynab", "chore", "catchup", "homework", "spend", "social", "meal", "canvas"]
+ALL_DOMAINS  = ["gym", "ynab", "chore", "catchup", "homework", "spend", "social", "meal", "canvas", "briefing"]
 DOMAIN_ICON  = {"gym": "🏋️", "ynab": "💰", "chore": "🧹", "catchup": "⚡",
-                "homework": "📚", "spend": "💸", "social": "👫", "meal": "🍽️", "canvas": "🎓"}
+                "homework": "📚", "spend": "💸", "social": "👫", "meal": "🍽️", "canvas": "🎓",
+                "briefing": "☀️"}
 EDITABLE     = ["PARTNER_NAME", "PARTNER_SIGNAL", "PROPOSE_AHEAD_DAYS", "PLAN_LEAD_DAYS",
                 "DISCRETIONARY", "OUTING_COSTS", "YNAB_COVER_ORDER", "YNAB_NO_ASSIGN",
                 "EVENT_CALS", "SOCIAL_CAL", "BLOCK_CAL"]
@@ -247,6 +248,17 @@ def _canvas_pending():
     return {"count": p.get("count"), "at": p.get("at"),
             "titles": (p.get("titles") or [])[:30]}
 
+def _today_briefing():
+    """The daily briefing (run_briefing) writes logs/briefing.json. Show it only
+    if it's from today — a stale briefing is worse than none."""
+    try:
+        b = json.load(open(os.path.join(ROOT, "logs", "briefing.json"), encoding="utf-8"))
+    except Exception:
+        return None
+    if b.get("date") != datetime.date.today().isoformat():
+        return None
+    return {"text": b.get("text", ""), "facts": b.get("facts") or {}}
+
 def _relogin_canvas():
     subprocess.Popen([sys.executable, os.path.join(ROOT, "scripts", "canvas_relogin.py")],
                      cwd=ROOT, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -358,6 +370,7 @@ def _build_context(fs):
         "canvas_status":    _canvas_status(),
         "canvas_pending":   _canvas_pending(),
         "recent_actions":   actions.recent(15),
+        "briefing":         _today_briefing(),
     }
 
 

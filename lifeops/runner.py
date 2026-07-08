@@ -555,6 +555,58 @@ def run_digest(fs, yn, now):
     except Exception as e:
         print(f"[digest] error: {e}")
 
+def run_briefing(fs, yn, now):
+    """Daily morning briefing (once/day) — the daily counterpart to the weekly
+    Sunday digest. Surfaces the risk/forecast the engines ALREADY compute
+    (at-risk coursework, today's load vs. capacity, gym status, discretionary
+    money) as one glanceable ntfy + a panel card, so a looming deadline or a
+    dwindling budget shows up proactively instead of only when you go looking.
+    Inspired by Motion's deadline-risk surfacing + Sunsama's morning plan."""
+    if not config.ANTHROPIC_API_KEY:
+        print("[briefing] skip (no key)"); return
+    from .engines import load_engine
+    from . import llm
+    today = now.date()
+
+    # coursework: at-risk items + due-today + total load in the next 7 days
+    # (reuse the homework watcher's own inputs so the two never disagree)
+    hw = gather.homework_input(fs, now)
+    risks = [t for t, _lvl in load_engine.plan(hw)["alerts"]]
+    due_today = [a["title"] for a in hw if 0 <= a.get("due_in_h", 1e9) <= 24]
+    load_7d_h = round(sum(a.get("remaining_min", 0) for a in hw
+                          if a.get("due_in_days", 99) <= 7) / 60.0, 1)
+
+    # gym: sessions this (calendar) week vs target, and whether trained today
+    wk_start = (today - datetime.timedelta(days=today.weekday())).isoformat()
+    gym_this_week = len(history.days_with("gym", wk_start, today.isoformat()))
+    trained_today = bool(history.days_with("gym", today.isoformat(), today.isoformat()))
+
+    # money: discretionary balance + the nearest upcoming paid social events
+    try:
+        sp = gather.spend_input(fs, yn, now)
+        fun_money = round(sp.get("fun_money", 0))
+        near = sorted(sp.get("events", []), key=lambda e: e.get("days_until", 99))[:2]
+        upcoming = [f"{e['label']} in {e['days_until']}d (~${e['cost']})" for e in near]
+    except Exception:
+        fun_money, upcoming = None, []
+
+    facts = {"date": today.isoformat(), "weekday": now.strftime("%A"),
+             "coursework_at_risk": risks, "due_today": due_today,
+             "coursework_hours_next_7d": load_7d_h,
+             "gym_this_week": gym_this_week, "gym_target": 4,
+             "trained_today": trained_today,
+             "discretionary_dollars": fun_money, "upcoming_paid_events": upcoming}
+    try:
+        text = llm.daily_briefing(facts)
+    except Exception as e:
+        print(f"[briefing] llm error: {e}"); return
+    _alert_once("briefing:" + today.isoformat(), text, click_anchor="briefing")
+    # persist for the panel (survives the once/day ntfy dedup)
+    bp = os.path.join(history.ROOT, "logs", "briefing.json")
+    os.makedirs(os.path.dirname(bp), exist_ok=True)
+    _save_json_atomic(bp, {"date": today.isoformat(), "text": text, "facts": facts})
+    print("[briefing] sent")
+
 def run_canvas(fs, yn, now):
     """Sync newly-unlocked Canvas modules → FlowSavvy tasks.
 
@@ -883,7 +935,8 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now):
 
 DOMAINS = {"gym": run_gym, "ynab": run_ynab, "chore": run_chore, "catchup": run_catchup,
            "homework": run_homework, "spend": run_spend, "social": run_social,
-           "meal": run_meal, "digest": run_digest, "canvas": run_canvas}
+           "meal": run_meal, "digest": run_digest, "canvas": run_canvas,
+           "briefing": run_briefing}
 
 # Tiers are keyed by latency need, not just cost. ingest() runs before every tier
 # (so phone signals + completions are recorded each cycle no matter which fires).
@@ -902,7 +955,11 @@ TIERS = {
     # YNAB+FlowSavvy fetches were 143 wasted round-trips/day), and canvas syncs
     # at most once/day by nature (new modules unlock at most daily).
     "tick":  ["catchup", "meal", "gym"],
-    "daily": ["ynab", "homework", "social", "chore", "meal", "spend", "digest", "canvas"],
+    # briefing runs in the daily tier; _alert_once dedups so the first daily run
+    # of the day (the morning one) sends it and later runs are no-ops. It reads
+    # homework/spend/gym state the other daily domains refresh, so it's ordered
+    # last to brief on the freshest numbers.
+    "daily": ["ynab", "homework", "social", "chore", "meal", "spend", "digest", "canvas", "briefing"],
 }
 
 def _capture(fn, *args):

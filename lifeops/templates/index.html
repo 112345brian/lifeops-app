@@ -409,6 +409,22 @@ input[type=date]:focus { outline: 2px solid var(--md-primary); outline-offset: 1
   <button class="banner-dismiss" onclick="document.getElementById('install-hint').style.display='none'">×</button>
 </div>
 
+{% if briefing %}
+<!-- ── Today's briefing (run_briefing) ── -->
+<div class="card section" id="briefing">
+  <div class="card-title">☀️ Today's briefing</div>
+  <div style="font-size:14px;line-height:1.5;">{{ briefing.text }}</div>
+  {% if briefing.facts %}
+  <div class="gym-note" style="margin-top:.5rem;">
+    {% if briefing.facts.due_today %}<b>Due today:</b> {{ briefing.facts.due_today|join(', ') }}. {% endif %}
+    <b>Next 7d coursework:</b> ~{{ briefing.facts.coursework_hours_next_7d }}h ·
+    <b>Gym:</b> {{ briefing.facts.gym_this_week }}/{{ briefing.facts.gym_target }} this week{% if briefing.facts.discretionary_dollars is not none %} ·
+    <b>Discretionary:</b> ${{ briefing.facts.discretionary_dollars }}{% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
 <!-- ── Stat pills ── -->
 <div class="stats-row">
   <div class="stat-pill">

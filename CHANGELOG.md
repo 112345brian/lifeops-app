@@ -7,6 +7,20 @@ change matter more here than semver strictness.
 ## Unreleased
 
 ### Added
+- **Daily morning briefing** (`briefing` domain) — the daily counterpart to the
+  weekly Sunday digest, and the first feature from a competitor-research pass
+  (inspired by Motion's deadline-risk surfacing + Sunsama's morning plan). Once
+  a day it assembles facts the engines *already* compute — at-risk coursework +
+  today's due items + total load in the next 7 days (via `load_engine`), gym
+  sessions this week vs. target, discretionary balance + nearest paid social
+  events (via `spend_input`) — and asks the LLM for one short, dry heads-up:
+  what's genuinely at risk, today's shape, one suggestion. Delivered as a
+  once/day ntfy (deep-links to `#briefing`) and a "Today's briefing" panel card
+  with the raw numbers underneath. Wired into the `daily` tier (`_alert_once`
+  dedups so only the morning run sends) and the panel domain toggles. New
+  `llm.daily_briefing()`; persisted to `logs/briefing.json`. The point: a
+  looming deadline or a dwindling budget surfaces proactively instead of only
+  when you go looking.
 - **Backfill a gym session by dropping it on the calendar.** Add a gym
   event/task (title starting "Gym") on a past slot — e.g. from your phone —
   and the next `run_gym` tick logs it as attendance (`history` `gym`, source

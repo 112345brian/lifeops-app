@@ -72,3 +72,19 @@ def weekly_digest(facts):
     msg = _c().messages.create(model=config.JUDGE_MODEL, max_tokens=220,
                                messages=[{"role": "user", "content": prompt}])
     return msg.content[0].text.strip()
+
+
+def daily_briefing(facts):
+    """One short morning briefing from today's facts — schedule load, at-risk
+    coursework deadlines, gym status, discretionary money. NL synthesis of data
+    the engines already computed; keep it a glanceable heads-up, not a lecture."""
+    prompt = ("You are Brian's sharp, concise morning chief-of-staff. From the facts, "
+              "write a 2-4 sentence briefing for TODAY: lead with anything genuinely "
+              "at risk (a deadline that won't fit, money running short), then today's "
+              "shape (load vs. capacity, gym), then ONE concrete suggestion if "
+              "warranted. Plain, direct, a little dry. No greeting, no sign-off, no "
+              "emoji spam. If nothing's on fire, say so briefly.\nFacts: "
+              + json.dumps(facts))
+    msg = _c().messages.create(model=config.JUDGE_MODEL, max_tokens=240,
+                               messages=[{"role": "user", "content": prompt}])
+    return msg.content[0].text.strip()
