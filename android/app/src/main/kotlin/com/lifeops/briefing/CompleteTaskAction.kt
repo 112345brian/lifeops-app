@@ -11,11 +11,10 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * Fired when the user taps a task's checkbox in the widget. POSTs
- * /api/tasks/{id}/complete (which completes the task in FlowSavvy server-side
- * and returns the fresh next-tasks list in the same response), then persists
- * that fresh list directly -- no need to wait for NextTasksRefreshWorker's
- * next 15-minute cycle.
+ * Fired when the user taps a task's checkbox in the widget. Calls
+ * /api/tasks/{id}/complete directly, which completes the task in FlowSavvy
+ * and returns the fresh next-tasks list in the same response, then persists
+ * that response into widget state.
  */
 class CompleteTaskAction : ActionCallback {
     override suspend fun onAction(
@@ -27,11 +26,12 @@ class CompleteTaskAction : ActionCallback {
         val baseUrl = WidgetConfigStore.getBaseUrl(context) ?: return
         val token = WidgetConfigStore.getToken(context) ?: return
 
-        val body = try {
-            completeTask(baseUrl, token, taskId)
+        val body: String
+        try {
+            body = completeTask(baseUrl, token, taskId)
         } catch (e: IOException) {
-            Log.e(TAG, "error completing task $taskId at $baseUrl", e)
-            return // network hiccup -- next periodic pull will reconcile
+            Log.e(TAG, "error completing task $taskId", e)
+            return
         }
 
         val state = NextTasksState.fromApiResponse(body, System.currentTimeMillis())
@@ -39,7 +39,7 @@ class CompleteTaskAction : ActionCallback {
     }
 
     private fun completeTask(baseUrl: String, token: String, taskId: String): String {
-        val url = URL("$baseUrl/api/tasks/$taskId/complete?token=$token")
+        val url = URL(authenticatedUrl(baseUrl, "/api/tasks/$taskId/complete", token))
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 10_000

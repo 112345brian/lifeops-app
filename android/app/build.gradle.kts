@@ -76,4 +76,9 @@ dependencies {
     // compatible versions, so firebase-messaging itself is unversioned.
     implementation(platform("com.google.firebase:firebase-bom:34.15.0"))
     implementation("com.google.firebase:firebase-messaging")
+
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("androidx.glance:glance-testing:1.1.1")
+    testImplementation("androidx.glance:glance-appwidget-testing:1.1.1")
+    testImplementation("org.robolectric:robolectric:4.16.1")
 }

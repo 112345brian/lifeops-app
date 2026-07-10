@@ -11,8 +11,8 @@ import androidx.work.WorkManager
  *
  * Registered in AndroidManifest.xml with the APPWIDGET_UPDATE intent-filter
  * and pointed at res/xml/briefing_widget_info.xml. The briefing itself is
- * push-only via BriefingReceiver (ntfy broadcasts) -- no scheduling needed
- * for that. The next-tasks list, however, is periodic pull (see
+ * push-only via BriefingFcmService (Firebase Cloud Messaging) -- no
+ * scheduling needed for that. The next-tasks list, however, is periodic pull (see
  * NextTasksRefreshWorker), scheduled here as soon as the first widget
  * instance is placed and cancelled once the last is removed. Per the
  * AppWidgetProvider/GlanceAppWidgetReceiver contract, onEnabled fires only
@@ -26,6 +26,7 @@ class BriefingWidgetReceiver : GlanceAppWidgetReceiver() {
     override fun onEnabled(context: Context) {
         super.onEnabled(context)
         NextTasksRefreshWorker.schedulePeriodic(context)
+        BriefingSyncWorker.enqueue(context)
     }
 
     override fun onDisabled(context: Context) {

@@ -24,13 +24,13 @@ import java.util.concurrent.TimeUnit
 /**
  * Periodically pulls the "what's next" task list from the lifeops server and
  * pushes it into every placed widget's Glance state. Unlike the briefing
- * (push-only via ntfy), this is a real periodic pull: the user confirmed
+ * (push-only via FCM), this is a real periodic pull: the user confirmed
  * 15-minute staleness is fine here since completing 3 tasks in under 15
  * minutes isn't realistic, and this is scoped narrowly to just this one
  * field rather than the whole widget.
  *
- * HTTP client choice: same reasoning as the pre-ntfy-pivot briefing worker --
- * one GET, no request body, no need for a full HTTP client.
+ * HTTP client choice: one GET, no request body, no need for a full HTTP
+ * client.
  */
 class NextTasksRefreshWorker(
     appContext: Context,
@@ -68,7 +68,7 @@ class NextTasksRefreshWorker(
     }
 
     private fun fetchNextTasks(baseUrl: String, token: String): String {
-        val url = URL("$baseUrl/api/next-tasks?token=$token")
+        val url = URL(authenticatedUrl(baseUrl, "/api/next-tasks", token))
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = CONNECT_TIMEOUT_MS

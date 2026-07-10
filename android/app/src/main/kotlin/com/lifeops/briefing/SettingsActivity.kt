@@ -19,25 +19,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
-import com.google.firebase.messaging.FirebaseMessaging
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 /** Settings screen: panel base URL (used by [OpenPanelAction]'s tap-to-open
  * deep link, and as the target for FCM-token registration/next-tasks calls)
- * and auth token (used by [NextTasksRefreshWorker]/[CompleteTaskAction] and
- * FCM-token registration -- the briefing push itself needs neither, Firebase
- * handles delivery). Also doubles as the app's only launcher activity, since
- * the widget itself has no other UI entry point. */
+ * and auth token (used by [NextTasksRefreshWorker], [CompleteTaskAction], and
+ * FCM-token registration). Also doubles as the app's only launcher activity,
+ * since the widget itself has no other UI entry point. */
 class SettingsActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -58,7 +51,6 @@ class SettingsActivity : ComponentActivity() {
 private fun SettingsScreen(context: Context, onSaved: () -> Unit) {
     var baseUrl by remember { mutableStateOf(WidgetConfigStore.getBaseUrl(context) ?: "") }
     var token by remember { mutableStateOf(WidgetConfigStore.getToken(context) ?: "") }
-    val scope = rememberCoroutineScope()
 
     Column(
         modifier = Modifier
@@ -90,20 +82,10 @@ private fun SettingsScreen(context: Context, onSaved: () -> Unit) {
                 WidgetConfigStore.save(context, baseUrl.trim(), token.trim())
                 WorkManager.getInstance(context)
                     .enqueue(OneTimeWorkRequestBuilder<NextTasksRefreshWorker>().build())
-                // Register the current FCM token now too -- covers the
-                // common case where Settings gets configured after
-                // BriefingFcmService.onNewToken already fired once (e.g.
-                // right after install, before a panel URL/token existed).
-                scope.launch {
-                    val fcmToken = try {
-                        FirebaseMessaging.getInstance().token.await()
-                    } catch (e: Exception) {
-                        null
-                    }
-                    if (fcmToken != null) {
-                        withContext(Dispatchers.IO) { registerToken(context, fcmToken) }
-                    }
-                }
+                // WorkManager owns this operation after the activity closes,
+                // so token registration cannot be cancelled by composition
+                // disposal. It also pulls today's briefing immediately.
+                BriefingSyncWorker.enqueue(context)
                 Toast.makeText(context, "Saved", Toast.LENGTH_SHORT).show()
                 onSaved()
             },
@@ -113,11 +95,3 @@ private fun SettingsScreen(context: Context, onSaved: () -> Unit) {
         }
     }
 }
-
-/** Small local await() for a Firebase Task, avoiding a dependency on
- * kotlinx-coroutines-play-services just for this one call. */
-private suspend fun <T> com.google.android.gms.tasks.Task<T>.await(): T =
-    kotlinx.coroutines.suspendCancellableCoroutine { cont ->
-        addOnSuccessListener { cont.resumeWith(Result.success(it)) }
-        addOnFailureListener { cont.resumeWith(Result.failure(it)) }
-    }

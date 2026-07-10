@@ -50,7 +50,12 @@ async def _auth(request: Request, call_next):
         # are withheld on exactly that kind of navigation on some
         # OS/browser notification plumbing -- Lax still blocks the
         # cross-site POST/embed cases Strict exists to guard against.
-        if query_token and request.method in ("GET", "HEAD"):
+        # Browser pages get a clean URL and an auth cookie. API clients such
+        # as the Android widget do not maintain a browser cookie jar, so they
+        # must be allowed to authenticate each request with the query token
+        # and receive the JSON response directly.
+        if (query_token and request.method in ("GET", "HEAD")
+                and not request.url.path.startswith("/api/")):
             clean_url = request.url.remove_query_params("token")
             resp = RedirectResponse(clean_url, status_code=303)
             resp.set_cookie("lifeops_auth", config.WEB_TOKEN,

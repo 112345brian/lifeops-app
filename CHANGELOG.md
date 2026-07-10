@@ -4,6 +4,31 @@ Notable changes, newest first. Personal project, versioned simply (see
 `VERSION` / `lifeops.__version__`) — dates and the reasoning behind each
 change matter more here than semver strictness.
 
+## [1.3.0] — 2026-07-10
+
+### Added
+- **Android home-screen widget** for the daily briefing + next-tasks, backed
+  by a new `android/` Glance app. The briefing is push-delivered via Firebase
+  Cloud Messaging (an earlier ntfy-broadcast design couldn't reliably wake a
+  stopped app), routed through a `BriefingSyncWorker` (WorkManager) so
+  delivery survives process death and gets retry/backoff instead of running
+  in a bare coroutine — the same worker also does an immediate pull on
+  first setup so a freshly-placed widget populates right away rather than
+  waiting for the next push. The next-tasks list is a real 15-minute
+  periodic pull (`NextTasksRefreshWorker`), and tapping a task's checkbox
+  completes it straight from the widget via `/api/tasks/{id}/complete`,
+  which completes it in FlowSavvy and returns the fresh list in the same
+  round trip. New backend surface: `/api/briefing`, `/api/next-tasks`,
+  `/api/tasks/{id}/complete`, `/api/register-fcm-token`, and the FCM send
+  path in `run_briefing`.
+- Android unit test coverage (Robolectric/Glance) for the widget's markdown
+  rendering.
+
+### Fixed
+- `/api/*` requests authenticated via a `?token=` query param (as the widget
+  does, with no cookie jar) now return JSON directly instead of being
+  redirected into the browser cookie-auth flow.
+
 ## [1.2.0] — 2026-07-09
 
 ### Added

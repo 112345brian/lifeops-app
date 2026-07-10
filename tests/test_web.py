@@ -39,6 +39,15 @@ def test_token_query_redirects_to_clean_url_and_sets_cookie(monkeypatch):
     assert "SameSite=lax" in response.headers["set-cookie"]
 
 
+def test_api_token_query_returns_json_without_browser_redirect(monkeypatch):
+    monkeypatch.setattr(config, "WEB_TOKEN", "secret")
+
+    response = TestClient(web.app).get("/api/status?token=secret", follow_redirects=False)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/json")
+
+
 @pytest.mark.parametrize("path", ["/", "/gym", "/schedule", "/history", "/settings"])
 def test_non_recurring_pages_render_without_flowsavvy(path, monkeypatch):
     monkeypatch.setattr(config, "WEB_TOKEN", "")

@@ -1,16 +1,12 @@
 package com.lifeops.briefing
 
 import android.util.Log
-import androidx.glance.GlanceId
 import androidx.glance.appwidget.GlanceAppWidgetManager
 import androidx.glance.appwidget.state.updateAppWidgetState
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import com.lifeops.briefing.data.BriefingState
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import org.json.JSONException
+import org.json.JSONObject
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
@@ -34,16 +30,7 @@ class BriefingFcmService : FirebaseMessagingService() {
 
     override fun onMessageReceived(message: RemoteMessage) {
         val payload = message.data["payload"] ?: return
-        val state = try {
-            BriefingState.fromApiResponse(payload, System.currentTimeMillis())
-        } catch (e: JSONException) {
-            Log.e(TAG, "malformed FCM briefing payload", e)
-            return
-        }
-
-        CoroutineScope(Dispatchers.IO).launch {
-            forEachGlanceId { glanceId -> persistForInstance(glanceId, state) }
-        }
+        BriefingSyncWorker.enqueuePayload(applicationContext, payload)
     }
 
     /** Called once on first install/token refresh, and again whenever the
@@ -52,38 +39,16 @@ class BriefingFcmService : FirebaseMessagingService() {
      * current token, which covers the common case where Settings gets
      * configured after this fires. */
     override fun onNewToken(token: String) {
-        CoroutineScope(Dispatchers.IO).launch {
-            registerToken(applicationContext, token)
-        }
-    }
-
-    private suspend fun forEachGlanceId(block: suspend (GlanceId) -> Unit) {
-        val manager = GlanceAppWidgetManager(applicationContext)
-        for (glanceId in manager.getGlanceIds(BriefingWidget::class.java)) {
-            block(glanceId)
-        }
-    }
-
-    private suspend fun persistForInstance(glanceId: GlanceId, state: BriefingState) {
-        updateAppWidgetState(applicationContext, glanceId) { prefs ->
-            prefs[WidgetKeys.BRIEFING_JSON] = state.toJson()
-            state.fetchedAtEpochMillis?.let { prefs[WidgetKeys.LAST_FETCHED_AT] = it }
-        }
-        BriefingWidget().update(applicationContext, glanceId)
-    }
-
-    companion object {
-        private const val TAG = "BriefingFcmService"
+        BriefingSyncWorker.enqueue(applicationContext)
     }
 }
 
-/** Shared by both onNewToken and SettingsActivity's Save button so a fresh
- * FCM token gets to the server the same way from either path. */
-internal fun registerToken(context: android.content.Context, token: String) {
-    val baseUrl = WidgetConfigStore.getBaseUrl(context) ?: return
-    val authToken = WidgetConfigStore.getToken(context) ?: return
+/** Registers the current device token with the single-user LifeOps server. */
+internal fun registerToken(context: android.content.Context, token: String): Boolean {
+    val baseUrl = WidgetConfigStore.getBaseUrl(context) ?: return false
+    val authToken = WidgetConfigStore.getToken(context) ?: return false
     try {
-        val url = URL("$baseUrl/api/register-fcm-token?token=$authToken")
+        val url = URL(authenticatedUrl(baseUrl, "/api/register-fcm-token", authToken))
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             doOutput = true
@@ -92,15 +57,30 @@ internal fun registerToken(context: android.content.Context, token: String) {
             readTimeout = 15_000
         }
         try {
-            connection.outputStream.use { it.write("""{"fcm_token":"$token"}""".toByteArray()) }
+            val body = JSONObject().put("fcm_token", token).toString()
+            connection.outputStream.use { it.write(body.toByteArray()) }
             val code = connection.responseCode
             if (code != HttpURLConnection.HTTP_OK) {
                 Log.e("BriefingFcmService", "register-fcm-token returned HTTP $code")
+                return false
             }
+            return true
         } finally {
             connection.disconnect()
         }
     } catch (e: IOException) {
         Log.e("BriefingFcmService", "error registering FCM token at $baseUrl", e)
+        return false
+    }
+}
+
+internal suspend fun persistBriefingForAllInstances(context: android.content.Context, state: BriefingState) {
+    val manager = GlanceAppWidgetManager(context)
+    for (glanceId in manager.getGlanceIds(BriefingWidget::class.java)) {
+        updateAppWidgetState(context, glanceId) { prefs ->
+            prefs[WidgetKeys.BRIEFING_JSON] = state.toJson()
+            state.fetchedAtEpochMillis?.let { prefs[WidgetKeys.LAST_FETCHED_AT] = it }
+        }
+        BriefingWidget().update(context, glanceId)
     }
 }
