@@ -56,7 +56,9 @@ memory of what actually happened, not FlowSavvy's lossy task state.
 
 ## Setup
 1. `pip install -r requirements.txt`
-2. `cp .env.example .env` and fill it in:
+2. Copy `.env.example` to `private/.env` when the private submodule is present,
+   or to root `.env` otherwise, and fill it in. The control panel edits the
+   same file the runtime selected:
    - **FlowSavvy**: base URL + token from `my.flowsavvy.app/api/docs`, plus
      the list/scheduling-hours ids for your account
    - **YNAB**: token (Account Settings > Developer Settings)

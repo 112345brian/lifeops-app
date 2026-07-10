@@ -67,13 +67,21 @@ _SIG = {"gym": "gym", "gym-nocount": "gym_skip",
         config.PARTNER_SIGNAL: "partner", "hung friends": "friends",
         "fell-asleep": "sleep", "woke-up": "wake"}
 
-def _classify(title):
+def _classify(title, notes=None):
     t = (title or "").lower()
+    # An explicitly configured partner task is more specific than a generic
+    # "friend" mention in its notes. Guard against PARTNER_TASK being blank
+    # (settable via the Settings page) -- "" is a substring of every string,
+    # so an empty config value would otherwise match and misclassify every
+    # single task as "partner".
+    if config.PARTNER_TASK and config.PARTNER_TASK.lower() in t:
+        return "partner"
+    if gather._is_friend_hangout(title, notes):
+        return "friends"
     for k, v in [("gym", "gym"), ("laundry", "laundry"), ("clean room", "clean_room"),
                  ("clean bathroom", "clean_bathroom"), ("tidy car", "tidy_car"),
                  ("car wash", "car_wash"), ("oil change", "oil"),
-                 (config.PARTNER_TASK.lower(), "partner"),
-                 ("friends", "friends"), ("meal prep", "meal"), ("groceries", "groceries"),
+                 ("meal prep", "meal"), ("groceries", "groceries"),
                  ("studio", "studio")]:
         if k in t:
             return v
@@ -114,7 +122,7 @@ def ingest(fs, now):
         key = f"{t['id']}@{t.get('lastModified','')}"
         if key in logged:
             continue
-        act = _classify(t.get("title"))
+        act = _classify(t.get("title"), t.get("notes"))
         if act:
             history.append(act, ts=(t.get("lastModified") or "")[:19], source="flowsavvy",
                            meta={"id": t["id"]})
@@ -280,6 +288,23 @@ def run_gym(fs, yn, now):
                 delete_errors.append(f"{t['id']}: {e}")
     if deleted_ids:
         gym_open = [t for t in gym_open if t["id"] not in deleted_ids]
+    # "Wind down" is a window-of-opportunity reminder, not a task you can do
+    # late — once its block has passed, doing it holds no value, so prune it
+    # the same way stale gym blocks are pruned above instead of letting it
+    # sit as a stale/overdue item forever.
+    wd_open = [t for t in fs.list_items(itemType="task", query="Wind down", completed=False).get("items", [])
+              if (t.get("title") or "").startswith("Wind down")]
+    for t in wd_open:
+        sd = t.get("startDateTime") or ""
+        ed = t.get("endDateTime") or ""
+        d = sd[:10]
+        past_day = bool(d) and d < today
+        elapsed_today = d == today and bool(ed) and ed < now_iso
+        if past_day or elapsed_today:
+            try:
+                fs.delete_item(t["id"]); _touch()
+            except Exception as e:
+                delete_errors.append(f"{t['id']}: {e}")
     gym_state_path = os.path.join(history.ROOT, "logs", "gym_state.json")
     try:
         sick_until = json.load(open(gym_state_path, encoding="utf-8")).get("sick_until")
@@ -403,8 +428,16 @@ def run_catchup(fs, yn, now):
                 for m in ntfy.poll(since=st["lastHandled"]))
     if fired:
         fs.recalculate(reschedule_past=True)
-        ntfy.alert("Catch-up: re-packed your whole schedule around what's left.",
-                  click=ntfy.panel_url())
+        # The recalculate already happened -- a failed/rate-limited alert
+        # (ntfy.alert now raises on non-2xx) must not stop "lastHandled"
+        # from being persisted below, or the same trigger message gets
+        # replayed on every future tick, re-firing a full reschedule each
+        # time until an alert happens to succeed.
+        try:
+            ntfy.alert("Catch-up: re-packed your whole schedule around what's left.",
+                      click=ntfy.panel_url())
+        except Exception as e:
+            print(f"[catchup] alert failed (non-fatal): {e}")
         print("[catchup] re-packed")
     else:
         print("[catchup] no trigger")
@@ -602,7 +635,10 @@ def run_briefing(fs, yn, now):
         text = llm.daily_briefing(facts)
     except Exception as e:
         print(f"[briefing] llm error: {e}"); return
-    _alert_once("briefing:" + today.isoformat(), text, click_anchor="briefing")
+    # "#briefing" (not "briefing") -- panel_url() joins this straight onto
+    # the base path, and the briefing card lives on the Home page as an
+    # anchor, not its own route, so this needs the bare-path+anchor form.
+    _alert_once("briefing:" + today.isoformat(), text, click_anchor="#briefing")
     # persist for the panel (survives the once/day ntfy dedup)
     bp = os.path.join(history.ROOT, "logs", "briefing.json")
     os.makedirs(os.path.dirname(bp), exist_ok=True)
@@ -677,7 +713,7 @@ def run_canvas(fs, yn, now):
                 _alert_once("canvas:session:" + now.date().isoformat(),
                             "Canvas session expired — tap to re-login from the control panel, "
                             "or run `python scripts/canvas_login.py`.", "high",
-                            click_anchor="accounts")
+                            click_anchor="settings#accounts")
                 print("[canvas] skip (browser session expired)")
                 return
             _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now)
@@ -877,7 +913,7 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now):
         _alert_once("canvas:flood:" + today.isoformat(),
                     f"⚠️ Canvas sync wanted to create {len(creates)} tasks — held as suspicious "
                     f"(usually a state-loss re-sync, not that many real new tasks). "
-                    f"Review + approve in the panel.", "high", click_anchor="canvas")
+                    f"Review + approve in the panel.", "high", click_anchor="settings#canvas")
         print(f"[canvas] HELD {len(creates)} creates (flood guard > {_CANVAS_FLOOD_MAX})")
         return
     # Cleared the guard: consume the one-shot ack and drop any stale pending file.
@@ -904,9 +940,14 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now):
             tid = (r or {}).get("id") or (r or {}).get("item", {}).get("id")
             if tid:
                 created_titles[spec["title"]] = tid
-            # durable audit trail — creations must survive discarded stdout
+            # durable audit trail — creations must survive discarded stdout.
+            # creates_task=True tells the History page's undo button that
+            # meta.id is a FlowSavvy item THIS log entry created (so undo
+            # should delete it too), as opposed to an id that just
+            # references something that already existed (e.g. a completed
+            # task an ntfy/flowsavvy-sourced log entry points at).
             history.append("course_task", source="canvas",
-                           meta={"id": tid, "title": spec["title"]})
+                           meta={"id": tid, "title": spec["title"], "creates_task": bool(tid)})
             actions.log("canvas", "created course task", spec["title"],
                         item_id=tid, undoable=True)
             _touch()
@@ -1001,6 +1042,19 @@ TIERS = {
               "deadlines", "cashflow", "briefing"],
 }
 
+def _selected_domains(args, enabled):
+    """Expand tier/domain arguments once, preserving order and rejecting typos."""
+    selected = []
+    explicit = {a for a in args if a in DOMAINS}
+    unknown = [a for a in args if a not in TIERS and a not in DOMAINS]
+    for arg in args:
+        if arg in unknown:
+            continue
+        for name in TIERS.get(arg, [arg]):
+            if name not in selected and (name in explicit or enabled.get(name, True)):
+                selected.append(name)
+    return selected, unknown
+
 def _capture(fn, *args):
     """Run fn with stdout captured so its one-line summaries survive pythonw
     (where prints are silently discarded). Echoes to a real console if any."""
@@ -1069,17 +1123,15 @@ def _run():
         errors["ingest"] = str(e); details["ingest"] = f"ERROR: {e}"
         print(f"[ingest] ERROR: {e}")
 
-    names, explicit = [], set()
-    for a in (sys.argv[1:] or ["tick"]):
-        if a in TIERS:
-            names.extend(TIERS[a])
-        else:
-            names.append(a); explicit.add(a)   # explicit "run X" always runs
+    args = sys.argv[1:] or ["tick"]
     try:
         enabled = json.load(open(os.path.join(history.ROOT, "logs", "domains.json"), encoding="utf-8"))
     except Exception:
         enabled = {}
-    names = [n for n in names if n in explicit or enabled.get(n, True)]
+    names, unknown = _selected_domains(args, enabled)
+    if unknown:
+        errors["dispatch"] = "unknown domain/tier: " + ", ".join(unknown)
+        details["dispatch"] = "ERROR: " + errors["dispatch"]
     for name in names:
         fn = DOMAINS.get(name)
         if not fn:
@@ -1095,9 +1147,14 @@ def _run():
         except Exception as e: errors["recalculate"] = str(e)
 
     if errors:                        # fail loud — never silent
-        _alert_once("health:" + now.date().isoformat(),
-                    "⚠️ LifeOps errors — " + "; ".join(f"{k}: {v[:40]}" for k, v in errors.items()),
-                    "high")
+        try:
+            _alert_once("health:" + now.date().isoformat(),
+                        "⚠️ LifeOps errors — " + "; ".join(f"{k}: {v[:40]}" for k, v in errors.items()),
+                        "high")
+        except Exception as e:
+            # A notification outage must not prevent the heartbeat and durable
+            # run logs from recording the original failure.
+            errors["health_alert"] = str(e)
     _heartbeat(not errors)
     rec = {"ts": now.isoformat(timespec="seconds"), "args": sys.argv[1:],
            "ran": names, "errors": errors, "details": details}

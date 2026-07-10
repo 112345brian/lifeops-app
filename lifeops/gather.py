@@ -1,13 +1,26 @@
 """Turn live FlowSavvy data + history into the structured inputs engines expect.
 All personal identifiers come from config (.env) — none hardcoded here.
 """
-import datetime, json, os
+import datetime, json, os, re
 from . import history, config, adherence
 
 # Canonical path — web.py imports this instead of re-deriving it, so the
 # writer (web UI "block this day") and reader (this module's engine feed)
 # can never silently diverge onto two different files.
 GYM_BLOCKS_FILE = os.path.join(history.ROOT, "logs", "gym_blocks.json")
+
+def _is_friend_hangout(title, notes):
+    """A task counts as a friend hangout if its title/notes say so directly
+    ("friend"/"friends" — word-boundary, so both singular and plural match),
+    or the title names someone in FRIEND_NAMES (config) — the same idea as
+    PARTNER_NAME, but for hangouts that aren't literally titled "Friends".
+    Lives here (not runner.py) so social_input's has_friend check and
+    runner._classify's history-logging check share one definition instead
+    of silently drifting apart."""
+    text = f"{title or ''} {notes or ''}".lower()
+    if re.search(r"\bfriends?\b", text):
+        return True
+    return any(re.search(rf"\b{re.escape(n.lower())}\b", text) for n in config.FRIEND_NAMES)
 
 def _d(iso):  return (iso or "")[:10]
 def _hm(iso): return (iso or "")[11:16]
@@ -232,7 +245,13 @@ def social_input(fs, now):
         return any((t.get("title") or "") in (base, f"{base} (proposed)", f"Plan {base}")
                    for t in open_tasks)
     has_partner = _has(config.PARTNER_TASK)
-    has_friend = _has(config.FRIENDS_TASK)
+    # A task titled "Friends" always counts, same as before -- but so does
+    # any task that _is_friend_hangout would also log as a friend hangout
+    # (a FRIEND_NAMES match, or "friend(s)" in title/notes), so a hangout
+    # scheduled under someone's actual name doesn't go unrecognized here and
+    # get double-proposed/nagged about.
+    has_friend = _has(config.FRIENDS_TASK) or any(
+        _is_friend_hangout(t.get("title"), t.get("notes")) for t in open_tasks)
     if config.SOCIAL_CAL:
         try:
             for e in fs.list_items(itemType="event", calendarId=config.SOCIAL_CAL).get("items", []):

@@ -295,6 +295,7 @@ def plan(modules_data, existing_titles, today):
                              r.get("type","article"), unlock, readings_due, today)
             dup = _find_duplicate(t["title"], existing_norms)
             if dup is None:
+                t["_module_num"] = num
                 creates.append(t)
                 existing_norms.add(_normalize_title(t["title"]))
                 mod_lines.append(f"  + {t['title']} ({t['durationMinutes']}m)")
@@ -310,6 +311,7 @@ def plan(modules_data, existing_titles, today):
             for spec in specs:
                 dup = _find_duplicate(spec["title"], existing_norms)
                 if dup is None:
+                    spec["_module_num"] = num
                     creates.append(spec)
                     existing_norms.add(_normalize_title(spec["title"]))
                     mod_lines.append(f"  + {spec['title']} ({spec['durationMinutes']}m)")

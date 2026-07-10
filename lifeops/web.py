@@ -3,14 +3,15 @@
 Run:   uvicorn lifeops.web:app --host 0.0.0.0 --port 8765
 Reach: tailscale serve 8765  →  https://<your-pc>.<tailnet>.ts.net
 """
-import os, re, sys, json, subprocess, datetime
+import os, re, sys, json, subprocess, datetime, tempfile
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import quote
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, Form, Request, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from . import config, history, gather, actions
+from . import config, history, gather, actions, lock
 from .flowsavvy import FlowSavvy
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -34,13 +35,32 @@ async def _auth(request: Request, call_next):
     """Optional shared-secret gate for Tailscale/funnel exposure. With WEB_TOKEN
     set, open the panel once as /?token=<secret>; a cookie keeps you in."""
     if config.WEB_TOKEN:
-        supplied = request.query_params.get("token") or request.cookies.get("lifeops_auth")
+        query_token = request.query_params.get("token")
+        supplied = query_token or request.cookies.get("lifeops_auth")
         if supplied != config.WEB_TOKEN:
             return JSONResponse({"error": "unauthorized"}, status_code=401)
-        resp = await call_next(request)
-        if request.query_params.get("token") == config.WEB_TOKEN:
+        # Behind a TLS-terminating proxy (Tailscale funnel etc.) Uvicorn sees
+        # a plain-http request even though the real connection is https --
+        # check X-Forwarded-Proto too, consistently, wherever secure= is set.
+        forwarded = request.headers.get("x-forwarded-proto", "").split(",", 1)[0]
+        secure = request.url.scheme == "https" or forwarded == "https"
+        # Lax (not Strict): tapping an ntfy notification's Click link is a
+        # top-level GET navigation from outside the app, and Strict cookies
+        # are withheld on exactly that kind of navigation on some
+        # OS/browser notification plumbing -- Lax still blocks the
+        # cross-site POST/embed cases Strict exists to guard against.
+        if query_token and request.method in ("GET", "HEAD"):
+            clean_url = request.url.remove_query_params("token")
+            resp = RedirectResponse(clean_url, status_code=303)
             resp.set_cookie("lifeops_auth", config.WEB_TOKEN,
-                            max_age=90 * 24 * 3600, httponly=True)
+                            max_age=90 * 24 * 3600, httponly=True,
+                            secure=secure, samesite="lax")
+            return resp
+        resp = await call_next(request)
+        if query_token == config.WEB_TOKEN:
+            resp.set_cookie("lifeops_auth", config.WEB_TOKEN,
+                            max_age=90 * 24 * 3600, httponly=True,
+                            secure=secure, samesite="lax")
         return resp
     return await call_next(request)
 
@@ -52,14 +72,15 @@ GYM_BLOCKS_FILE   = gather.GYM_BLOCKS_FILE
 GYM_STATE_FILE    = os.path.join(ROOT, "logs", "gym_state.json")
 SCHED_BLOCKS_FILE = os.path.join(ROOT, "logs", "schedule_blocks.json")
 ALERT_STATE_FILE  = os.path.join(ROOT, "logs", "alert_state.json")
-ENV               = os.path.join(ROOT, ".env")
+ENV               = str(config.ENV_FILE)
 
-ALL_DOMAINS  = ["gym", "ynab", "chore", "catchup", "homework", "spend", "social", "meal", "canvas",
-                "briefing", "deadlines", "cashflow"]
+ALL_DOMAINS  = ["gym", "ynab", "chore", "catchup", "homework", "spend", "social", "meal", "digest",
+                "canvas", "briefing", "deadlines", "cashflow"]
 DOMAIN_ICON  = {"gym": "🏋️", "ynab": "💰", "chore": "🧹", "catchup": "⚡",
-                "homework": "📚", "spend": "💸", "social": "👫", "meal": "🍽️", "canvas": "🎓",
-                "briefing": "☀️", "deadlines": "⏰", "cashflow": "📈"}
-EDITABLE     = ["PARTNER_NAME", "PARTNER_SIGNAL", "PROPOSE_AHEAD_DAYS", "PLAN_LEAD_DAYS",
+                "homework": "📚", "spend": "💸", "social": "👫", "meal": "🍽️", "digest": "📝",
+                "canvas": "🎓", "briefing": "☀️", "deadlines": "⏰", "cashflow": "📈"}
+EDITABLE     = ["PARTNER_NAME", "PARTNER_TASK", "PARTNER_SIGNAL", "FRIENDS_TASK", "FRIEND_NAMES",
+                "PROPOSE_AHEAD_DAYS", "PLAN_LEAD_DAYS",
                 "DISCRETIONARY", "OUTING_COSTS", "YNAB_COVER_ORDER", "YNAB_NO_ASSIGN",
                 "EVENT_CALS", "SOCIAL_CAL", "BLOCK_CAL"]
 ACTION_COLOR = {"gym": "#4ade80", "gym_skip": "#6b7280", "chore_done": "#60a5fa",
@@ -75,6 +96,32 @@ def _domains():
         return json.load(open(DOMAINS_FILE, encoding="utf-8"))
     except Exception:
         return {}
+
+def _write_json(path, value):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=Path(path).name + "-", dir=os.path.dirname(path))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(value, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    finally:
+        try:
+            os.remove(tmp)
+        except FileNotFoundError:
+            pass
+
+@contextmanager
+def _exclusive():
+    try:
+        lock.acquire()
+    except lock.Locked:
+        raise HTTPException(status_code=409, detail="LifeOps is already running; retry shortly.")
+    try:
+        yield
+    finally:
+        lock.release()
 
 def _env_value(key):
     try:
@@ -97,7 +144,19 @@ def _set_env(key, val):
             break
     else:
         lines.append(f"{key}={val}")
-    open(ENV, "w", encoding="utf-8").write("\n".join(lines) + "\n")
+    os.makedirs(os.path.dirname(ENV), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix="env-", dir=os.path.dirname(ENV))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, ENV)
+    finally:
+        try:
+            os.remove(tmp)
+        except FileNotFoundError:
+            pass
 
 def _cycle_tasks(fs):
     out = []
@@ -130,10 +189,15 @@ def _last_run():
     return {"ts": ts, "ran": lr.get("ran", []), "errors": lr.get("errors") or {},
             "details": lr.get("details") or {}, "age_mins": age_mins}
 
-def _gym_stats():
+def _gym_stats(events=None):
+    """events: a pre-loaded history.events() list to filter in memory
+    instead of re-reading/re-parsing history.jsonl from disk (callers that
+    already have the list nearby, e.g. _build_context, should pass it in).
+    Defaults to loading it here for standalone callers like /api/status."""
+    events = history.events() if events is None else events
     cutoff     = (datetime.date.today() - datetime.timedelta(weeks=4)).isoformat()
-    evts       = [e for e in history.events("gym")      if e["ts"][:10] >= cutoff]
-    skip_dates = {e["ts"][:10] for e in history.events("gym_skip")}
+    evts       = [e for e in events if e.get("action") == "gym" and e["ts"][:10] >= cutoff]
+    skip_dates = {e["ts"][:10] for e in events if e.get("action") == "gym_skip"}
     real       = [e for e in evts if e["ts"][:10] not in skip_dates]
     morning    = sum(1 for e in real
                      if datetime.datetime.fromisoformat(e["ts"]).hour < 12)
@@ -143,18 +207,28 @@ def _gym_stats():
     return {"total_4w": len(real), "morning": morning,
             "evening": len(real) - morning, "this_week": this_week}
 
-def _gym_calendar():
-    """Mon-aligned 2-week grid: last week + this week (which runs a few days
-    into the future). Past/today cells cycle went -> didn't-go -> blank;
-    today/future cells cycle blank -> don't-schedule -> blank. Backed by the
-    same history actions and gym_blocks list the other gym controls use."""
+def _dates_with(events, action, start, end):
+    """In-memory equivalent of history.days_with(), filtering an
+    already-loaded events list instead of re-reading history.jsonl."""
+    return {e["ts"][:10] for e in events
+            if e.get("action") == action and start <= e["ts"][:10] <= end}
+
+def _cal_range():
+    """Mon-aligned 2-week window: last week + this week (which runs a few
+    days into the future). Shared by every activity calendar so they all
+    line up on the same grid."""
     today          = datetime.date.today()
     monday_this_wk = today - datetime.timedelta(days=today.weekday())
     start          = monday_this_wk - datetime.timedelta(weeks=1)
     end            = monday_this_wk + datetime.timedelta(days=6)
-    went    = history.days_with("gym",      start.isoformat(), end.isoformat())
-    skipped = history.days_with("gym_skip", start.isoformat(), end.isoformat())
-    blocked = set(_gym_blocks())
+    return today, start, end
+
+def _calendar_days(went, skipped=None, blocked=None):
+    """Builds the day-cell list for one activity's calendar grid, given the
+    sets of dates (YYYY-MM-DD) in each state."""
+    today, start, end = _cal_range()
+    skipped = skipped or set()
+    blocked = blocked or set()
     days = []
     for i in range((end - start).days + 1):
         d  = start + datetime.timedelta(days=i)
@@ -171,6 +245,24 @@ def _gym_calendar():
                      "today": d == today, "future": d > today})
     return days
 
+def _gym_calendar(events):
+    """Past/today cells cycle went -> didn't-go -> blank; today/future cells
+    cycle blank -> don't-schedule -> blank. Backed by the same history
+    actions and gym_blocks list the other gym controls use. `events`: a
+    pre-loaded history.events() list (see _gym_stats)."""
+    _, start, end = _cal_range()
+    went    = _dates_with(events, "gym",      start.isoformat(), end.isoformat())
+    skipped = _dates_with(events, "gym_skip", start.isoformat(), end.isoformat())
+    return _calendar_days(went, skipped, set(_gym_blocks()))
+
+def _social_calendar(events, action):
+    """Same grid as gym, but for a plain went/didn't-go social activity
+    (partner, friends) — no skip or block states, those are gym-scheduling
+    concepts that don't apply here."""
+    _, start, end = _cal_range()
+    went = _dates_with(events, action, start.isoformat(), end.isoformat())
+    return _calendar_days(went)
+
 def _gym_blocks():
     """Future-only blocked dates, sorted."""
     today = datetime.date.today().isoformat()
@@ -184,7 +276,7 @@ def _save_gym_blocks(dates):
     today = datetime.date.today().isoformat()
     pruned = sorted({d for d in dates if d >= today})
     os.makedirs(os.path.dirname(GYM_BLOCKS_FILE), exist_ok=True)
-    json.dump(pruned, open(GYM_BLOCKS_FILE, "w", encoding="utf-8"))
+    _write_json(GYM_BLOCKS_FILE, pruned)
 
 def _gym_sick_until():
     try:
@@ -203,7 +295,7 @@ def _save_gym_sick_until(date_str):
     else:
         state.pop("sick_until", None)
     os.makedirs(os.path.dirname(GYM_STATE_FILE), exist_ok=True)
-    json.dump(state, open(GYM_STATE_FILE, "w", encoding="utf-8"))
+    _write_json(GYM_STATE_FILE, state)
 
 def _sched_blocks():
     """General FlowSavvy busy-event blocks: [{date, event_id, label}]."""
@@ -218,7 +310,7 @@ def _save_sched_blocks(entries):
     today = datetime.date.today().isoformat()
     pruned = [e for e in entries if e.get("date", "") >= today]
     os.makedirs(os.path.dirname(SCHED_BLOCKS_FILE), exist_ok=True)
-    json.dump(pruned, open(SCHED_BLOCKS_FILE, "w", encoding="utf-8"))
+    _write_json(SCHED_BLOCKS_FILE, pruned)
 
 def _canvas_status():
     """Cheap status for the Accounts card — reads the same dedup log runner.py
@@ -303,10 +395,21 @@ def _restart_server():
     else:
         os._exit(0)
 
-def _build_context(fs):
+def _build_context(fs=None, include_cycle=False):
     lr  = _last_run()
     dom = _domains()
-    gs  = _gym_stats()
+    # Loaded once and threaded through every history-derived section below
+    # (stats, both calendars, the history list) instead of each one
+    # independently re-reading and re-parsing history.jsonl from disk.
+    all_events = history.events()
+    gs  = _gym_stats(all_events)
+    cycle_tasks = []
+    cycle_error = ""
+    if include_cycle and fs:
+        try:
+            cycle_tasks = _cycle_tasks(fs)
+        except Exception as e:
+            cycle_error = f"FlowSavvy is unavailable ({str(e)[:100]})."
 
     # status bar
     if lr is None:
@@ -330,10 +433,14 @@ def _build_context(fs):
     domains = [{"name": d, "icon": DOMAIN_ICON.get(d, "•"), "enabled": dom.get(d, True)}
                for d in ALL_DOMAINS]
 
-    # history entries
-    raw_history = history.events()[-50:][::-1]
+    # history entries — idx is the event's position in the full file (file
+    # order, oldest first), not its position in this trimmed/reversed list;
+    # the undo button posts idx/ts/action back so history.remove_at() can
+    # verify it's still striking the exact record the page showed, not
+    # whatever now sits at that position.
+    raw_history = list(enumerate(all_events))[-50:][::-1]
     hist = []
-    for e in raw_history:
+    for idx, e in raw_history:
         ts = e.get("ts", "")
         try:
             display_ts = datetime.datetime.fromisoformat(ts).strftime("%m-%d %H:%M")
@@ -343,6 +450,8 @@ def _build_context(fs):
         meta_str = (", ".join(f"{k}={v}" for k, v in meta.items())
                     if isinstance(meta, dict) else str(meta))
         hist.append({
+            "idx":        idx,
+            "ts":         ts,
             "display_ts": display_ts,
             "action":     e.get("action", "?"),
             "source":     e.get("source", ""),
@@ -371,13 +480,17 @@ def _build_context(fs):
         "status_text":      text,
         "gym_stats":        gs,
         "domains":          domains,
-        "cycle_tasks":      _cycle_tasks(fs),
+        "cycle_tasks":      cycle_tasks,
+        "cycle_error":      cycle_error,
         "config_items":     [{"key": k, "value": _env_value(k)} for k in EDITABLE],
         "history":          hist,
         "list_personal":    config.LIST_PERSONAL,
         "last_run_domains": ", ".join(lr["ran"]) if lr and lr["ran"] else "",
         "last_run_errors":  str(lr["errors"]) if lr and lr["errors"] else "",
-        "gym_calendar":     _gym_calendar(),
+        "gym_calendar":     _gym_calendar(all_events),
+        "partner_calendar": _social_calendar(all_events, "partner"),
+        "friends_calendar": _social_calendar(all_events, "friends"),
+        "partner_name":     config.PARTNER_NAME,
         "gym_blocks":       gym_block_display,
         "gym_sick_until":   sick_until,
         "today":            today.isoformat(),
@@ -408,63 +521,106 @@ def api_status():
 def api_history(n: int = 50):
     return JSONResponse(history.events()[-n:][::-1])
 
+@app.post("/history/undo")
+def history_undo(idx: int = Form(...), ts: str = Form(""), action: str = Form("")):
+    """Strike a single history entry (e.g. a duplicate 'gym' log) by its
+    file position. Most actions are completion RECORDS (you did the gym
+    session, you completed the "Reina" task) with nothing else to reverse --
+    removing the log line is the full undo. The exception is an entry whose
+    meta carries creates_task=True: that log was written right when its
+    action CREATED a FlowSavvy task (e.g. the Canvas sync's "course_task"),
+    and meta.id is that task's id -- so undoing it also deletes the task.
+    (Other actions carry an id too, e.g. flowsavvy-sourced completions, but
+    that id is the task you completed, not something the log created --
+    deleting it would erase a real completion, not reverse one. Any future
+    task-creating log call just needs creates_task=True in its meta; this
+    endpoint doesn't need to know about it by name.)
+
+    ts/action are the record's own fields as rendered on the History page --
+    idx alone isn't a safe identifier since another tab/tick can log or
+    undo something else in between, shifting every later record's file
+    position. remove_at() only deletes if the record at idx still matches
+    both, otherwise this is a no-op (stale page, ask the user to refresh)."""
+    with _exclusive():
+        events = history.events()
+        warn = ""
+        if 0 <= idx < len(events) and events[idx].get("ts") == ts and events[idx].get("action") == action:
+            e = events[idx]
+            meta = e.get("meta") or {}
+            if meta.get("creates_task") and meta.get("id"):
+                try:
+                    fs = FlowSavvy()
+                    fs.delete_item(meta["id"])
+                    fs.recalculate()
+                except Exception as ex:
+                    warn = (f"⚠️ log removed, but couldn't delete the FlowSavvy "
+                           f"task ({str(ex)[:80]}) — remove it manually.")
+            if not history.remove_at(idx, expect_ts=ts, expect_action=action):
+                warn = "⚠️ that entry moved — refresh History and try again."
+        else:
+            warn = "⚠️ that entry moved — refresh History and try again."
+    return RedirectResponse(f"/history?msg={quote(warn)}" if warn else "/history", 303)
+
 
 # ── action endpoints ────────────────────────────────────────────────────────────
 
 @app.post("/cycle/new")
 def cycle_new(title: str = Form(...), days: int = Form(7), duration: int = Form(30),
               listId: str = Form("")):
-    fs = FlowSavvy()
-    d  = (datetime.date.today() + datetime.timedelta(days=days)).isoformat()
-    fs.create_task(
-        title=title,
-        listId=listId or config.LIST_PERSONAL,
-        durationMinutes=duration,
-        minLengthMinutes=duration,
-        schedulingHoursId=config.SH_PERSONAL,
-        isAutoIgnored=False,
-        dueDateTime=f"{d}T20:00:00",
-        canBeStartedAt=f"{datetime.date.today().isoformat()}T08:00:00",
-        notes=f"<p>Recurring task.</p><p>[cycle:{days}d]</p>",
-    )
-    fs.recalculate()
-    return RedirectResponse("/", 303)
+    with _exclusive():
+        fs = FlowSavvy()
+        d  = (datetime.date.today() + datetime.timedelta(days=days)).isoformat()
+        fs.create_task(
+            title=title,
+            listId=listId or config.LIST_PERSONAL,
+            durationMinutes=duration,
+            minLengthMinutes=duration,
+            schedulingHoursId=config.SH_PERSONAL,
+            isAutoIgnored=False,
+            dueDateTime=f"{d}T20:00:00",
+            canBeStartedAt=f"{datetime.date.today().isoformat()}T08:00:00",
+            notes=f"<p>Recurring task.</p><p>[cycle:{days}d]</p>",
+        )
+        fs.recalculate()
+    return RedirectResponse("/recurring", 303)
 
 @app.post("/cycle/del")
 def cycle_del(id: str = Form(...)):
-    fs = FlowSavvy()
-    fs.delete_item(id)
-    fs.recalculate()
-    return RedirectResponse("/", 303)
+    with _exclusive():
+        fs = FlowSavvy()
+        fs.delete_item(id)
+        fs.recalculate()
+    return RedirectResponse("/recurring", 303)
 
 @app.post("/cycle/edit")
 def cycle_edit(id: str = Form(...), days: int = Form(...)):
-    fs = FlowSavvy()
-    for c in _cycle_tasks(fs):
-        if c["id"] == id:
-            d = (datetime.date.today() + datetime.timedelta(days=days)).isoformat()
-            fs.create_task(
-                title=c["title"],
-                listId=c["list"] or config.LIST_PERSONAL,
-                durationMinutes=c["dur"],
-                minLengthMinutes=c["dur"],
-                schedulingHoursId=c["sh"] or config.SH_PERSONAL,
-                isAutoIgnored=False,
-                dueDateTime=f"{d}T20:00:00",
-                canBeStartedAt=f"{datetime.date.today().isoformat()}T08:00:00",
-                notes=f"<p>Recurring task.</p><p>[cycle:{days}d]</p>",
-            )
-            fs.delete_item(id)
-            fs.recalculate()
-            break
-    return RedirectResponse("/", 303)
+    with _exclusive():
+        fs = FlowSavvy()
+        for c in _cycle_tasks(fs):
+            if c["id"] == id:
+                d = (datetime.date.today() + datetime.timedelta(days=days)).isoformat()
+                fs.create_task(
+                    title=c["title"],
+                    listId=c["list"] or config.LIST_PERSONAL,
+                    durationMinutes=c["dur"],
+                    minLengthMinutes=c["dur"],
+                    schedulingHoursId=c["sh"] or config.SH_PERSONAL,
+                    isAutoIgnored=False,
+                    dueDateTime=f"{d}T20:00:00",
+                    canBeStartedAt=f"{datetime.date.today().isoformat()}T08:00:00",
+                    notes=f"<p>Recurring task.</p><p>[cycle:{days}d]</p>",
+                )
+                fs.delete_item(id)
+                fs.recalculate()
+                break
+    return RedirectResponse("/recurring", 303)
 
 @app.post("/domain")
 def domain_toggle(name: str = Form(...), on: int = Form(...)):
     d = _domains()
-    d[name] = bool(on)
-    os.makedirs(os.path.dirname(DOMAINS_FILE), exist_ok=True)
-    json.dump(d, open(DOMAINS_FILE, "w", encoding="utf-8"))
+    if name in ALL_DOMAINS:
+        d[name] = bool(on)
+        _write_json(DOMAINS_FILE, d)
     return RedirectResponse("/", 303)
 
 @app.post("/run")
@@ -480,13 +636,13 @@ def set_config(key: str = Form(...), value: str = Form("")):
     value = value.replace("\r", " ").replace("\n", " ").strip()
     if key in EDITABLE:
         _set_env(key, value)
-    return RedirectResponse("/", 303)
+    return RedirectResponse("/settings", 303)
 
 @app.post("/gym-nocount")
 def gym_nocount():
     history.append("gym_skip", source="ui")
     _run_domain("gym")     # re-plan immediately, consistent with the other gym controls
-    return RedirectResponse("/", 303)
+    return RedirectResponse("/gym", 303)
 
 def _block_day(date):
     """Blocks a day for EVERYTHING: a FlowSavvy busy event (if BLOCK_CAL is
@@ -544,36 +700,38 @@ def schedule_block_day(date: str = Form(...)):
     try:
         datetime.date.fromisoformat(date)
     except ValueError:
-        return RedirectResponse(f"/?msg={quote('invalid date')}", 303)
-    warn = _block_day(date)
+        return RedirectResponse(f"/schedule?msg={quote('invalid date')}", 303)
+    with _exclusive():
+        warn = _block_day(date)
     _run_domain("gym")
-    return RedirectResponse(f"/?msg={quote(warn)}" if warn else "/", 303)
+    return RedirectResponse(f"/schedule?msg={quote(warn)}" if warn else "/schedule", 303)
 
 @app.post("/schedule/unblock-day")
 def schedule_unblock_day(date: str = Form(...)):
-    warn = _unblock_day(date)
+    with _exclusive():
+        warn = _unblock_day(date)
     _run_domain("gym")
-    return RedirectResponse(f"/?msg={quote(warn)}" if warn else "/", 303)
+    return RedirectResponse(f"/schedule?msg={quote(warn)}" if warn else "/schedule", 303)
 
 @app.post("/gym/block-date")
 def gym_block_date(date: str = Form(...)):
     try:
         datetime.date.fromisoformat(date)  # validate
     except ValueError:
-        return RedirectResponse(f"/?msg={quote('invalid date')}", 303)
+        return RedirectResponse(f"/gym?msg={quote('invalid date')}", 303)
     dates = _gym_blocks()
     if date not in dates:
         dates.append(date)
     _save_gym_blocks(dates)
     _run_domain("gym")
-    return RedirectResponse("/", 303)
+    return RedirectResponse("/gym", 303)
 
 @app.post("/gym/unblock-date")
 def gym_unblock_date(date: str = Form(...)):
     dates = [d for d in _gym_blocks() if d != date]
     _save_gym_blocks(dates)
     _run_domain("gym")
-    return RedirectResponse("/", 303)
+    return RedirectResponse("/gym", 303)
 
 @app.post("/gym/cycle-date")
 def gym_cycle_date(date: str = Form(...)):
@@ -587,7 +745,7 @@ def gym_cycle_date(date: str = Form(...)):
     try:
         d = datetime.date.fromisoformat(date)
     except ValueError:
-        return RedirectResponse(f"/?msg={quote('invalid date')}#gym-calendar", 303)
+        return RedirectResponse(f"/?msg={quote('invalid date')}#calendar", 303)
 
     today = datetime.date.today()
     warn  = ""
@@ -609,7 +767,27 @@ def gym_cycle_date(date: str = Form(...)):
         history.remove_day("gym_missed", date)
         history.append("gym", ts=f"{date}T12:00:00", source="ui")
     _run_domain("gym")
-    return RedirectResponse(f"/?msg={quote(warn)}#gym-calendar" if warn else "/#gym-calendar", 303)
+    return RedirectResponse(f"/?msg={quote(warn)}#calendar" if warn else "/#calendar", 303)
+
+_LOGGABLE_ACTIVITIES = {"partner", "friends"}
+
+@app.post("/log/cycle-date")
+def log_cycle_date(action: str = Form(...), date: str = Form(...)):
+    """Simple neutral <-> went toggle for social activities (partner,
+    friends) on the same calendar grid gym uses. No skip/blocked states --
+    those are gym-scheduling concepts, not applicable to logging a hangout."""
+    if action not in _LOGGABLE_ACTIVITIES:
+        return RedirectResponse(f"/?msg={quote('invalid activity')}", 303)
+    try:
+        datetime.date.fromisoformat(date)
+    except ValueError:
+        return RedirectResponse(f"/?msg={quote('invalid date')}#calendar", 303)
+    if any(e["ts"][:10] == date for e in history.events(action)):
+        history.remove_day(action, date)
+    else:
+        history.append(action, ts=f"{date}T12:00:00", source="ui")
+    _run_domain("social")
+    return RedirectResponse("/#calendar", 303)
 
 @app.post("/gym/sick-until")
 def gym_sick_until(date: str = Form("")):
@@ -617,15 +795,16 @@ def gym_sick_until(date: str = Form("")):
         try:
             datetime.date.fromisoformat(date)
         except ValueError:
-            return RedirectResponse(f"/?msg={quote('invalid date')}", 303)
+            return RedirectResponse(f"/gym?msg={quote('invalid date')}", 303)
     _save_gym_sick_until(date)
     _run_domain("gym")
-    return RedirectResponse("/", 303)
+    return RedirectResponse("/gym", 303)
 
 @app.post("/recalc")
 def recalc():
-    FlowSavvy().recalculate()
-    return RedirectResponse("/", 303)
+    with _exclusive():
+        FlowSavvy().recalculate()
+    return RedirectResponse("/schedule", 303)
 
 @app.post("/account/canvas/relogin")
 def account_canvas_relogin():
@@ -634,7 +813,7 @@ def account_canvas_relogin():
     triggered from the control panel after a 'Canvas session expired' ntfy
     alert, since that alert can't itself open a browser on the PC."""
     _relogin_canvas()
-    return RedirectResponse(f"/?msg={quote('Opening Chrome for Canvas — sign in, then it saves automatically.')}#accounts", 303)
+    return RedirectResponse(f"/settings?msg={quote('Opening Chrome for Canvas — sign in, then it saves automatically.')}#accounts", 303)
 
 @app.post("/canvas/approve-sync")
 def canvas_approve_sync():
@@ -653,7 +832,7 @@ def canvas_approve_sync():
         json.dump(st, f)
     os.replace(tmp, sp)
     _run_domain("canvas")
-    return RedirectResponse(f"/?msg={quote('Approved — creating the held Canvas tasks.')}#canvas", 303)
+    return RedirectResponse(f"/settings?msg={quote('Approved — creating the held Canvas tasks.')}#canvas", 303)
 
 @app.post("/canvas/dismiss-pending")
 def canvas_dismiss_pending():
@@ -663,7 +842,7 @@ def canvas_dismiss_pending():
         os.remove(os.path.join(ROOT, "logs", "canvas_pending.json"))
     except Exception:
         pass
-    return RedirectResponse(f"/?msg={quote('Dismissed the held Canvas sync.')}#canvas", 303)
+    return RedirectResponse(f"/settings?msg={quote('Dismissed the held Canvas sync.')}#canvas", 303)
 
 @app.post("/action/undo")
 def action_undo(item_id: str = Form(...)):
@@ -673,10 +852,10 @@ def action_undo(item_id: str = Form(...)):
     try:
         FlowSavvy().delete_item(item_id)
     except Exception as e:
-        return RedirectResponse(f"/?msg={quote('Undo failed: ' + str(e)[:60])}#activity", 303)
+        return RedirectResponse(f"/history?msg={quote('Undo failed: ' + str(e)[:60])}#activity", 303)
     actions.mark_undone(item_id)
     actions.log("panel", "undid a creation", item_id, item_id=None, undoable=False)
-    return RedirectResponse(f"/?msg={quote('Undone — task removed.')}#activity", 303)
+    return RedirectResponse(f"/history?msg={quote('Undone — task removed.')}#activity", 303)
 
 @app.post("/system/restart")
 def system_restart():
@@ -684,17 +863,44 @@ def system_restart():
     after editing a setting, since env-var changes only take effect on
     process start."""
     _restart_server()
-    return RedirectResponse(f"/?msg={quote('Restarting server — give it a few seconds, then refresh.')}#config", 303)
+    return RedirectResponse(f"/settings?msg={quote('Restarting server — give it a few seconds, then refresh.')}#config", 303)
 
 
-# ── main page ──────────────────────────────────────────────────────────────────
+# ── pages ──────────────────────────────────────────────────────────────────────
+# One card-heavy page got hard to navigate, so it's split by function; every
+# page shares the same context build (cheap enough for a single-user app) and
+# just renders the section(s) relevant to it.
+
+def _page(request, template, active_page, include_cycle=False):
+    fs = FlowSavvy() if include_cycle else None
+    ctx = _build_context(fs, include_cycle=include_cycle)
+    ctx["flash"] = (request.query_params.get("msg") or "")[:200]
+    ctx["active_page"] = active_page
+    return TEMPLATES.TemplateResponse(request, template, ctx)
 
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
-    fs  = FlowSavvy()
-    ctx = _build_context(fs)
-    ctx["flash"] = (request.query_params.get("msg") or "")[:200]
-    return TEMPLATES.TemplateResponse(request, "index.html", ctx)
+    return _page(request, "home.html", "home")
+
+@app.get("/gym", response_class=HTMLResponse)
+def gym_page(request: Request):
+    return _page(request, "gym.html", "gym")
+
+@app.get("/schedule", response_class=HTMLResponse)
+def schedule_page(request: Request):
+    return _page(request, "schedule.html", "schedule")
+
+@app.get("/recurring", response_class=HTMLResponse)
+def recurring_page(request: Request):
+    return _page(request, "recurring.html", "recurring", include_cycle=True)
+
+@app.get("/settings", response_class=HTMLResponse)
+def settings_page(request: Request):
+    return _page(request, "settings.html", "settings")
+
+@app.get("/history", response_class=HTMLResponse)
+def history_page(request: Request):
+    return _page(request, "history.html", "history")
 
 
 def main():

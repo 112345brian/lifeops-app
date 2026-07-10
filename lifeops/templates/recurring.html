@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block content %}
+
+<!-- ── Recurring Tasks ── -->
+<div class="card section">
+  <div class="card-title">Recurring Tasks
+    <span class="muted" style="text-transform:none;font-weight:400;font-size:10px">
+      — complete N days after done
+    </span>
+  </div>
+  {% if cycle_error %}
+  <div class="flash">{{ cycle_error }}</div>
+  {% endif %}
+  <table>
+    <thead>
+      <tr><th>task</th><th>cycle</th><th>dur</th><th>next due</th><th></th></tr>
+    </thead>
+    <tbody>
+    {% if cycle_tasks %}
+      {% for c in cycle_tasks %}
+      <tr>
+        <td>{{ c.title }}</td>
+        <td>
+          <form method="post" action="/cycle/edit" class="f-row">
+            <input type="hidden" name="id" value="{{ c.id }}">
+            <input name="days" value="{{ c.days }}" class="w-sm">d
+            <button class="btn btn-xs">save</button>
+          </form>
+        </td>
+        <td class="muted">{{ c.dur or '—' }}m</td>
+        <td class="muted">{{ c.due or '—' }}</td>
+        <td>
+          <form method="post" action="/cycle/del" class="f-inline"
+                onsubmit="return confirm('Delete \'{{ c.title }}\'?')">
+            <input type="hidden" name="id" value="{{ c.id }}">
+            <button class="btn btn-xs btn-danger">×</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    {% else %}
+      <tr><td colspan="5" class="muted">no recurring tasks yet</td></tr>
+    {% endif %}
+    </tbody>
+  </table>
+
+  <form method="post" action="/cycle/new" class="add-form">
+    <input name="title" placeholder="Task title" class="w-xl" required>
+    <label>every</label>
+    <input name="days" value="7" class="w-sm">d
+    <label>dur</label>
+    <input name="duration" value="30" class="w-sm">m
+    <label>list</label>
+    <input name="listId" value="{{ list_personal }}" class="w-md">
+    <button class="btn btn-primary btn-sm">+ add</button>
+  </form>
+</div>
+
+{% endblock %}

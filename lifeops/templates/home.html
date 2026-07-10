@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+{% block content %}
+
+{% if briefing %}
+<!-- ── Today's briefing (run_briefing) ── -->
+<div class="card section" id="briefing">
+  <div class="card-title">☀️ Today's briefing</div>
+  <div style="font-size:14px;line-height:1.5;">{{ briefing.text }}</div>
+  {% if briefing.facts %}
+  <div class="gym-note" style="margin-top:.5rem;">
+    {% if briefing.facts.due_today %}<b>Due today:</b> {{ briefing.facts.due_today|join(', ') }}. {% endif %}
+    <b>Next 7d coursework:</b> ~{{ briefing.facts.coursework_hours_next_7d }}h ·
+    <b>Gym:</b> {{ briefing.facts.gym_this_week }}/{{ briefing.facts.gym_target }} this week{% if briefing.facts.discretionary_dollars is not none %} ·
+    <b>Discretionary:</b> ${{ briefing.facts.discretionary_dollars }}{% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if cashflow %}
+<!-- ── Cash-flow projection (run_cashflow; panel-only, no notifications) ── -->
+<div class="card section" id="cashflow"{% if cashflow.dips_below_zero %} style="border:1px solid var(--md-error);"{% endif %}>
+  <div class="card-title">📈 Discretionary projection
+    <span class="muted" style="text-transform:none;font-weight:400;font-size:10px">
+      — next 4 weeks · start ${{ cashflow.start_balance }}
+    </span>
+  </div>
+  {% for w in cashflow.weeks %}
+  <div class="hist-row" style="align-items:center;gap:.5rem;">
+    <span class="hist-ts" style="min-width:3.5rem;">wk {{ w.week }}</span>
+    <span style="flex:1;height:10px;border-radius:5px;background:var(--md-surface-container-high);overflow:hidden;">
+      <span style="display:block;height:100%;width:{{ w.bar_pct }}%;background:{{ 'var(--md-error)' if w.negative else 'var(--green)' }};"></span>
+    </span>
+    <span style="min-width:4rem;text-align:right;{% if w.negative %}color:var(--md-error);{% endif %}">${{ w.balance }}</span>
+    {% if w.spent %}<span class="hist-meta">−${{ w.spent }}</span>{% endif %}
+  </div>
+  {% endfor %}
+  {% if cashflow.dips_below_zero %}
+  <div class="gym-note" style="color:var(--md-error);">Discretionary goes negative within 4 weeks — the upcoming outings are why.</div>
+  {% endif %}
+</div>
+{% endif %}
+
+<!-- ── Stat pills ── -->
+<div class="stats-row">
+  <div class="stat-pill">
+    <span>🏋️</span>
+    <span class="num">{{ gym_stats.this_week }}</span>
+    <span class="lbl">gym this week</span>
+  </div>
+</div>
+
+<!-- ── Two-col grid: Domains + Reference ── -->
+<div class="grid-2 section">
+
+  <!-- Domains -->
+  <div class="card">
+    <div class="card-title">Domains</div>
+    {% for d in domains %}
+    <div class="domain-row">
+      <span class="domain-icon">{{ d.icon }}</span>
+      <span class="domain-name">{{ d.name }}</span>
+      <form method="post" action="/domain" class="f-inline">
+        <input type="hidden" name="name" value="{{ d.name }}">
+        <button name="on" value="{{ 0 if d.enabled else 1 }}"
+                class="badge {{ 'badge-on' if d.enabled else 'badge-off' }}">
+          {{ 'ON' if d.enabled else 'off' }}
+        </button>
+      </form>
+      <form method="post" action="/run" class="f-inline">
+        <input type="hidden" name="name" value="{{ d.name }}">
+        <button class="btn btn-ghost btn-sm">▶ run</button>
+      </form>
+    </div>
+    {% endfor %}
+  </div>
+
+  <!-- Reference / last run -->
+  <div class="card">
+    <div class="card-title">Tiers</div>
+    <div class="text-sm muted">
+      <div>⚡ <b style="color:var(--text)">signal</b> — catchup · ~2 min</div>
+      <div>⏱️ <b style="color:var(--text)">tick</b> — catchup, meal, gym · ~10 min</div>
+      <div>🌅 <b style="color:var(--text)">daily</b> — all domains · 7:10am</div>
+    </div>
+
+    {% if last_run_domains %}
+    <div class="divider"></div>
+    <div class="card-title">Last run</div>
+    <div class="text-sm">{{ last_run_domains }}</div>
+    {% endif %}
+
+    {% if last_run_errors %}
+    <div class="divider"></div>
+    <div class="card-title danger">Errors</div>
+    <div class="text-sm danger">{{ last_run_errors }}</div>
+    {% endif %}
+  </div>
+
+</div>
+
+<!-- ── Calendar ── -->
+<div class="card section" id="calendar">
+  <div class="card-title">Calendar</div>
+  <div class="cal-tabs">
+    <button type="button" class="btn btn-sm btn-primary cal-tab-btn" data-cal="gym">🏋️ Gym</button>
+    <button type="button" class="btn btn-sm cal-tab-btn" data-cal="partner">❤️ {{ partner_name }}</button>
+    <button type="button" class="btn btn-sm cal-tab-btn" data-cal="friends">👫 Friends</button>
+  </div>
+  <div class="cal-weekdays">
+    <span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span>
+  </div>
+
+  <div class="cal-panel" data-cal-panel="gym">
+    <div class="cal-grid">
+      {% for d in gym_calendar %}
+      <form method="post" action="/gym/cycle-date" class="f-inline">
+        <input type="hidden" name="date" value="{{ d.date }}">
+        <button type="submit" class="cal-day cal-day-{{ d.state }} {{ 'cal-day-today' if d.today else '' }}"
+                title="{{ d.date }}">{{ d.day }}</button>
+      </form>
+      {% endfor %}
+    </div>
+    <div class="gym-note">Tap a past/today cell to cycle went ✅ → didn't go → blank.
+      Tap a today/future cell that's already blank to mark it don't-schedule 🚫 → blank.</div>
+  </div>
+
+  <div class="cal-panel" data-cal-panel="partner" style="display:none">
+    <div class="cal-grid">
+      {% for d in partner_calendar %}
+      <form method="post" action="/log/cycle-date" class="f-inline">
+        <input type="hidden" name="action" value="partner">
+        <input type="hidden" name="date" value="{{ d.date }}">
+        <button type="submit" class="cal-day cal-day-{{ d.state }} {{ 'cal-day-today' if d.today else '' }}"
+                title="{{ d.date }}">{{ d.day }}</button>
+      </form>
+      {% endfor %}
+    </div>
+    <div class="gym-note">Tap a cell to log a day with {{ partner_name }} ✅ → blank.</div>
+  </div>
+
+  <div class="cal-panel" data-cal-panel="friends" style="display:none">
+    <div class="cal-grid">
+      {% for d in friends_calendar %}
+      <form method="post" action="/log/cycle-date" class="f-inline">
+        <input type="hidden" name="action" value="friends">
+        <input type="hidden" name="date" value="{{ d.date }}">
+        <button type="submit" class="cal-day cal-day-{{ d.state }} {{ 'cal-day-today' if d.today else '' }}"
+                title="{{ d.date }}">{{ d.day }}</button>
+      </form>
+      {% endfor %}
+    </div>
+    <div class="gym-note">Tap a cell to log a day with friends ✅ → blank.</div>
+  </div>
+</div>
+
+{% endblock %}

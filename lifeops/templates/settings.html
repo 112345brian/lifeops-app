@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block content %}
+
+{% if canvas_pending %}
+<div class="card section" id="canvas" style="border:1px solid var(--md-error);">
+  <div class="card-title">⚠️ Canvas sync held</div>
+  <div class="gym-note">A sync wanted to create <b>{{ canvas_pending.count }}</b> tasks —
+    held automatically because that many at once usually means the sync state was
+    lost and it's about to re-create the whole course, not that {{ canvas_pending.count }}
+    genuinely new tasks unlocked. Approve only if this looks right.</div>
+  <details style="margin:.4rem 0;">
+    <summary style="cursor:pointer;font-size:13px;">Show what it would create</summary>
+    <ul style="margin:.4rem 0 0 1rem;font-size:12px;color:var(--md-on-surface-variant);">
+      {% for t in canvas_pending.titles %}<li>{{ t }}</li>{% endfor %}
+    </ul>
+  </details>
+  <div class="domain-row">
+    <form method="post" action="/canvas/approve-sync" class="f-inline">
+      <button class="btn btn-sm">✅ approve &amp; create</button>
+    </form>
+    <form method="post" action="/canvas/dismiss-pending" class="f-inline">
+      <button class="btn btn-sm">✕ dismiss</button>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+<!-- ── Accounts ── -->
+<div class="card section" id="accounts">
+  <div class="card-title">Accounts</div>
+  <div class="domain-row">
+    <span class="domain-icon">🎓</span>
+    <span class="domain-name">Canvas</span>
+    {% if canvas_status.needs_relogin %}
+      <span class="badge badge-warn">⚠ session expired</span>
+    {% elif canvas_status.profile_exists %}
+      <span class="badge badge-on" style="cursor:default;">connected</span>
+    {% else %}
+      <span class="badge badge-off" style="cursor:default;">not set up</span>
+    {% endif %}
+    <form method="post" action="/account/canvas/relogin" class="f-inline">
+      <button class="btn btn-sm">🔑 re-login</button>
+    </form>
+  </div>
+  <div class="gym-note">Opens a real Chrome window on this PC using the Canvas sign-in profile.
+    Log in with JHU SSO + Duo — the session saves automatically once it detects you're through.</div>
+</div>
+
+<!-- ── Config ── -->
+<div class="card section" id="config">
+  <div class="card-title">Config
+    <span class="muted" style="text-transform:none;font-weight:400;font-size:10px">
+      — restart app to apply
+    </span>
+  </div>
+  <form method="post" action="/system/restart" class="f-inline" style="margin-bottom:10px">
+    <button class="btn btn-sm btn-danger" onclick="return confirm('Restart the LifeOps server now?')">⟳ restart server</button>
+  </form>
+  <table>
+    <tbody>
+    {% for item in config_items %}
+    <tr>
+      <td class="cfg-key">{{ item.key }}</td>
+      <td>
+        <form method="post" action="/config" class="f-row">
+          <input type="hidden" name="key" value="{{ item.key }}">
+          <input name="value" value="{{ item.value }}" class="w-xl">
+          <button class="btn btn-xs">save</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% endblock %}

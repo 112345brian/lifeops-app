@@ -4,16 +4,18 @@ Covers the cross-task race (tick vs daily overlapping) that MultipleInstances
 can't, since those are separate scheduled tasks. Stale locks (from a crashed
 run) are broken after STALE seconds.
 """
-import os, time, atexit
+import os, time, atexit, secrets
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOCK = os.path.join(ROOT, "logs", "lifeops.lock")
 STALE = 900  # 15 min — older than any legitimate run
+_owner = None
 
 class Locked(Exception):
     pass
 
 def acquire():
+    global _owner
     os.makedirs(os.path.dirname(LOCK), exist_ok=True)
     # break a stale lock left by a crashed run
     try:
@@ -21,15 +23,26 @@ def acquire():
             os.remove(LOCK)
     except FileNotFoundError:
         pass
+    owner = f"{os.getpid()}:{secrets.token_hex(16)}"
     try:
         fd = os.open(LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY)  # atomic create
     except FileExistsError:
         raise Locked("another LifeOps run is active")
-    os.write(fd, str(os.getpid()).encode()); os.close(fd)
+    os.write(fd, owner.encode()); os.close(fd)
+    _owner = owner
     atexit.register(release)
 
 def release():
+    global _owner
+    owner = _owner
+    if not owner:
+        return
     try:
-        os.remove(LOCK)
-    except FileNotFoundError:
+        with open(LOCK, encoding="utf-8") as f:
+            current = f.read()
+        if current == owner:
+            os.remove(LOCK)
+    except (FileNotFoundError, OSError):
         pass
+    finally:
+        _owner = None

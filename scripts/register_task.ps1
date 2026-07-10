@@ -1,7 +1,8 @@
 # Registers three Windows Scheduled Tasks for LifeOps. Run once from the project root.
 #   LifeOps-signal — every 2 min, the interactive path (catchup tap → re-pack the day)
-#   LifeOps-tick   — every 10 min, the all-day deterministic loop (gym, spend, catchup)
-#   LifeOps-daily  — once each morning, the heavier/LLM work (ynab, homework, social, chores, meal)
+#   LifeOps-tick   — every 10 min, the all-day deterministic loop (catchup, meal, gym)
+#   LifeOps-daily  — once each morning, heavier work (ynab, homework, social, chores,
+#                    meal, spend, digest, canvas)
 # All run whether or not Claude is open; they only need the PC on. A single global
 # run-lock (lock.py) serializes them, so overlapping fires can't race FlowSavvy.
 

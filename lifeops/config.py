@@ -6,14 +6,14 @@ import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+ENV_FILE = ROOT / "private" / ".env"
+if not ENV_FILE.exists():
+    ENV_FILE = ROOT / ".env"
 
 def _load_env():
     # prefer private/.env (submodule) over root .env (legacy / local override)
-    env = ROOT / "private" / ".env"
-    if not env.exists():
-        env = ROOT / ".env"
-    if env.exists():
-        for line in env.read_text(encoding="utf-8").splitlines():
+    if ENV_FILE.exists():
+        for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if not line or line.startswith("#") or "=" not in line:
                 continue
@@ -21,6 +21,12 @@ def _load_env():
             os.environ.setdefault(k.strip(), v.strip())
 
 _load_env()
+
+def _env_int(name, default):
+    try:
+        return int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
 
 # FlowSavvy — base URL + token come from my.flowsavvy.app/api/docs (you fill these in .env)
 FLOWSAVVY_BASE_URL = os.environ.get("FLOWSAVVY_BASE_URL", "https://my.flowsavvy.app/api")
@@ -61,6 +67,10 @@ PARTNER_NAME = os.environ.get("PARTNER_NAME", "Partner")
 PARTNER_TASK = os.environ.get("PARTNER_TASK", f"{PARTNER_NAME} time")   # FlowSavvy task title
 PARTNER_SIGNAL = os.environ.get("PARTNER_SIGNAL", f"saw {PARTNER_NAME.lower()}")  # ntfy body
 FRIENDS_TASK = os.environ.get("FRIENDS_TASK", "Friends")
+# Names that count as a friend hangout when they appear in a task title
+# (e.g. "Jarod") even though the title isn't literally "Friends" — like
+# PARTNER_NAME but for everyone else. Comma-separated, e.g. "Jarod,Alex,Sam".
+FRIEND_NAMES = [s.strip() for s in os.environ.get("FRIEND_NAMES", "").split(",") if s.strip()]
 SOCIAL_CAL = os.environ.get("SOCIAL_CAL", "")          # partner's FlowSavvy calendar id
 BLOCK_CAL  = os.environ.get("BLOCK_CAL",  "")          # calendar for UI-created busy blocks
 
@@ -80,10 +90,10 @@ CANVAS_TOKEN     = os.environ.get("CANVAS_TOKEN", "")
 CANVAS_BASE_URL  = os.environ.get("CANVAS_BASE_URL", "https://jhu.instructure.com")
 CANVAS_COURSE_ID = os.environ.get("CANVAS_COURSE_ID", "124987")
 SH_COURSE        = os.environ.get("SH_COURSE", "428026")  # FlowSavvy scheduling hours for coursework
-PROPOSE_AHEAD_DAYS = int(os.environ.get("PROPOSE_AHEAD_DAYS", "21"))  # propose hangouts ~3 weeks out
-PLAN_LEAD_DAYS = int(os.environ.get("PLAN_LEAD_DAYS", "14"))          # "Plan it" task ~2 weeks before
+PROPOSE_AHEAD_DAYS = _env_int("PROPOSE_AHEAD_DAYS", 21)  # propose hangouts ~3 weeks out
+PLAN_LEAD_DAYS = _env_int("PLAN_LEAD_DAYS", 14)          # "Plan it" task ~2 weeks before
 HEARTBEAT_URL = os.environ.get("HEARTBEAT_URL", "")   # healthchecks.io ping (dead-man's switch)
-SLEEP_OK_MIN = int(os.environ.get("SLEEP_OK_MIN", "330"))  # min minutes of real sleep to count "rested"
+SLEEP_OK_MIN = _env_int("SLEEP_OK_MIN", 330)  # min minutes of real sleep to count "rested"
 
 # Deliberate priority hierarchy (FlowSavvy: asap > high > normal > low).
 # Intended order: hard deadlines (Canvas, bumped by load-watcher) > gym (fixed

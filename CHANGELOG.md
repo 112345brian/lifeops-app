@@ -4,7 +4,7 @@ Notable changes, newest first. Personal project, versioned simply (see
 `VERSION` / `lifeops.__version__`) — dates and the reasoning behind each
 change matter more here than semver strictness.
 
-## Unreleased
+## [1.2.0] — 2026-07-09
 
 ### Added
 - **Generalized deadline-risk watchdog** (`deadlines` domain) — the second
@@ -94,6 +94,41 @@ change matter more here than semver strictness.
     `gym_missed` entry for the same date, double-counting it in
     `adherence.gym()`'s rate calculation. `/gym/cycle-date` now clears any
     `gym_missed` entry before logging a fresh `gym`.
+- **Split the control panel into separate pages.** The single-page dashboard
+  had grown to ~10 stacked cards; replaced `index.html` with a shared
+  `base.html` layout (nav bar, styles, PWA/status-poll JS) plus six focused
+  pages — Home, Gym, Schedule, Recurring, History, Settings. Every mutating
+  POST handler now redirects back to the page it belongs to instead of
+  always bouncing to `/`. ntfy notification deep-links updated to match —
+  `panel_url()` now takes a page path optionally followed by `#anchor` (e.g.
+  `settings#accounts`), instead of assuming everything lives on one page
+  with a bare anchor.
+- **Generalized the gym calendar into a Gym / partner / friends activity
+  calendar** on the Home page. Tabs (client-side, no reload) switch between
+  three history-backed grids; tapping a partner/friends day cell logs it via
+  a new `POST /log/cycle-date` (`action=partner|friends`) — no skip/blocked
+  states, those are gym-scheduling concepts that don't apply to just logging
+  a hangout.
+- **Friend-hangout tracking beyond the literal "Friends" task title.** New
+  `FRIEND_NAMES` config (comma-separated names, e.g. `Jarod,Alex`) — a task
+  titled with one of those names, or tagged "friend"/"friends" anywhere in
+  its title/notes, now counts as a friend hangout for history logging
+  (`runner._classify`) *and* for `gather.social_input`'s "already have a
+  plan" check, so a hangout scheduled under someone's actual name doesn't go
+  unrecognized and get double-proposed.
+- **"Wind down" reminders now get pruned like stale gym blocks.** A
+  window-of-opportunity task ("go to bed early — gym at 5am") that isn't
+  done in its time window has genuinely lost its chance, unlike a normal
+  to-do; `run_gym`'s stale-cleanup pass now also strikes elapsed "Wind down"
+  items instead of leaving them to sit as permanently-overdue tasks.
+- **Per-entry "undo" on the History page.** Each row gets a button that
+  strikes just that one log record (`history.remove_at`, keyed by file
+  position plus a `ts`/`action` fingerprint so a stale page load can't
+  delete the wrong entry after another tab/tick has logged something in
+  between). Most actions are pure completion records — removing the log
+  line is the full undo — except entries whose `meta.creates_task=True`
+  (e.g. Canvas sync creations), where undo also deletes the FlowSavvy task
+  the log entry created.
 
 ### Fixed
 - **The other 6 runner.py state files (`ingest`, `alert_state`, `chore`,
@@ -190,6 +225,34 @@ change matter more here than semver strictness.
   of which triggers the block, since authenticated requests never redirect
   off-domain and the daily sync hits Canvas's JSON API directly with no
   rendered page for Cloudflare's browser checks to see.
+- **A blank `PARTNER_TASK` (settable via the Settings page) silently
+  misclassified every completed task as "partner."** `"" in t` is `True` for
+  any string in Python, so clearing the field made `_classify()` match
+  everything before the gym/laundry/etc. keyword loop even ran. Now guards
+  on a non-empty value.
+- **A failed/rate-limited ntfy alert during `run_catchup` could trigger a
+  reschedule storm.** `ntfy.alert()` now raises on non-2xx; `run_catchup`
+  called it *before* persisting `catchup_state.json`'s `lastHandled`, so a
+  transient ntfy failure left the same trigger message "unhandled,"
+  re-firing a full `fs.recalculate(reschedule_past=True)` on every
+  subsequent tick until an alert happened to succeed. The alert call is now
+  wrapped in try/except so a notification failure can't block state
+  persistence.
+- **The auth cookie's `Secure` flag was set inconsistently between the two
+  places it's issued** — the GET/HEAD redirect path checked
+  `X-Forwarded-Proto` (needed behind a TLS-terminating proxy like a
+  Tailscale funnel), the other cookie-setting path didn't. Deduped into one
+  `secure` expression used by both.
+- **`SameSite=Strict` on the auth cookie could block the exact "tap an ntfy
+  alert to open the panel" flow it exists to support** — that's a top-level
+  GET navigation from outside the app, and Strict cookies are withheld on
+  that kind of navigation on some OS/browser notification plumbing. Changed
+  to `SameSite=Lax`, which still blocks the cross-site POST/embed cases
+  Strict guards against.
+- **Restored the `digest` domain to the panel's toggle list** — it was still
+  wired into `runner.DOMAINS` and the `daily` tier, but had quietly dropped
+  out of `web.ALL_DOMAINS` during the recent feature work, so it couldn't be
+  enabled/disabled or manually run from the panel.
 
 ## [1.1.0] — 2026-07-04
 

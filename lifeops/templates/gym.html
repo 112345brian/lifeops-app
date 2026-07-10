@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block content %}
+
+<!-- ── Gym Controls ── -->
+<div class="card section" id="gym">
+  <div class="card-title">Gym Controls</div>
+  <div class="gym-grid">
+
+    <!-- Re-plan -->
+    <div class="gym-control-group">
+      <div class="gym-label">Re-plan</div>
+      <form method="post" action="/run" class="f-inline">
+        <input type="hidden" name="name" value="gym">
+        <button class="btn btn-primary btn-sm">↻ re-plan gym now</button>
+      </form>
+    </div>
+
+    <!-- Sick until -->
+    <div class="gym-control-group">
+      <div class="gym-label">Sick / rest week</div>
+      <form method="post" action="/gym/sick-until" class="f-row">
+        <input type="date" name="date" value="{{ gym_sick_until }}" min="{{ today }}">
+        <button class="btn btn-sm">set</button>
+        {% if gym_sick_until %}
+        <button class="btn btn-sm btn-danger" name="date" value="">clear</button>
+        {% endif %}
+      </form>
+      {% if gym_sick_until %}
+      <div class="gym-note warn">Gym paused until {{ gym_sick_until }}</div>
+      {% endif %}
+    </div>
+
+    <!-- Block a date -->
+    <div class="gym-control-group">
+      <div class="gym-label">Skip a specific day</div>
+      <form method="post" action="/gym/block-date" class="f-row">
+        <input type="date" name="date" value="{{ tomorrow }}" min="{{ today }}">
+        <button class="btn btn-sm">block date</button>
+      </form>
+      {% if gym_blocks %}
+      <div class="gym-blocked-list">
+        {% for b in gym_blocks %}
+        <div class="gym-blocked-row">
+          <span>🚫 {{ b.label }}</span>
+          <form method="post" action="/gym/unblock-date" class="f-inline">
+            <input type="hidden" name="date" value="{{ b.date }}">
+            <button class="btn btn-xs btn-danger">unblock</button>
+          </form>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- No-count -->
+    <div class="gym-control-group">
+      <div class="gym-label">Today's session</div>
+      <form method="post" action="/gym-nocount" class="f-inline">
+        <button class="btn btn-sm">don't count today's gym</button>
+      </form>
+      <div class="gym-note">Use after a forced/partial session you don't want counted toward your weekly target.</div>
+    </div>
+
+  </div>
+</div>
+
+<div class="gym-note">Log a went/didn't-go day on the <a href="/#calendar" style="color:var(--accent)">Home calendar</a>.</div>
+
+{% endblock %}

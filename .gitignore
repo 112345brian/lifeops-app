@@ -4,3 +4,4 @@ logs/
 **/__pycache__/
 *.pyc
 data/browser_profiles/
+.DS_Store

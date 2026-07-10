@@ -1,0 +1,496 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LifeOps</title>
+<link rel="manifest" href="/static/manifest.json">
+<link rel="icon" href="/static/icons/favicon-32.png" sizes="32x32">
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+<meta name="theme-color" content="#0f1117">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="LifeOps">
+<style>
+:root {
+  /* ── M3 color roles (dark theme, blue seed) ── */
+  --md-surface: #101116;
+  --md-surface-container: #1a1c23;
+  --md-surface-container-high: #24262f;
+  --md-surface-container-highest: #2e303b;
+  --md-on-surface: #e4e2e9;
+  --md-on-surface-variant: #a4a2ae;
+  --md-outline: #4a4b57;
+  --md-outline-variant: #2c2e38;
+
+  --md-primary: #a9c7ff;
+  --md-primary-container: #2f4d80;
+  --md-on-primary-container: #dae5ff;
+
+  --md-error: #ffb4ab;
+  --md-error-container: #5c1a1a;
+  --md-on-error-container: #ffdad6;
+
+  --green: #4ade80;
+  --yellow: #fbbf24;
+  --red: #ffb4ab;
+
+  /* ── legacy aliases (kept so older references keep working) ── */
+  --bg: var(--md-surface);
+  --surface: var(--md-surface-container);
+  --surface2: var(--md-surface-container-high);
+  --border: var(--md-outline-variant);
+  --text: var(--md-on-surface);
+  --muted: var(--md-on-surface-variant);
+  --accent: var(--md-primary);
+
+  /* ── shape scale ── */
+  --shape-xs: 4px;
+  --shape-sm: 8px;
+  --shape-md: 12px;
+  --shape-lg: 16px;
+  --shape-full: 999px;
+  --radius: var(--shape-lg);
+
+  /* ── elevation ── */
+  --elevation-1: 0 1px 2px rgba(0,0,0,.35), 0 1px 3px 1px rgba(0,0,0,.18);
+  --elevation-2: 0 1px 2px rgba(0,0,0,.35), 0 2px 6px 2px rgba(0,0,0,.18);
+
+  --font: system-ui, -apple-system, sans-serif;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: var(--font);
+  background: var(--md-surface);
+  color: var(--md-on-surface);
+  font-size: 14px;
+  line-height: 1.5;
+  padding: 0 1rem 4rem;
+  max-width: 920px;
+  margin: 0 auto;
+}
+
+/* focus ring for all interactive elements, not just inputs */
+a:focus-visible, button:focus-visible, input:focus-visible {
+  outline: 2px solid var(--md-primary);
+  outline-offset: 2px;
+}
+
+/* ── header ── */
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 0 .75rem;
+  border-bottom: 1px solid var(--md-outline-variant);
+  margin-bottom: 1.5rem;
+  gap: 1rem;
+}
+.logo { font-size: 1.375rem; font-weight: 600; letter-spacing: -.25px; }
+.logo span { color: var(--md-primary); }
+#status-bar {
+  font-size: 12px;
+  color: var(--md-on-surface-variant);
+  flex: 1;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── nav ── */
+nav.pages {
+  display: flex;
+  gap: .3rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.5rem;
+}
+nav.pages a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: .3rem .9rem;
+  border-radius: var(--shape-full);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  color: var(--md-on-surface-variant);
+  border: 1px solid var(--md-outline);
+}
+nav.pages a:hover  { background: rgba(255,255,255,.06); }
+nav.pages a.active { background: var(--md-primary-container); color: var(--md-on-primary-container); border-color: transparent; }
+
+/* ── layout ── */
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+@media (max-width: 620px) { .grid-2 { grid-template-columns: 1fr; } }
+
+.section { margin-bottom: 1rem; }
+
+.card {
+  background: var(--md-surface-container);
+  border-radius: var(--shape-lg);
+  box-shadow: var(--elevation-1);
+  padding: 1.25rem;
+}
+
+.card-title {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--md-on-surface);
+  margin-bottom: .9rem;
+}
+
+/* generic banner (flash messages, install hint) */
+.banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  background: var(--md-surface-container-high);
+  border-radius: var(--shape-md);
+  box-shadow: var(--elevation-1);
+  padding: .7rem 1rem;
+  margin: .6rem 0;
+  font-size: 13px;
+  color: var(--md-on-surface);
+}
+.banner-warn {
+  background: var(--md-error-container);
+  color: var(--md-on-error-container);
+}
+.banner-dismiss {
+  background: none; border: none; cursor: pointer;
+  color: inherit; opacity: .7; font-size: 16px; line-height: 1;
+  padding: .25rem; border-radius: var(--shape-full);
+}
+.banner-dismiss:hover { opacity: 1; background: rgba(255,255,255,.08); }
+
+/* ── stat pills (M3 assist chips) ── */
+.stats-row { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: 1.25rem; }
+.stat-pill {
+  background: var(--md-surface-container-high);
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--shape-full);
+  padding: .45rem 1rem;
+  min-height: 32px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+}
+.stat-pill .num { font-weight: 700; color: var(--md-on-surface); }
+.stat-pill .lbl { color: var(--md-on-surface-variant); font-size: 12px; }
+
+/* ── domain rows ── */
+.domain-row {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  padding: .5rem 0;
+  border-bottom: 1px solid var(--md-outline-variant);
+}
+.domain-row:last-child { border-bottom: none; }
+.domain-icon { width: 1.6rem; text-align: center; font-size: 16px; }
+.domain-name { flex: 1; font-weight: 500; }
+
+/* ── badges (M3 filter chips) ── */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: .25rem .75rem;
+  border-radius: var(--shape-full);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  letter-spacing: .02em;
+  transition: background-color .15s, filter .15s;
+}
+.badge-on   { background: var(--md-primary-container); color: var(--md-on-primary-container); border: 1px solid transparent; }
+.badge-on:hover  { filter: brightness(1.12); }
+.badge-off  { background: transparent; color: var(--md-on-surface-variant); border: 1px solid var(--md-outline); }
+.badge-off:hover { background: rgba(255,255,255,.06); }
+.badge-warn { background: transparent; color: var(--yellow); border: 1px solid var(--yellow); cursor: default; }
+
+/* ── buttons (M3 shapes: filled / tonal / text / danger) ── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: .45rem 1rem;
+  border-radius: var(--shape-full);
+  border: 1px solid var(--md-outline);
+  background: transparent;
+  color: var(--md-on-surface);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  font-family: var(--font);
+  transition: background-color .15s;
+  white-space: nowrap;
+}
+.btn:hover { background: rgba(255,255,255,.06); }
+.btn-ghost { background: transparent; border-color: transparent; color: var(--md-primary); padding-left: .6rem; padding-right: .6rem; }
+.btn-ghost:hover { background: rgba(169,199,255,.10); }
+.btn-sm   { min-height: 32px; padding: .3rem .8rem;  font-size: 12px; }
+.btn-xs   { min-height: 26px; padding: .15rem .6rem; font-size: 11px; }
+.btn-danger        { color: var(--md-error); border-color: var(--md-error); }
+.btn-danger:hover  { background: rgba(255,180,171,.10); }
+.btn-primary       { background: var(--md-primary-container); color: var(--md-on-primary-container); border-color: transparent; font-weight: 600; }
+.btn-primary:hover { filter: brightness(1.12); }
+
+/* ── forms ── */
+.f-inline { display: inline; }
+.f-row    { display: inline-flex; gap: .4rem; align-items: center; }
+
+input[type=text], input:not([type]) {
+  background: var(--md-surface);
+  border: 1px solid var(--md-outline);
+  color: var(--md-on-surface);
+  border-radius: var(--shape-sm);
+  padding: .4rem .6rem;
+  min-height: 32px;
+  font-size: 13px;
+  font-family: var(--font);
+}
+input[type=text]:focus, input:not([type]):focus {
+  outline: 2px solid var(--md-primary);
+  outline-offset: 1px;
+  border-color: transparent;
+}
+.w-sm  { width: 3.8rem; }
+.w-md  { width: 8rem; }
+.w-lg  { width: 220px; }
+.w-xl  { width: 300px; }
+
+.add-form {
+  display: flex;
+  gap: .6rem;
+  flex-wrap: wrap;
+  align-items: center;
+  padding-top: .9rem;
+  border-top: 1px solid var(--md-outline-variant);
+  margin-top: .9rem;
+}
+.add-form label { font-size: 12px; color: var(--md-on-surface-variant); }
+
+/* ── table ── */
+table { width: 100%; border-collapse: collapse; }
+th {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--md-on-surface-variant);
+  text-align: left;
+  padding: .5rem .5rem;
+  border-bottom: 1px solid var(--md-outline-variant);
+}
+td { padding: .5rem; border-bottom: 1px solid var(--md-outline-variant); vertical-align: middle; }
+tr:last-child td { border-bottom: none; }
+
+/* ── config ── */
+.cfg-key {
+  font-size: 12px;
+  font-family: monospace;
+  color: var(--md-primary);
+  white-space: nowrap;
+  padding-right: 1rem;
+  width: 1px;
+}
+
+/* ── history ── */
+.hist-scroll { max-height: 420px; overflow-y: auto; }
+.hist-row {
+  display: flex;
+  align-items: baseline;
+  gap: .5rem;
+  padding: .4rem 0;
+  border-bottom: 1px solid var(--md-outline-variant);
+  font-size: 13px;
+}
+.hist-row:last-child { border-bottom: none; }
+.hist-ts     { color: var(--md-on-surface-variant); font-size: 11px; min-width: 78px; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.hist-dot    { font-size: 7px; flex-shrink: 0; }
+.hist-action { font-weight: 500; }
+.hist-meta   { color: var(--md-on-surface-variant); font-size: 12px; }
+.hist-undo   { margin-left: auto; }
+
+/* ── gym controls ── */
+.gym-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; }
+@media (max-width: 620px) { .gym-grid { grid-template-columns: 1fr; } }
+
+.gym-control-group { display: flex; flex-direction: column; gap: .5rem; }
+.gym-label { font-size: 12px; font-weight: 600; color: var(--md-on-surface-variant); letter-spacing: .02em; }
+.gym-note  { font-size: 12px; color: var(--md-on-surface-variant); line-height: 1.4; }
+.gym-note.warn { color: var(--yellow); }
+
+.gym-blocked-list { display: flex; flex-direction: column; gap: .4rem; margin-top: .2rem; }
+.gym-blocked-row  { display: flex; align-items: center; justify-content: space-between;
+                    background: var(--md-surface-container-high);
+                    border-radius: var(--shape-sm); padding: .4rem .7rem; font-size: 13px; }
+
+/* ── calendar ── */
+.cal-tabs { display: flex; gap: .4rem; margin-bottom: .6rem; }
+.cal-weekdays, .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: .35rem; }
+.cal-weekdays { margin-bottom: .4rem; }
+.cal-weekdays span { text-align: center; font-size: 11px; font-weight: 600; color: var(--md-on-surface-variant); }
+.cal-grid > form { display: contents; }
+.cal-day {
+  aspect-ratio: 1;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--shape-sm);
+  border: 1px solid var(--md-outline);
+  background: var(--md-surface);
+  color: var(--md-on-surface);
+  font-family: var(--font);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.cal-day:hover { background: rgba(255,255,255,.06); }
+.cal-day-went    { background: var(--green); border-color: var(--green); color: #0f1117; font-weight: 700; }
+.cal-day-went:hover    { filter: brightness(1.08); }
+.cal-day-skip    { background: var(--md-surface-container-high); color: var(--md-on-surface-variant); text-decoration: line-through; }
+.cal-day-blocked { background: var(--md-error-container); color: var(--md-on-error-container); border-color: var(--md-error); }
+.cal-day-today   { outline: 2px solid var(--md-primary); outline-offset: 1px; }
+
+input[type=date] {
+  background: var(--md-surface);
+  border: 1px solid var(--md-outline);
+  color: var(--md-on-surface);
+  border-radius: var(--shape-sm);
+  padding: .4rem .6rem;
+  min-height: 32px;
+  font-size: 13px;
+  font-family: var(--font);
+  color-scheme: dark;
+}
+input[type=date]:focus { outline: 2px solid var(--md-primary); outline-offset: 1px; border-color: transparent; }
+
+/* ── misc ── */
+.muted  { color: var(--md-on-surface-variant); }
+.danger { color: var(--md-error); }
+.actions-row {
+  display: flex;
+  gap: .6rem;
+  flex-wrap: wrap;
+  padding-top: .9rem;
+  margin-top: .9rem;
+  border-top: 1px solid var(--md-outline-variant);
+}
+.divider { border-top: 1px solid var(--md-outline-variant); margin: .9rem 0; }
+.text-sm { font-size: 13px; line-height: 2; }
+</style>
+</head>
+<body>
+
+<!-- ── Header ── -->
+<header>
+  <div class="logo">Life<span>Ops</span></div>
+  <div id="status-bar">{{ status_dot }} {{ status_text }}</div>
+</header>
+
+{% if flash %}
+<div class="banner banner-warn">
+  <span>{{ flash }}</span>
+</div>
+{% endif %}
+
+<div id="install-hint" class="banner" style="display:none;">
+  <span id="install-hint-text"></span>
+  <button class="banner-dismiss" onclick="document.getElementById('install-hint').style.display='none'">×</button>
+</div>
+
+<!-- ── Page nav ── -->
+<nav class="pages">
+  <a href="/"          class="{{ 'active' if active_page == 'home'      else '' }}">🏠 Home</a>
+  <a href="/gym"        class="{{ 'active' if active_page == 'gym'       else '' }}">🏋️ Gym</a>
+  <a href="/schedule"   class="{{ 'active' if active_page == 'schedule'  else '' }}">📅 Schedule</a>
+  <a href="/recurring"  class="{{ 'active' if active_page == 'recurring' else '' }}">🔁 Recurring</a>
+  <a href="/history"    class="{{ 'active' if active_page == 'history'   else '' }}">🕘 History</a>
+  <a href="/settings"   class="{{ 'active' if active_page == 'settings'  else '' }}">⚙️ Settings</a>
+</nav>
+
+{% block content %}{% endblock %}
+
+<script>
+async function refreshStatus() {
+  try {
+    const r = await fetch('/api/status');
+    const d = await r.json();
+    const lr = d.last_run;
+    if (!lr) return;
+    const mins = lr.age_mins;
+    let dot = '⚫', text = lr.ts || '?';
+    if (mins !== null && mins !== undefined) {
+      if (mins < 20)       { dot = '🟢'; text = mins + 'm ago'; }
+      else if (mins < 120) { dot = '🟡'; text = mins + 'm ago'; }
+      else                 { dot = '🔴'; text = Math.floor(mins / 60) + 'h ago'; }
+      const errs = Object.keys(lr.errors || {});
+      if (errs.length) text += ' · errors: ' + errs.join(', ');
+      if ((lr.ran || []).length) text += ' · ran: ' + lr.ran.join(', ');
+    }
+    document.getElementById('status-bar').textContent = dot + ' ' + text;
+  } catch(e) {}
+}
+setInterval(refreshStatus, 60000);
+
+// --- Calendar tabs ---
+document.querySelectorAll('.cal-tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.cal-tab-btn').forEach(b => b.classList.remove('btn-primary'));
+    btn.classList.add('btn-primary');
+    const cal = btn.dataset.cal;
+    document.querySelectorAll('.cal-panel').forEach(p => {
+      p.style.display = (p.dataset.calPanel === cal) ? '' : 'none';
+    });
+  });
+});
+
+// --- PWA install ---
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
+
+(function () {
+  const isStandalone = window.matchMedia('(display-mode: standalone)').matches
+                      || window.navigator.standalone === true;
+  if (isStandalone) return;   // already installed, nothing to hint at
+
+  const hint = document.getElementById('install-hint');
+  const text = document.getElementById('install-hint-text');
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+
+  if (isIOS) {
+    // iOS has no install prompt API -- Safari only offers Share -> Add to
+    // Home Screen, so this is the only way to surface the option at all.
+    text.textContent = '📲 Add LifeOps to your Home Screen: tap Share, then "Add to Home Screen".';
+    hint.style.display = 'flex';
+  } else {
+    // Android/Chrome: capture the native prompt and offer a one-tap install
+    // instead of waiting for the browser's own (easy to miss) mini-infobar.
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      text.innerHTML = '📲 Install LifeOps as an app — <a href="#" id="install-btn" style="color:var(--accent);">tap here</a>.';
+      hint.style.display = 'flex';
+      document.getElementById('install-btn').onclick = async (ev) => {
+        ev.preventDefault();
+        e.prompt();
+        await e.userChoice;
+        hint.style.display = 'none';
+      };
+    });
+  }
+})();
+</script>
+
+</body>
+</html>
