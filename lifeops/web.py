@@ -11,6 +11,7 @@ from fastapi import FastAPI, Form, Request, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from markupsafe import Markup, escape
 from . import config, history, gather, actions, lock
 from .flowsavvy import FlowSavvy
 
@@ -49,7 +50,12 @@ async def _auth(request: Request, call_next):
         # are withheld on exactly that kind of navigation on some
         # OS/browser notification plumbing -- Lax still blocks the
         # cross-site POST/embed cases Strict exists to guard against.
-        if query_token and request.method in ("GET", "HEAD"):
+        # Browser pages get a clean URL and an auth cookie. API clients such
+        # as the Android widget do not maintain a browser cookie jar, so they
+        # must be allowed to authenticate each request with the query token
+        # and receive the JSON response directly.
+        if (query_token and request.method in ("GET", "HEAD")
+                and not request.url.path.startswith("/api/")):
             clean_url = request.url.remove_query_params("token")
             resp = RedirectResponse(clean_url, status_code=303)
             resp.set_cookie("lifeops_auth", config.WEB_TOKEN,
@@ -341,6 +347,15 @@ def _canvas_pending():
     return {"count": p.get("count"), "at": p.get("at"),
             "titles": (p.get("titles") or [])[:30]}
 
+def _format_briefing_text(text):
+    """Briefing text from the LLM uses **bold** and newlines as plain markup —
+    escape it first (it's untrusted-ish free text), then turn those two markers
+    into real HTML so bold renders and each line is its own line."""
+    html = str(escape(text or ""))
+    html = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", html)
+    html = html.replace("\n", "<br>")
+    return Markup(html)
+
 def _today_briefing():
     """The daily briefing (run_briefing) writes logs/briefing.json. Show it only
     if it's from today — a stale briefing is worse than none."""
@@ -350,7 +365,19 @@ def _today_briefing():
         return None
     if b.get("date") != datetime.date.today().isoformat():
         return None
-    return {"text": b.get("text", ""), "facts": b.get("facts") or {}}
+    return {"text": _format_briefing_text(b.get("text", "")), "facts": b.get("facts") or {}}
+
+def _today_briefing_raw():
+    """Same staleness check as _today_briefing(), but without the HTML
+    formatting step — for API clients (e.g. the Android widget) that want the
+    raw **bold**/\\n markup to style themselves rather than <strong>/<br>."""
+    try:
+        b = json.load(open(os.path.join(ROOT, "logs", "briefing.json"), encoding="utf-8"))
+    except Exception:
+        return None
+    if b.get("date") != datetime.date.today().isoformat():
+        return None
+    return {"date": b.get("date"), "text": b.get("text", ""), "facts": b.get("facts") or {}}
 
 def _cashflow():
     """Panel-only forward discretionary-balance projection (run_cashflow writes
@@ -520,6 +547,42 @@ def api_status():
 @app.get("/api/history")
 def api_history(n: int = 50):
     return JSONResponse(history.events()[-n:][::-1])
+
+@app.get("/api/briefing")
+def api_briefing():
+    b = _today_briefing_raw()
+    if b is None:
+        return JSONResponse({"briefing": None}, status_code=404)
+    return JSONResponse(b)
+
+@app.get("/api/next-tasks")
+def api_next_tasks(n: int = 3):
+    return JSONResponse({"tasks": gather.next_tasks_input(FlowSavvy(), datetime.datetime.now(), n)})
+
+@app.post("/api/tasks/{task_id}/complete")
+def api_task_complete(task_id: str, n: int = 3):
+    """Completes a task straight from the widget's checkbox tap and returns
+    the fresh next-tasks list in the same response, so the widget updates
+    immediately without a follow-up GET."""
+    fs = FlowSavvy()
+    fs.complete_task(task_id)
+    fs.recalculate()
+    return JSONResponse({"completed_id": task_id,
+                        "tasks": gather.next_tasks_input(fs, datetime.datetime.now(), n)})
+
+FCM_TOKEN_FILE = os.path.join(ROOT, "logs", "fcm_token.json")
+
+@app.post("/api/register-fcm-token")
+async def api_register_fcm_token(request: Request):
+    """The widget calls this once per token (install, or whenever Firebase
+    rotates it) so run_briefing knows where to push. Single-user app -- one
+    token on file, last write wins."""
+    body = await request.json()
+    token = body.get("fcm_token")
+    if not token:
+        raise HTTPException(400, "fcm_token required")
+    _write_json(FCM_TOKEN_FILE, {"token": token})
+    return JSONResponse({"ok": True})
 
 @app.post("/history/undo")
 def history_undo(idx: int = Form(...), ts: str = Form(""), action: str = Form("")):

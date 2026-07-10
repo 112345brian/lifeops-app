@@ -205,6 +205,20 @@ def deadline_input(fs, now):
                     "remaining_min": max(0, dur - prog), "listId": t.get("listId")})
     return out
 
+def next_tasks_input(fs, now, n=3):
+    """The next n incomplete tasks by start time, across every list -- feeds
+    the widget's "what's next" section. Unlike deadline_input (due-date
+    based, for risk surfacing), this is start-time based: whatever FlowSavvy
+    has queued up next, regardless of list or due date."""
+    tasks = []
+    for t in fs.list_items(itemType="task", completed=False).get("items", []):
+        st = t.get("startDateTime")
+        if not st:
+            continue
+        tasks.append({"id": t["id"], "title": t.get("title") or "", "start": st})
+    tasks.sort(key=lambda t: t["start"])
+    return tasks[:n]
+
 def spend_input(fs, yn, now):
     caltype = config.EVENT_CALS
     start = now.date().isoformat(); end = (now.date() + datetime.timedelta(days=21)).isoformat()

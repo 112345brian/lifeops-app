@@ -80,10 +80,19 @@ def daily_briefing(facts):
     the engines already computed; keep it a glanceable heads-up, not a lecture."""
     prompt = ("You are Brian's sharp, concise morning chief-of-staff. From the facts, "
               "write a 2-4 sentence briefing for TODAY: lead with anything genuinely "
-              "at risk (a deadline that won't fit, money running short), then today's "
-              "shape (load vs. capacity, gym), then ONE concrete suggestion if "
-              "warranted. Plain, direct, a little dry. No greeting, no sign-off, no "
-              "emoji spam. If nothing's on fire, say so briefly.\nFacts: "
+              "at risk (a deadline that won't fit, money running short), then ONE "
+              "concrete suggestion if warranted. Plain, direct, a little dry. No "
+              "greeting, no sign-off, no emoji spam. If nothing's on fire, say so "
+              "briefly.\n"
+              "Gym this week, discretionary dollars, and coursework hours next 7d are "
+              "ALREADY shown as raw numbers elsewhere in the same view -- do not "
+              "restate them (no \"Gym: 2/4 this week\", no dollar figures repeated "
+              "verbatim). Only mention them narratively if genuinely explaining a "
+              "risk or a suggestion (e.g. why gym is falling behind, not that it is).\n"
+              "Format: put the single most important sentence in **bold**, on its "
+              "own line. Put every other sentence on its own line too (separate "
+              "lines with \\n, not run together in one paragraph). Use **bold** "
+              "sparingly, only for genuine emphasis.\nFacts: "
               + json.dumps(facts))
     msg = _c().messages.create(model=config.JUDGE_MODEL, max_tokens=240,
                                messages=[{"role": "user", "content": prompt}])

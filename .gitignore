@@ -1,4 +1,6 @@
 .env
+firebase-service-account.json
+android/app/google-services.json
 logs/
 *.state.json
 **/__pycache__/
