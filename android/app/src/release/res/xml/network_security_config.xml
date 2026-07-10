@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Release builds keep the platform default (no cleartext traffic at all) --
+     this file just exists so the manifest's networkSecurityConfig reference
+     resolves for both build types; it grants no exception. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>

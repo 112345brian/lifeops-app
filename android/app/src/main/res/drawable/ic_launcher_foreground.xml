@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Simple placeholder glyph: a rounded "briefing card" shape, centered in the
+         safe zone (the inner 66dp x 66dp of the 108dp x 108dp adaptive-icon canvas). -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M29,34 h50 a5,5 0 0 1 5,5 v30 a5,5 0 0 1 -5,5 h-50 a5,5 0 0 1 -5,-5 v-30 a5,5 0 0 1 5,-5 z" />
+    <path
+        android:fillColor="#1B1F3B"
+        android:pathData="M34,46 h40 v4 h-40 z" />
+    <path
+        android:fillColor="#1B1F3B"
+        android:pathData="M34,56 h40 v4 h-40 z" />
+    <path
+        android:fillColor="#1B1F3B"
+        android:pathData="M34,66 h24 v4 h-24 z" />
+</vector>

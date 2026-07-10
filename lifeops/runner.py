@@ -7,7 +7,7 @@ Run:  python -m lifeops.runner          # all wired domains
       python -m lifeops.runner gym      # one domain
 """
 import sys, os, re, io, json, datetime, contextlib
-from . import config, ntfy, gather, lock, history, adherence, actions
+from . import config, ntfy, fcm, gather, lock, history, adherence, actions
 from .flowsavvy import FlowSavvy
 from .ynab import YNAB
 from .engines import gym_engine, ynab_engine
@@ -639,6 +639,16 @@ def run_briefing(fs, yn, now):
     # the base path, and the briefing card lives on the Home page as an
     # anchor, not its own route, so this needs the bare-path+anchor form.
     _alert_once("briefing:" + today.isoformat(), text, click_anchor="#briefing")
+    # Second, silent push carrying the same {date, text, facts} the widget
+    # renders -- via FCM (not ntfy): a manifest-registered receiver for
+    # ntfy's implicit io.heckel.ntfy.MESSAGE_RECEIVED broadcast can't wake a
+    # stopped app on modern Android, so it was unreliable. FCM's delivery
+    # path is OS-privileged and wakes the app regardless. No-ops if the
+    # widget hasn't registered a device token yet.
+    try:
+        fcm.send_briefing(today.isoformat(), text, facts)
+    except Exception as e:
+        print(f"[briefing] fcm send error: {e}")
     # persist for the panel (survives the once/day ntfy dedup)
     bp = os.path.join(history.ROOT, "logs", "briefing.json")
     os.makedirs(os.path.dirname(bp), exist_ok=True)

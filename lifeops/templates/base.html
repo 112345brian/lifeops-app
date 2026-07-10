@@ -302,6 +302,10 @@ tr:last-child td { border-bottom: none; }
   padding-right: 1rem;
   width: 1px;
 }
+#config td:last-child { width: 100%; }
+#config .f-row { display: flex; width: 100%; min-width: 0; }
+#config .f-row input.w-xl { flex: 1; min-width: 0; max-width: 300px; width: auto; }
+#config .f-row button { flex-shrink: 0; }
 
 /* ── history ── */
 .hist-scroll { max-height: 420px; overflow-y: auto; }

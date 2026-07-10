@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Fallback layout shown by the OS for a brief moment before Glance's own
+  composition takes over (used as android:initialLayout / android:previewLayout
+  in res/xml/briefing_widget_info.xml). Intentionally minimal — the real widget
+  content is rendered by BriefingWidget (Glance), not this file.
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#1B1F3B"
+    android:padding="16dp">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:text="@string/widget_placeholder_text"
+        android:textColor="#FFFFFF"
+        android:textSize="14sp" />
+
+</FrameLayout>

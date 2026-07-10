@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug-only: allows plain http:// to loopback addresses so the widget can
+     be tested via `adb reverse` against a local dev server, without weakening
+     the release build (see src/release/res/xml/network_security_config.xml,
+     which keeps the platform default of no cleartext traffic at all). Real
+     deployments talk to the server over Tailscale HTTPS, where this
+     exception never applies. -->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">10.0.2.2</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>

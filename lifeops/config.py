@@ -54,6 +54,13 @@ JUDGE_MODEL       = os.environ.get("JUDGE_MODEL", "claude-haiku-4-5-20251001")
 NTFY_SIGNAL_TOPIC = os.environ.get("NTFY_SIGNAL_TOPIC", "")   # phone -> app
 NTFY_ALERTS_TOPIC = os.environ.get("NTFY_ALERTS_TOPIC", "")   # app -> phone
 
+# Firebase Cloud Messaging — reliable push for the Android widget's briefing
+# (the ntfy path above can't wake a stopped app; see lifeops/fcm.py). Key file
+# is gitignored -- download from Firebase console: gear icon -> Project
+# settings -> Service accounts -> Generate new private key.
+FCM_SERVICE_ACCOUNT_FILE = os.environ.get(
+    "FCM_SERVICE_ACCOUNT_FILE", str(ROOT / "firebase-service-account.json"))
+
 # FlowSavvy ids (from your account; the connector already revealed these)
 LIST_PERSONAL = os.environ.get("LIST_PERSONAL", "")
 LIST_COURSE   = os.environ.get("LIST_COURSE", "")
