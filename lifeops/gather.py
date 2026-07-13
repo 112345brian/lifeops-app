@@ -62,6 +62,69 @@ def _gym_blocked_dates():
     except Exception:
         return set()
 
+def gym_ring(gym_last_7d, gym_target, today_needed, today_done):
+    """Deterministic {fill, color} for the widget's gym ring.
+
+    `fill` is purely the trailing-7-day adherence ratio (gym_last_7d /
+    gym_target) -- it only grows as real sessions accumulate in the window,
+    and completing today's session does NOT artificially inflate it.
+
+    `color` is a separate, same-day ACTION signal layered on top, decoupled
+    from fill:
+      red    - zero sessions in the trailing 7 days (a total drought)
+      yellow - still need to go: behind target, OR at/above target but
+               today has a scheduled-not-done session (the engine already
+               decided today is a go-day, per `today_needed`)
+      green  - nothing needed right now: today's session is already done,
+               or target is met and nothing was scheduled today
+
+    Completing today's session turns color green immediately without
+    waiting for fill to catch up -- the two are intentionally independent,
+    not two views of the same number."""
+    fill = max(0.0, min(1.0, gym_last_7d / gym_target)) if gym_target else 0.0
+    if gym_last_7d <= 0:
+        color = "red"
+    elif today_done:
+        color = "green"
+    elif today_needed:
+        color = "yellow"
+    elif gym_last_7d >= gym_target:
+        color = "green"
+    else:
+        color = "yellow"
+    return {"fill": round(fill, 3), "color": color}
+
+def _gym_scheduled_today(fs, now):
+    """True if there's an open (not-yet-completed) Gym-titled task
+    scheduled for today -- i.e. the scheduling engine already decided
+    today is a go-day. Deliberately doesn't reuse the full gym_input():
+    that also does event-calendar/course-load/adherence work this one
+    boolean doesn't need."""
+    today = now.date().isoformat()
+    try:
+        items = fs.list_items(itemType="task", query="Gym", completed=False).get("items", [])
+    except Exception:
+        return False
+    return any((t.get("title") or "").startswith("Gym") and _d(t.get("startDateTime")) == today
+               for t in items)
+
+def gym_ring_now(fs, now):
+    """Live gym ring state computed fresh from current FlowSavvy + history
+    data -- used by both the daily briefing (once/day) and the direct
+    task-completion API / next-tasks push (every ~10 min or on-demand), so
+    a checkbox tap can return an up-to-the-second ring instead of waiting
+    for tomorrow's briefing recompute."""
+    today = now.date()
+    trail_start = (today - datetime.timedelta(days=6)).isoformat()
+    trail_end = today.isoformat()
+    gym_dates = history.days_with("gym", trail_start, trail_end)
+    gym_last_7d = len(gym_dates - history.days_with("gym_skip", trail_start, trail_end))
+    today_done = today.isoformat() in gym_dates
+    today_needed = _gym_scheduled_today(fs, now)
+    target = 4
+    ring = gym_ring(gym_last_7d, target, today_needed, today_done)
+    return {**ring, "gym_last_7d": gym_last_7d, "gym_target": target, "today_done": today_done}
+
 def gym_input(fs, now, sick_until=None, gym_open=None):
     """gym_open: pre-fetched "Gym"-titled open tasks, if the caller already has
     them (run_gym does, for its own cleanup pass) — avoids re-issuing the same

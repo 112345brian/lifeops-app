@@ -4,6 +4,56 @@ Notable changes, newest first. Personal project, versioned simply (see
 `VERSION` / `lifeops.__version__`) — dates and the reasoning behind each
 change matter more here than semver strictness.
 
+## [1.9.0] — 2026-07-13
+
+### Added
+- **Hardened optimistic task completion.** `PendingRemovals` already
+  masked an optimistically-completed task from fresh next-tasks snapshots
+  for a fixed 3-min TTL, but never actively restored it if completion
+  genuinely failed and no fresh snapshot happened to arrive -- it just
+  stopped masking, leaving the task hidden indefinitely. Pending records
+  now also store the tap time plus the task's title/start, enabling three
+  outcomes: a fresh snapshot missing the id clears the pending record
+  immediately (confirmed complete); a fresh snapshot that still has it,
+  once past a ~3-min grace window (margin over the ~2-min ntfy→ingest
+  cycle), also clears it and shows the task normally (confirmed failed,
+  without waiting the full timeout or flickering on every snapshot that
+  lands mid-flight); and `NextTasksRefreshWorker`'s existing 15-min
+  periodic cadence now also sweeps for entries past a 10-min hard timeout
+  and restores them from their stored title/start, independent of any
+  network call succeeding (stuck/offline).
+
+## [1.8.0] — 2026-07-13
+
+### Added
+- **Widget glyph redesign catch-up.** `attention.compute()` already
+  produces a per-domain (coursework/system/money/gym) reasons list with a
+  deterministic severity per domain, but only the single overall headline
+  reached the widget. Added a per-domain severity-dot row under the
+  attention badge (one glyph per domain, colored by that domain's worst
+  open severity, green when nothing's open) at every widget size, and
+  moved money/coursework from plain text to icon+monospace-number tiles
+  matching the gym ring's icon-first visual language -- a step toward an
+  instrument-panel that reads at a glance instead of like a text message.
+
+## [1.7.0] — 2026-07-13
+
+### Added
+- **Gym ring widget indicator.** The single N/target ratio tried to answer
+  two questions at once -- "how healthy is recent adherence" and "do I
+  need to go today" -- and they don't move together. Split into two
+  decoupled channels: `fill` is the pure trailing-7-day adherence ratio
+  (only grows via real logged sessions, never inflated by completing
+  today's session), `color` is a same-day action signal (red = zero
+  sessions in 7d, yellow = still need to go today, green = today's
+  session done or nothing scheduled while at/above target).
+  `gather.gym_ring_now()` is now shared by the daily briefing, the
+  ~10-min `next_tasks` FCM push, and the direct task-completion API, so
+  a checkbox tap on the tailnet gets an instantly fresh ring. Rendered
+  on Android as a bitmap-drawn ring (Glance has no native arc primitive)
+  with the gym emoji layered on top, falling back to the old plain bar
+  if a ring hasn't loaded yet.
+
 ## [1.6.0] — 2026-07-13
 
 ### Added
@@ -49,6 +99,23 @@ change matter more here than semver strictness.
   `push_next_tasks()` ran before domain dispatch/`recalculate()` in
   `_run()`, so a pushed snapshot could miss a change the same tick's
   domains just made -- moved to run after.
+- `_push_with_ack` wrote `{"acked": true}` whenever a send was skipped
+  because there was nothing to send yet (no FCM token registered) --
+  correct in the moment, but it fabricated a permanent "acked" sentinel
+  for that content's hash. Once a token was later registered, the same
+  unchanged snapshot hashed to the same version and got skipped forever
+  by the unchanged-and-acked check, so a fresh install's first real
+  content never actually delivered even after configuration finished.
+  Fixed: write no state at all when nothing was sent, so an
+  unconfigured device just cheaply retries until a real send succeeds.
+- Four Android call sites (`NextTasksRefreshWorker`, `CompleteTaskAction`,
+  `BriefingFcmService`) appended raw, unencoded tokens and task IDs into
+  request URLs -- inconsistent with `OpenPanelAction`'s existing
+  `Uri.encode`, and a real bug since `WEB_TOKEN` is free-text editable
+  via the panel's own Settings page (`&`, `#`, `+`, `%`, spaces all
+  realistically reachable). Now routed through a shared
+  `authenticatedUrl()` helper that encodes the query token, plus
+  `Uri.encode()` on the task-id path segment.
 
 ## [1.5.0] — 2026-07-13
 

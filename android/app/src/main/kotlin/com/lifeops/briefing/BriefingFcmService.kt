@@ -13,7 +13,6 @@ import com.google.firebase.messaging.RemoteMessage
 import com.lifeops.briefing.data.BriefingState
 import java.io.IOException
 import java.net.HttpURLConnection
-import java.net.URL
 import java.util.concurrent.TimeUnit
 import org.json.JSONObject
 
@@ -137,7 +136,7 @@ private fun registerTokenDirect(baseUrl: String, authToken: String, token: Strin
     // JSON the server rejects with a silent 400.
     val body = JSONObject().put("fcm_token", token).toString()
     httpRequest(
-        url = "$baseUrl/api/register-fcm-token?token=$authToken",
+        url = authenticatedUrl(baseUrl, "/api/register-fcm-token", authToken),
         method = "POST",
         body = body,
         requireExactCode = HttpURLConnection.HTTP_OK,

@@ -15,12 +15,14 @@ object WidgetKeys {
     // Written by NextTasksRefreshWorker (periodic pull) and CompleteTaskAction
     // (optimistic local removal on tap), read by BriefingWidget.provideGlance.
     val NEXT_TASKS_JSON = stringPreferencesKey("next_tasks_json") // NextTasksState serialized as JSON, or absent if never fetched
-    // {taskId: expiryEpochMillis} for tasks completed locally (checkbox tap)
-    // but not yet confirmed reflected server-side. A full refresh landing
-    // before the ~2-min ntfy->ingest completion cycle catches up would
-    // otherwise silently resurrect a task the user just checked off --
-    // PendingRemovals filters these out of any fresh write until they
-    // expire. See PendingRemovals.kt.
+    // {taskId: {tappedAt, title, start}} for tasks completed locally
+    // (checkbox tap) but not yet confirmed reflected server-side. A full
+    // refresh landing before the ~2-min ntfy->ingest completion cycle
+    // catches up would otherwise silently resurrect a task the user just
+    // checked off -- PendingRemovals filters these out of any fresh write
+    // until they're confirmed complete, confirmed failed (past grace, still
+    // present), or hit the ~10-min hard timeout and get restored to the
+    // visible list from the stored title/start. See PendingRemovals.kt.
     val PENDING_REMOVED_JSON = stringPreferencesKey("pending_removed_json")
 
     // App-level SharedPreferences -- written by the settings screen.

@@ -1,14 +1,23 @@
 package com.lifeops.briefing
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.RectF
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.datastore.preferences.core.Preferences
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
 import androidx.glance.GlanceTheme
+import androidx.glance.Image
+import androidx.glance.ImageProvider
+import androidx.glance.LocalContext
 import androidx.glance.LocalSize
 import androidx.glance.action.ActionParameters
 import androidx.glance.action.clickable
@@ -20,6 +29,7 @@ import androidx.glance.appwidget.action.actionRunCallback
 import androidx.glance.appwidget.provideContent
 import androidx.glance.background
 import androidx.glance.currentState
+import androidx.glance.layout.Alignment
 import androidx.glance.layout.Box
 import androidx.glance.layout.Column
 import androidx.glance.layout.Row
@@ -28,18 +38,22 @@ import androidx.glance.layout.fillMaxSize
 import androidx.glance.layout.fillMaxWidth
 import androidx.glance.layout.height
 import androidx.glance.layout.padding
+import androidx.glance.layout.size
 import androidx.glance.layout.width
 import androidx.glance.text.FontWeight
 import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
+import com.lifeops.briefing.data.AttentionReason
 import com.lifeops.briefing.data.BriefingState
+import com.lifeops.briefing.data.GymRing
 import com.lifeops.briefing.data.NextTask
 import com.lifeops.briefing.data.NextTasksState
 import com.lifeops.briefing.data.TodayEvent
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
+import kotlin.math.roundToInt
 
 /** The three layouts BriefingContent renders, keyed to how much room the
  * placed widget actually has (see BriefingWidget.sizeMode). A user can
@@ -137,15 +151,20 @@ internal fun BriefingContent(state: BriefingState, nextTasks: NextTasksState) {
                 BriefingParagraph(state.text)
             }
 
-            // Gym gets a compact proportional bar (a real meter, not just a
-            // fraction as text) since it's the one stat with a clear target
-            // to fill toward -- money/coursework are single numbers with no
-            // fixed "full" to bar against, so they stay plain text.
-            if (state.gymLast7d != null && state.gymTarget != null) {
+            // Gym gets a real meter, not just a fraction as text -- it's the
+            // one stat with a clear target to fill toward. The ring
+            // (nextTasks.gymRing, refreshed ~every 10 min or instantly on
+            // task completion) is preferred over the once-daily briefing's
+            // plain bar because it also carries the same-day action signal
+            // (color) the bar can't express -- see GymRing's docstring.
+            val gymRing = nextTasks.gymRing
+            if (gymRing != null) {
+                GymRingIndicator(gymRing)
+            } else if (state.gymLast7d != null && state.gymTarget != null) {
                 GymBar(state.gymLast7d, state.gymTarget)
             }
 
-            StatRow(state)
+            StatTilesRow(state)
             StaleIndicator(state.fetchedAtEpochMillis)
         }
 
@@ -212,8 +231,72 @@ private fun AttentionHeader(state: BriefingState, compact: Boolean) {
         Text(text = it, style = TextStyle(fontWeight = FontWeight.Bold,
             color = GlanceTheme.colors.onSurface))
     }
+    if (state.reasons.isNotEmpty()) {
+        Spacer(modifier = GlanceModifier.height(4.dp))
+        SeverityDots(state.reasons)
+    }
     if (!compact) {
         Spacer(modifier = GlanceModifier.height(6.dp))
+    }
+}
+
+/** Per-domain glyph row -- one dot per tracked domain (coursework, system,
+ * money, gym, matching attention.py's _DOMAIN_PRIORITY order), colored by
+ * the worst severity attention.compute() found for that domain, green when
+ * a domain has no open reason at all. Lets a glance answer "which of my
+ * four areas needs something" without reading any text -- the instrument-
+ * panel glyph language the rest of the widget is moving toward, rather
+ * than one linear headline trying to speak for every domain at once. */
+private val DOT_DOMAIN_ORDER = listOf("coursework", "system", "money", "gym")
+private const val DOT_SIZE_DP = 7
+private val SEVERITY_RANK = mapOf("ok" to 0, "watch" to 1, "risk" to 2, "fucked" to 3)
+
+private fun severityDotColor(severity: String): Color = when (severity) {
+    "fucked" -> Color(0xFFB3261E)
+    "risk" -> Color(0xFFC25100)
+    "watch" -> Color(0xFF8A5A00)
+    else -> COLOR_OK
+}
+
+private fun renderDotBitmap(sizePx: Int, colorArgb: Int): Bitmap {
+    val bitmap = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bitmap)
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = colorArgb }
+    val radius = sizePx / 2f
+    canvas.drawCircle(radius, radius, radius, paint)
+    return bitmap
+}
+
+// A fixed source-bitmap resolution, not device density -- Image scales the
+// bitmap to the GlanceModifier.size(DOT_SIZE_DP.dp) box regardless of the
+// source's raw pixel dimensions, so (unlike the ring, whose stroke width
+// must scale with its dp size) a plain filled circle needs no density
+// lookup at all.
+private const val DOT_BITMAP_PX = 32
+
+@Composable
+private fun SeverityDots(reasons: List<AttentionReason>) {
+    val worstByDomain = mutableMapOf<String, String>()
+    for (r in reasons) {
+        val rank = SEVERITY_RANK[r.severity] ?: continue
+        val currentRank = SEVERITY_RANK[worstByDomain[r.domain]] ?: -1
+        if (rank > currentRank) {
+            worstByDomain[r.domain] = r.severity
+        }
+    }
+    Row {
+        DOT_DOMAIN_ORDER.forEachIndexed { index, domain ->
+            if (index > 0) {
+                Spacer(modifier = GlanceModifier.width(5.dp))
+            }
+            val severity = worstByDomain[domain] ?: "ok"
+            val bitmap = renderDotBitmap(DOT_BITMAP_PX, severityDotColor(severity).toArgb())
+            Image(
+                provider = ImageProvider(bitmap),
+                contentDescription = "$domain: $severity",
+                modifier = GlanceModifier.size(DOT_SIZE_DP.dp),
+            )
+        }
     }
 }
 
@@ -241,26 +324,42 @@ private fun BriefingParagraph(text: String) {
     }
 }
 
+/** Icon+monospace-number card -- glyph replaces the label, number is the
+ * one thing that needs to read at a glance, matching the gym ring's
+ * icon-first visual language instead of a plain "$340" text run. */
 @Composable
-private fun StatRow(state: BriefingState) {
-    val stats = buildList {
+private fun StatTile(emoji: String, value: String, modifier: GlanceModifier = GlanceModifier) {
+    Column(
+        modifier = modifier
+            .background(GlanceTheme.colors.surfaceVariant)
+            .padding(6.dp),
+    ) {
+        Text(text = emoji, style = TextStyle(fontSize = 12.sp))
+        Text(
+            text = value,
+            style = TextStyle(fontWeight = FontWeight.Bold, fontSize = 16.sp,
+                color = GlanceTheme.colors.onSurface),
+        )
+    }
+}
+
+@Composable
+private fun StatTilesRow(state: BriefingState) {
+    val tiles = buildList {
         if (state.discretionaryDollars != null) {
-            add("$${state.discretionaryDollars}")
+            add("💰" to "$${state.discretionaryDollars}")
         }
         if (state.courseworkHoursNext7d != null) {
-            add("${state.courseworkHoursNext7d}h/7d")
+            add("📚" to "${state.courseworkHoursNext7d}h")
         }
     }
-    if (stats.isEmpty()) return
+    if (tiles.isEmpty()) return
     Row(modifier = GlanceModifier.fillMaxWidth().padding(top = 4.dp)) {
-        stats.forEachIndexed { index, stat ->
+        tiles.forEachIndexed { index, (emoji, value) ->
             if (index > 0) {
-                Spacer(modifier = GlanceModifier.width(8.dp))
+                Spacer(modifier = GlanceModifier.width(6.dp))
             }
-            Text(
-                text = stat,
-                style = TextStyle(color = GlanceTheme.colors.onSurfaceVariant),
-            )
+            StatTile(emoji, value, modifier = GlanceModifier.width(STAT_TILE_WIDTH_DP.dp))
         }
     }
 }
@@ -292,6 +391,7 @@ private fun StaleIndicator(fetchedAtEpochMillis: Long?) {
 
 private const val STALE_THRESHOLD_MINUTES = 120L
 private const val GYM_BAR_WIDTH_DP = 60
+private const val STAT_TILE_WIDTH_DP = 100
 
 /** Compact proportional meter: filled portion in teal once at/above target,
  * amber while short of it -- same two colors the stat text already used, now
@@ -318,6 +418,72 @@ private fun GymBar(completed: Int, target: Int) {
         if (filledDp < GYM_BAR_WIDTH_DP) {
             Box(modifier = GlanceModifier.width((GYM_BAR_WIDTH_DP - filledDp).dp).height(6.dp)
                 .background(GlanceTheme.colors.surfaceVariant)) {}
+        }
+    }
+}
+
+private const val GYM_RING_SIZE_DP = 36
+private const val GYM_RING_STROKE_DP = 4
+private val GYM_RING_RED = Color(0xFFB3261E)
+
+/** Draws the ring as a bitmap via plain android.graphics.Canvas/Paint --
+ * Glance has no native arc/canvas composable, so this is the standard
+ * workaround: render once per recomposition, then display through Glance's
+ * Image(ImageProvider(bitmap)). Sweeps clockwise from 12 o'clock (-90deg),
+ * matching the conventional progress-ring orientation. */
+private fun renderGymRingBitmap(sizePx: Int, strokeWidthPx: Float, fill: Float, trackColor: Int, fillColor: Int): Bitmap {
+    val bitmap = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bitmap)
+    val inset = strokeWidthPx / 2f
+    val rect = RectF(inset, inset, sizePx - inset, sizePx - inset)
+    val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = strokeWidthPx
+        strokeCap = Paint.Cap.ROUND
+        color = trackColor
+    }
+    canvas.drawArc(rect, 0f, 360f, false, trackPaint)
+    val clampedFill = fill.coerceIn(0f, 1f)
+    if (clampedFill > 0f) {
+        val fillPaint = Paint(trackPaint).apply { color = fillColor }
+        canvas.drawArc(rect, -90f, 360f * clampedFill, false, fillPaint)
+    }
+    return bitmap
+}
+
+/** Gym ring: fill = trailing-7-day adherence ratio (grows only as real
+ * sessions accumulate), color = same-day action signal, intentionally
+ * decoupled -- see GymRing's docstring. Rendered as a bitmap ring (see
+ * renderGymRingBitmap) with the gym emoji layered on top via a centered Box. */
+@Composable
+private fun GymRingIndicator(gymRing: GymRing) {
+    val context = LocalContext.current
+    val density = context.resources.displayMetrics.density
+    val sizePx = (GYM_RING_SIZE_DP * density).roundToInt()
+    val strokePx = GYM_RING_STROKE_DP * density
+    val ringColor = when (gymRing.color) {
+        "green" -> COLOR_OK
+        "yellow" -> COLOR_WARN
+        else -> GYM_RING_RED
+    }
+    val bitmap = renderGymRingBitmap(
+        sizePx = sizePx,
+        strokeWidthPx = strokePx,
+        fill = gymRing.fill,
+        trackColor = Color(0x33FFFFFF).toArgb(),
+        fillColor = ringColor.toArgb(),
+    )
+    Row(modifier = GlanceModifier.padding(top = 4.dp)) {
+        Box(
+            modifier = GlanceModifier.size(GYM_RING_SIZE_DP.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Image(
+                provider = ImageProvider(bitmap),
+                contentDescription = "Gym ${gymRing.gymLast7d}/${gymRing.gymTarget}, ${gymRing.color}",
+                modifier = GlanceModifier.fillMaxSize(),
+            )
+            Text(text = "🏋", style = TextStyle(fontSize = 16.sp))
         }
     }
 }

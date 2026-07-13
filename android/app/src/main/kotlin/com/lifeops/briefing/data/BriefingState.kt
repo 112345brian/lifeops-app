@@ -1,6 +1,14 @@
 package com.lifeops.briefing.data
 
+import org.json.JSONArray
 import org.json.JSONObject
+
+/** One entry from attention.compute()'s deterministic `reasons` list --
+ * just enough (domain + severity) to render the widget's per-domain
+ * severity dots. Title/action/due are intentionally not carried here; the
+ * full reason detail already surfaces in the panel, the widget only needs
+ * the glyph-level signal. */
+data class AttentionReason(val domain: String, val severity: String)
 
 /** In-memory shape of one briefing snapshot -- what BriefingReceiver parses
  * each ntfy "briefing-data" push into, and what the widget UI renders.
@@ -17,6 +25,7 @@ data class BriefingState(
     val attentionSymbol: String? = null,
     val attentionLabel: String? = null,
     val attentionHeadline: String? = null,
+    val reasons: List<AttentionReason> = emptyList(),
 ) {
     fun toJson(): String = JSONObject().apply {
         put("date", date)
@@ -30,10 +39,26 @@ data class BriefingState(
         put("attentionSymbol", attentionSymbol)
         put("attentionLabel", attentionLabel)
         put("attentionHeadline", attentionHeadline)
+        put("reasons", JSONArray().apply {
+            reasons.forEach { r ->
+                put(JSONObject().apply {
+                    put("domain", r.domain)
+                    put("severity", r.severity)
+                })
+            }
+        })
     }.toString()
 
     companion object {
         fun empty() = BriefingState(date = null, text = null)
+
+        private fun parseReasons(arr: JSONArray?): List<AttentionReason> {
+            if (arr == null) return emptyList()
+            return (0 until arr.length()).map { i ->
+                val r = arr.getJSONObject(i)
+                AttentionReason(domain = r.optString("domain"), severity = r.optString("severity"))
+            }
+        }
 
         fun fromJson(raw: String): BriefingState {
             val o = JSONObject(raw)
@@ -51,6 +76,7 @@ data class BriefingState(
                 attentionSymbol = o.optString("attentionSymbol").takeIf { it.isNotEmpty() },
                 attentionLabel = o.optString("attentionLabel").takeIf { it.isNotEmpty() },
                 attentionHeadline = o.optString("attentionHeadline").takeIf { it.isNotEmpty() },
+                reasons = parseReasons(o.optJSONArray("reasons")),
             )
         }
 
@@ -75,6 +101,7 @@ data class BriefingState(
                 attentionSymbol = attention.optString("symbol").takeIf { it.isNotEmpty() },
                 attentionLabel = attention.optString("label").takeIf { it.isNotEmpty() },
                 attentionHeadline = attention.optString("headline").takeIf { it.isNotEmpty() },
+                reasons = parseReasons(attention.optJSONArray("reasons")),
             )
         }
     }

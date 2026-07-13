@@ -35,8 +35,8 @@ def push_briefing(date, text, facts, version):
     return fcm.send_briefing(date, text, facts, version)
 
 
-def push_next_tasks(tasks, events, version):
+def push_next_tasks(tasks, events, gym_ring, version):
     """Push a fresh next-tasks + today's-events snapshot to rich clients --
     the Tailscale-independent counterpart to the widget's periodic direct
     pull. See fcm.send_next_tasks's docstring, including the return value."""
-    return fcm.send_next_tasks(tasks, events, version)
+    return fcm.send_next_tasks(tasks, events, gym_ring, version)
