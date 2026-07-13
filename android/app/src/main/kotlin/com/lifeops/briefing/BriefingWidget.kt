@@ -188,6 +188,13 @@ internal fun BriefingContent(state: BriefingState, nextTasks: NextTasksState) {
     }
 }
 
+/** Shared with GymBar's on/off-target color and StaleIndicator's warning
+ * color -- all three signal "this is fine" vs. "this needs attention" with
+ * the same two colors, so they're defined once here rather than as three
+ * independently-typed hex literals that could silently drift apart. */
+private val COLOR_OK = Color(0xFF276B5E)
+private val COLOR_WARN = Color(0xFFA8641F)
+
 @Composable
 private fun AttentionHeader(state: BriefingState, compact: Boolean) {
     if (state.attentionState == null) return
@@ -195,7 +202,7 @@ private fun AttentionHeader(state: BriefingState, compact: Boolean) {
         "fucked" -> Color(0xFFB3261E)
         "risk" -> Color(0xFFC25100)
         "watch" -> Color(0xFF8A5A00)
-        else -> Color(0xFF276B5E)
+        else -> COLOR_OK
     }
     Text(
         text = "${state.attentionSymbol ?: "●"} ${state.attentionLabel ?: state.attentionState.uppercase()}",
@@ -275,7 +282,7 @@ private fun StaleIndicator(fetchedAtEpochMillis: Long?) {
         text = label,
         style = TextStyle(
             color = if (ageMinutes >= STALE_THRESHOLD_MINUTES) {
-                ColorProvider(Color(0xFFA8641F))
+                ColorProvider(COLOR_WARN)
             } else {
                 GlanceTheme.colors.onSurfaceVariant
             },
@@ -295,7 +302,7 @@ private const val GYM_BAR_WIDTH_DP = 60
 private fun GymBar(completed: Int, target: Int) {
     val ratio = if (target > 0) (completed.toFloat() / target.toFloat()).coerceIn(0f, 1f) else 0f
     val filledDp = (GYM_BAR_WIDTH_DP * ratio).toInt()
-    val barColor = if (completed >= target) Color(0xFF276B5E) else Color(0xFFA8641F)
+    val barColor = if (completed >= target) COLOR_OK else COLOR_WARN
 
     Row(modifier = GlanceModifier.padding(top = 4.dp)) {
         Text(

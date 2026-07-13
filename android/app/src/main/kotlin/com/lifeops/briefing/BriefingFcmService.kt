@@ -13,6 +13,7 @@ import com.lifeops.briefing.data.BriefingState
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
+import org.json.JSONObject
 
 /**
  * Receives the daily briefing via Firebase Cloud Messaging -- replaces the
@@ -83,7 +84,11 @@ internal fun registerToken(context: android.content.Context, token: String) {
             readTimeout = 15_000
         }
         try {
-            connection.outputStream.use { it.write("""{"fcm_token":"$token"}""".toByteArray()) }
+            // JSONObject, not raw string interpolation -- an unescaped
+            // token containing a quote or backslash would otherwise produce
+            // malformed JSON the server rejects with a silent 400.
+            val body = JSONObject().put("fcm_token", token).toString()
+            connection.outputStream.use { it.write(body.toByteArray()) }
             val code = connection.responseCode
             if (code != HttpURLConnection.HTTP_OK) {
                 Log.e("BriefingFcmService", "register-fcm-token returned HTTP $code")

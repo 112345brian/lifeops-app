@@ -42,6 +42,14 @@ class CompleteTaskAction : ActionCallback {
                 return
             } catch (e: IOException) {
                 Log.w(TAG, "direct completion failed for $taskId, falling back to ntfy signal", e)
+            } catch (e: org.json.JSONException) {
+                // The server is reachable but returned a response we can't
+                // parse (auth interstitial, proxy page, a future server
+                // bug) -- just as untrustworthy as a network failure, so
+                // this falls back the same way rather than crashing the
+                // widget's action callback.
+                Log.w(TAG, "direct completion returned a malformed response for $taskId, " +
+                    "falling back to ntfy signal", e)
             }
         }
 
