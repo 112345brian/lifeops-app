@@ -64,9 +64,6 @@ kotlin {
 }
 
 dependencies {
-    testImplementation("junit:junit:4.13.2")
-    testImplementation("org.json:json:20250517")
-
     implementation("androidx.core:core-ktx:1.19.0")
 
     // Jetpack Glance, for building the home-screen widget UI.

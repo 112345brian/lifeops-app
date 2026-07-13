@@ -390,6 +390,16 @@ def _today_briefing_raw():
         return None
     return {"date": b.get("date"), "text": b.get("text", ""), "facts": b.get("facts") or {}}
 
+def _current_attention(briefing=None, lr=None):
+    """Deterministic attention state for the given (or freshly-loaded)
+    briefing facts + last-run health. Shared by _build_context (panel home)
+    and the mutation endpoints below, so a POST that changes gym/schedule
+    state can hand the caller a fresh read without a second round trip."""
+    from . import attention
+    briefing = _today_briefing() if briefing is None else briefing
+    lr = _last_run() if lr is None else lr
+    return attention.compute((briefing or {}).get("facts") or {}, lr or {})
+
 def _cashflow():
     """Panel-only forward discretionary-balance projection (run_cashflow writes
     logs/cashflow.json; no notifications by design). Adds a `bar_pct` per week
@@ -514,8 +524,7 @@ def _build_context(fs=None, include_cycle=False):
     ]
 
     briefing = _today_briefing()
-    from . import attention
-    current_attention = attention.compute((briefing or {}).get("facts") or {}, lr or {})
+    current_attention = _current_attention(briefing, lr)
     return {
         "status_dot":       dot,
         "status_text":      text,
@@ -604,6 +613,52 @@ def api_task_complete(task_id: str, n: int = 3):
     return JSONResponse({"completed_id": task_id,
                         "tasks": gather.next_tasks_input(fs, now, n, schedule_items=schedule_items),
                         "events": gather.today_events_input(fs, now, schedule_items=schedule_items)})
+
+@app.post("/api/gym/log")
+def api_gym_log():
+    """Logs a same-day gym session, same as ticking today on the home
+    calendar. Quick-action equivalent of the calendar click-through, scoped
+    to "today" since that's the only case a one-tap action needs."""
+    today = datetime.date.today().isoformat()
+    history.remove_day("gym_missed", today)  # see /gym/cycle-date's own note on this
+    history.append("gym", ts=f"{today}T12:00:00", source="ui")
+    _run_domain("gym")
+    return JSONResponse({"ok": True, "attention": _current_attention()})
+
+@app.post("/api/gym/skip")
+def api_gym_skip():
+    """JSON equivalent of the /gym-nocount form action: logs today as a
+    deliberate skip (not a missed session) and re-plans immediately."""
+    history.append("gym_skip", source="ui")
+    _run_domain("gym")
+    return JSONResponse({"ok": True, "attention": _current_attention()})
+
+@app.post("/api/schedule/block-day")
+async def api_schedule_block_day(request: Request):
+    """JSON equivalent of the /schedule/block-day form action. Body:
+    {"date": "YYYY-MM-DD"}."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "malformed JSON body")
+    date = (body or {}).get("date", "")
+    try:
+        datetime.date.fromisoformat(date)
+    except ValueError:
+        raise HTTPException(400, "date required (YYYY-MM-DD)")
+    with _exclusive():
+        warn = _block_day(date)
+    _run_domain("gym")
+    return JSONResponse({"ok": True, "warning": warn or None, "attention": _current_attention()})
+
+@app.post("/api/domains/{name}/run")
+def api_domain_run(name: str):
+    """JSON equivalent of the /run form action -- triggers one domain
+    out-of-cycle (e.g. after a manual schedule change)."""
+    if name not in ALL_DOMAINS:               # never pass arbitrary argv through
+        raise HTTPException(404, f"unknown domain: {name[:24]}")
+    _run_domain(name)
+    return JSONResponse({"ok": True, "domain": name})
 
 FCM_TOKEN_FILE = os.path.join(ROOT, "logs", "fcm_token.json")
 

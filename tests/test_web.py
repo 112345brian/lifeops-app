@@ -1,7 +1,10 @@
+import json
+import os
+
 import pytest
 from fastapi.testclient import TestClient
 
-from lifeops import config, web, runner
+from lifeops import config, history, web, runner
 
 
 def test_settings_writer_uses_same_env_file_as_runtime():
@@ -71,3 +74,107 @@ def test_recurring_page_shows_flowsavvy_outage_instead_of_500(monkeypatch):
 
     assert response.status_code == 200
     assert "FlowSavvy is unavailable" in response.text
+
+
+# ── Actions API ──────────────────────────────────────────────────────────
+
+@pytest.fixture
+def sandbox(tmp_path, monkeypatch):
+    """Isolates every file-backed side effect the Actions API endpoints
+    touch (history.jsonl, gym/schedule block files) from the real logs/
+    directory, and stubs out _run_domain so tests never spawn a real
+    subprocess. Returns the recorded _run_domain calls."""
+    monkeypatch.setattr(config, "WEB_TOKEN", "")
+    monkeypatch.setattr(history, "HIST", os.path.join(str(tmp_path), "logs", "history.jsonl"))
+    os.makedirs(os.path.join(str(tmp_path), "logs"), exist_ok=True)
+    monkeypatch.setattr(web, "GYM_STATE_FILE", os.path.join(str(tmp_path), "logs", "gym_state.json"))
+    monkeypatch.setattr(web, "GYM_BLOCKS_FILE", os.path.join(str(tmp_path), "logs", "gym_blocks.json"))
+    monkeypatch.setattr(web, "SCHED_BLOCKS_FILE", os.path.join(str(tmp_path), "logs", "schedule_blocks.json"))
+    monkeypatch.setattr(config, "BLOCK_CAL", "")  # skip the FlowSavvy busy-event branch
+    ran = []
+    monkeypatch.setattr(web, "_run_domain", lambda name: ran.append(name))
+    monkeypatch.setattr(web, "_current_attention", lambda *a, **k: {"state": "ok"})
+    return ran
+
+
+def test_api_gym_log_appends_history_and_replans(sandbox):
+    response = TestClient(web.app).post("/api/gym/log")
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert [e["action"] for e in history.events()] == ["gym"]
+    assert sandbox == ["gym"]
+
+
+def test_api_gym_skip_appends_history_and_replans(sandbox):
+    response = TestClient(web.app).post("/api/gym/skip")
+
+    assert response.status_code == 200
+    assert [e["action"] for e in history.events()] == ["gym_skip"]
+    assert sandbox == ["gym"]
+
+
+def test_api_schedule_block_day_rejects_bad_date(sandbox):
+    response = TestClient(web.app).post("/api/schedule/block-day", json={"date": "not-a-date"})
+
+    assert response.status_code == 400
+    assert sandbox == []
+
+
+def test_api_schedule_block_day_blocks_and_replans(sandbox):
+    response = TestClient(web.app).post("/api/schedule/block-day", json={"date": "2026-08-01"})
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert "2026-08-01" in web._gym_blocks()
+    assert sandbox == ["gym"]
+
+
+def test_api_domain_run_rejects_unknown_domain(sandbox):
+    response = TestClient(web.app).post("/api/domains/not-a-real-domain/run")
+
+    assert response.status_code == 404
+    assert sandbox == []
+
+
+def test_api_domain_run_triggers_named_domain(sandbox):
+    response = TestClient(web.app).post("/api/domains/gym/run")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "domain": "gym"}
+    assert sandbox == ["gym"]
+
+
+def test_api_task_complete_returns_fresh_tasks_and_events(monkeypatch):
+    monkeypatch.setattr(config, "WEB_TOKEN", "")
+    monkeypatch.setattr(web, "_current_attention", lambda *a, **k: {"state": "ok"})
+
+    class FakeFlowSavvy:
+        def __init__(self):
+            self.completed = []
+            self.recalculated = False
+
+        def complete_task(self, task_id):
+            self.completed.append(task_id)
+
+        def recalculate(self):
+            self.recalculated = True
+
+        def get_schedule(self, start, end):
+            return {"scheduleItems": [
+                {"itemType": "task", "itemId": "t2", "title": "Next up",
+                 "startTime": "2099-01-01T09:00:00", "completed": False},
+            ]}
+
+    fake = FakeFlowSavvy()
+    monkeypatch.setattr(web, "FlowSavvy", lambda: fake)
+
+    response = TestClient(web.app).post("/api/tasks/t1/complete")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["completed_id"] == "t1"
+    assert [t["id"] for t in body["tasks"]] == ["t2"]
+    assert body["events"] == []
+    assert fake.completed == ["t1"]
+    assert fake.recalculated is True
