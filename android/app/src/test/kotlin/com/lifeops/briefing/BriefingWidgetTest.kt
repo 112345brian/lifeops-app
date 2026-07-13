@@ -120,7 +120,7 @@ class BriefingWidgetTest {
     }
 
     @Test
-    fun statTiles_renderMoneyAndCourseworkAsIconTiles() = runGlanceAppWidgetUnitTest {
+    fun statTiles_moneyIsJustTheNumber_courseworkKeepsItsIcon() = runGlanceAppWidgetUnitTest {
         setAppWidgetSize(DpSize(250.dp, 200.dp))
         provideComposable {
             GlanceTheme {
@@ -131,7 +131,11 @@ class BriefingWidgetTest {
             }
         }
 
+        // 2026-07-12: money reads as a big bold figure with no glyph -- the
+        // amount itself is the message; only coursework keeps an icon tile.
         onNode(hasText("$340", true)).assertExists()
+        onNode(hasText("💰", true)).assertDoesNotExist()
+        onNode(hasText("📚", true)).assertExists()
         onNode(hasText("6.5h", true)).assertExists()
     }
 

@@ -26,6 +26,7 @@ import androidx.glance.appwidget.CheckBox
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.SizeMode
 import androidx.glance.appwidget.action.actionRunCallback
+import androidx.glance.appwidget.cornerRadius
 import androidx.glance.appwidget.provideContent
 import androidx.glance.background
 import androidx.glance.currentState
@@ -362,23 +363,53 @@ private fun StatTile(emoji: String, value: String, modifier: GlanceModifier = Gl
     }
 }
 
+private val MONEY_TILE_WATCH_BG = Color(0x4DA8641F)
+private val MONEY_TILE_RISK_BG = Color(0x4DB3261E)
+
+/** No glyph, no label -- just the dollar figure, big and bold, since it's
+ * the one number where the amount itself IS the message. Background color
+ * carries the same money severity attention.compute() already decided
+ * (2026-07-12: "if it thinks I'm close to not being balanced, transparent
+ * yellow rounded rect; if it thinks I'm gonna go over budget, red") --
+ * looked up from state.reasons rather than re-deriving the <0/<100
+ * thresholds here, so the widget can never disagree with the engine that
+ * owns severity. */
+@Composable
+private fun MoneyTile(dollars: Int, severity: String?, modifier: GlanceModifier = GlanceModifier) {
+    val bg = when (severity) {
+        "risk", "fucked" -> ColorProvider(MONEY_TILE_RISK_BG)
+        "watch" -> ColorProvider(MONEY_TILE_WATCH_BG)
+        else -> GlanceTheme.colors.surfaceVariant
+    }
+    Column(
+        modifier = modifier
+            .cornerRadius(10.dp)
+            .background(bg)
+            .padding(6.dp),
+    ) {
+        Text(
+            text = "$${dollars}",
+            style = TextStyle(fontWeight = FontWeight.Bold, fontSize = 20.sp,
+                color = GlanceTheme.colors.onSurface),
+        )
+    }
+}
+
 @Composable
 private fun StatTilesRow(state: BriefingState) {
-    val tiles = buildList {
+    if (state.discretionaryDollars == null && state.courseworkHoursNext7d == null) return
+    val moneySeverity = state.reasons.firstOrNull { it.domain == "money" }?.severity
+    Row(modifier = GlanceModifier.fillMaxWidth().padding(top = 4.dp)) {
+        var addedFirst = false
         if (state.discretionaryDollars != null) {
-            add("💰" to "$${state.discretionaryDollars}")
+            MoneyTile(state.discretionaryDollars, moneySeverity, modifier = GlanceModifier.width(STAT_TILE_WIDTH_DP.dp))
+            addedFirst = true
         }
         if (state.courseworkHoursNext7d != null) {
-            add("📚" to "${state.courseworkHoursNext7d}h")
-        }
-    }
-    if (tiles.isEmpty()) return
-    Row(modifier = GlanceModifier.fillMaxWidth().padding(top = 4.dp)) {
-        tiles.forEachIndexed { index, (emoji, value) ->
-            if (index > 0) {
+            if (addedFirst) {
                 Spacer(modifier = GlanceModifier.width(6.dp))
             }
-            StatTile(emoji, value, modifier = GlanceModifier.width(STAT_TILE_WIDTH_DP.dp))
+            StatTile("📚", "${state.courseworkHoursNext7d}h", modifier = GlanceModifier.width(STAT_TILE_WIDTH_DP.dp))
         }
     }
 }
