@@ -15,6 +15,11 @@ change matter more here than semver strictness.
   exists, `💜 2d` (unchanged) when nothing's on the calendar yet.
 
 ### Fixed
+- **Widget setup screen's Save button was hidden behind the nav bar.**
+  Scaffold's `bottomBar` isn't padded above the system nav bar/gesture bar
+  automatically — targetSdk 35+ enforces edge-to-edge by default, so the
+  Save button rendered directly underneath the 3-button nav bar's Home
+  button, unreachable on a real device. Fixed with `navigationBarsPadding()`.
 - **Widget visual consistency pass.** The Social section's chips (`SocialStat`)
   had their own near-identical composable with an inverted font-size
   hierarchy (emoji bigger than the number) versus every other stat tile —

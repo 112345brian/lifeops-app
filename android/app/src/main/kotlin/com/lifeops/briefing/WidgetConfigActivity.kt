@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -276,7 +277,16 @@ private fun WidgetConfigScreen(
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
-            Surface(shadowElevation = 8.dp, color = MaterialTheme.colorScheme.surfaceVariant) {
+            // Scaffold's bottomBar isn't automatically padded above the
+            // system nav bar/gesture bar -- targetSdk 35+ enforces
+            // edge-to-edge by default, so without this the Save button
+            // rendered right underneath the 3-button nav bar's Home
+            // button, unreachable (confirmed 2026-07-13 on a real device).
+            Surface(
+                shadowElevation = 8.dp,
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier.navigationBarsPadding(),
+            ) {
                 Button(
                     onClick = {
                         val config = WidgetDisplayConfig(
