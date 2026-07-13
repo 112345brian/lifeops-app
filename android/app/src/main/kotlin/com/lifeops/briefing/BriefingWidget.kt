@@ -243,13 +243,15 @@ private fun AttentionHeader(state: BriefingState, compact: Boolean) {
         // severity badge itself (2026-07-12: user doesn't want it repeated
         // below "FUCKED") -- state.attentionHeadline is still parsed/kept in
         // BriefingState for whatever else might want it, just not shown here.
-        Text(
-            text = "${state.attentionSymbol ?: "●"} ${state.attentionLabel ?: state.attentionState.uppercase()}",
-            style = TextStyle(fontWeight = FontWeight.Bold, color = ColorProvider(statusColor)),
-        )
-        if (state.reasons.isNotEmpty()) {
-            Spacer(modifier = GlanceModifier.height(4.dp))
-            SeverityDots(state.reasons)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "${state.attentionSymbol ?: "●"} ${state.attentionLabel ?: state.attentionState.uppercase()}",
+                style = TextStyle(fontWeight = FontWeight.Bold, color = ColorProvider(statusColor)),
+            )
+            if (state.reasons.isNotEmpty()) {
+                Spacer(modifier = GlanceModifier.width(8.dp))
+                SeverityDots(state.reasons)
+            }
         }
         if (!compact) {
             Spacer(modifier = GlanceModifier.height(6.dp))
