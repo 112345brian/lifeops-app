@@ -4,6 +4,59 @@ Notable changes, newest first. Personal project, versioned simply (see
 `VERSION` / `lifeops.__version__`) — dates and the reasoning behind each
 change matter more here than semver strictness.
 
+## [1.4.0] — 2026-07-13
+
+### Added
+- **Deterministic `attention_state`** (`lifeops/attention.py`) — a pure,
+  side-effect-free `compute(facts, system=None)` that turns coursework/money/
+  gym facts plus optional runner/panel health into one ordered `ok < watch <
+  risk < fucked` verdict with symbol/label/headline/reasons. The LLM briefing
+  now defers to this object rather than deciding severity itself. Wired into
+  `run_briefing` (persisted into `logs/briefing.json`), the panel home page
+  (`#attention` card, escalates independently using live panel health), and
+  the Android widget (colored status line).
+- **Notification-transport facade** (`lifeops/notify.py`) — domains ask for
+  product-level messages (`alert`, `push_briefing`) instead of knowing
+  whether ntfy or FCM carries them; `runner.py`'s alert call sites now go
+  through this instead of `ntfy`/`fcm` directly.
+- **Actions API** — `POST /api/tasks/{id}/complete`, `/api/gym/log`,
+  `/api/gym/skip`, `/api/schedule/block-day`, `/api/domains/{name}/run`.
+  Direct JSON mutation endpoints mirroring the existing panel form routes,
+  for the widget/quick-actions to call without a page load; each returns
+  fresh deterministic attention state where practical.
+- **Widget visual language**: a compact proportional gym-progress bar
+  (teal at/above target, amber short of it), a stale-data warning glyph on
+  the "as of" line past 2h, and **responsive size-bucketed layout**
+  (`SizeMode.Responsive`/`LocalSize`) — the widget now renders progressively
+  less as it's resized down (status badge + headline only at the smallest
+  size) instead of always rendering its full layout regardless of placed
+  size.
+- Widget task-completion is now a hybrid: tries the direct
+  `/api/tasks/{id}/complete` call first (fast, needs the tailnet), falls
+  back to the ntfy `complete:<id>` signal (works from anywhere, ~2 min via
+  `runner.py`'s `ingest()` cycle) if that fails for any reason.
+
+### Fixed
+- `_current_attention()` (panel + Actions API) was coercing a missing
+  `logs/last_run.json` into `{}` instead of passing `None` through, which
+  made `attention.compute` misread "no system data yet" as "system data
+  present but stale" -- a fresh install would show a false `risk: LifeOps
+  data is stale` reading.
+- `runner.py`'s `ingest()` ntfy-message and FlowSavvy-completion dedup sets
+  were truncated via `list(a_set)[-1000:]` -- Python sets have no guaranteed
+  order, so this didn't reliably keep the most-recently-handled entries past
+  the 1000-entry cap, risking a real redelivery going unrecognized and
+  double-completing a task.
+- Android `CompleteTaskAction`'s direct-completion path only caught
+  `IOException`; a malformed-but-reachable response threw an uncaught
+  `JSONException` instead of falling back to the ntfy signal.
+- Android `BriefingFcmService.registerToken` built its POST body via raw
+  string interpolation with no escaping; restored `JSONObject`-based
+  construction.
+- Removed `BriefingSyncWorker.kt` (dead code, superseded by
+  `BriefingPersistWorker` + `RegisterTokenWorker` + the extended
+  `NextTasksRefreshWorker`).
+
 ## [1.3.0] — 2026-07-10
 
 ### Added
