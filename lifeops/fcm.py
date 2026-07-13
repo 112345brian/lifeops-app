@@ -6,7 +6,7 @@ implicit third-party broadcasts, so the widget listens for FCM instead
 android/app/src/main/kotlin/com/lifeops/briefing/BriefingFcmService.kt for the
 receiving side and the token-registration flow.
 """
-import json, os
+import json, os, tempfile
 from . import config, history
 
 _app = None
@@ -47,13 +47,26 @@ def register_token(token):
         return False
     path = _token_file()
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    # Temp file + os.replace, not a direct write -- a kill/crash mid-write
-    # must not leave a truncated token file (same reasoning as every other
-    # durable state write in this codebase).
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump({"token": token}, f)
-    os.replace(tmp, path)
+    # Temp file + fsync + os.replace, not a direct write -- a kill/crash
+    # mid-write must not leave a truncated token file (same reasoning as
+    # every other durable state write in this codebase). Uses
+    # tempfile.mkstemp() for a unique name, not a fixed "path + .tmp" --
+    # this function is called from TWO separate OS processes (web.py's
+    # long-running server and runner.py's periodic subprocess, via the
+    # ntfy token: signal relay), so a fixed temp name risks one process's
+    # in-flight write getting clobbered by the other's.
+    fd, tmp = tempfile.mkstemp(prefix="fcm_token-", suffix=".tmp", dir=os.path.dirname(path))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump({"token": token}, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    finally:
+        try:
+            os.remove(tmp)
+        except FileNotFoundError:
+            pass
     return True
 
 def _send(msg_type, payload_dict, version):

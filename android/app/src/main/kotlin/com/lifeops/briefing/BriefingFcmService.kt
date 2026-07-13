@@ -132,26 +132,15 @@ internal fun registerToken(context: android.content.Context, token: String): Boo
 }
 
 private fun registerTokenDirect(baseUrl: String, authToken: String, token: String) {
-    val url = URL("$baseUrl/api/register-fcm-token?token=$authToken")
-    val connection = (url.openConnection() as HttpURLConnection).apply {
-        requestMethod = "POST"
-        doOutput = true
-        setRequestProperty("Content-Type", "application/json")
-        connectTimeout = 10_000
-        readTimeout = 15_000
-    }
-    try {
-        // JSONObject, not raw string interpolation -- an unescaped
-        // token containing a quote or backslash would otherwise produce
-        // malformed JSON the server rejects with a silent 400.
-        val body = JSONObject().put("fcm_token", token).toString()
-        connection.outputStream.use { it.write(body.toByteArray()) }
-        val code = connection.responseCode
-        if (code != HttpURLConnection.HTTP_OK) {
-            throw IOException("Unexpected HTTP status $code from register-fcm-token")
-        }
-    } finally {
-        connection.disconnect()
-    }
+    // JSONObject, not raw string interpolation -- an unescaped token
+    // containing a quote or backslash would otherwise produce malformed
+    // JSON the server rejects with a silent 400.
+    val body = JSONObject().put("fcm_token", token).toString()
+    httpRequest(
+        url = "$baseUrl/api/register-fcm-token?token=$authToken",
+        method = "POST",
+        body = body,
+        requireExactCode = HttpURLConnection.HTTP_OK,
+    )
 }
 

@@ -1364,11 +1364,6 @@ def _run():
 
     args = sys.argv[1:] or ["tick"]
 
-    try:                              # keep the widget fresh without Tailscale
-        details["push_next_tasks"] = _capture(push_next_tasks, fs, now, args)
-    except Exception as e:
-        errors["push_next_tasks"] = str(e); details["push_next_tasks"] = f"ERROR: {e}"
-        print(f"[push_next_tasks] ERROR: {e}")
     try:
         enabled = json.load(open(os.path.join(history.ROOT, "logs", "domains.json"), encoding="utf-8"))
     except Exception:
@@ -1390,6 +1385,16 @@ def _run():
     if _DIRTY[0]:                      # ONE recalc per run, only if something changed
         try: fs.recalculate()
         except Exception as e: errors["recalculate"] = str(e)
+
+    try:                              # keep the widget fresh without Tailscale --
+        # AFTER domain dispatch + recalculate, not before, so a task this
+        # same tick's domains just created/rescheduled/completed is
+        # reflected in what actually gets pushed, instead of pushing a
+        # snapshot that's already stale the moment it's sent.
+        details["push_next_tasks"] = _capture(push_next_tasks, fs, now, args)
+    except Exception as e:
+        errors["push_next_tasks"] = str(e); details["push_next_tasks"] = f"ERROR: {e}"
+        print(f"[push_next_tasks] ERROR: {e}")
 
     if errors:                        # fail loud — never silent
         try:
