@@ -2,7 +2,17 @@ package com.lifeops.briefing.data
 
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
+/** org.json.JSONObject is the real Android stub jar on the unit-test
+ * classpath (throws "not mocked" on every call) unless run under
+ * Robolectric, which shadows it with a working implementation -- plain
+ * JUnit alone isn't enough here, unlike a test with no org.json.* in its
+ * call path. */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35])
 class BriefingStateTest {
     @Test
     fun parsesDeterministicAttentionFromBriefingResponse() {
