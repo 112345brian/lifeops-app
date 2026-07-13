@@ -78,7 +78,33 @@ def compute(facts, system=None):
 
     reasons.sort(key=lambda r: (-_RANK[r["severity"]],
                                 _DOMAIN_PRIORITY.get(r["domain"], 99)))
-    reasons = reasons[:6]
+
+    # A flat top-6 truncation let one domain's flood (e.g. 6+ overdue
+    # coursework items, all "fucked") silently crowd out every other
+    # domain's reasons -- including one as urgent as a newly-negative
+    # discretionary balance (confirmed 2026-07-13: a real -$125 balance
+    # produced zero "money" reason, and the widget's severity dots/money
+    # tile source their color from exactly this list, so they'd have shown
+    # green/ok despite the negative balance). Guarantee each domain that
+    # produced at least one reason keeps its single worst one, then fill
+    # the remaining cap slots with the next-worst reasons overall -- still
+    # worst-first, just never fully silent for an entire domain.
+    CAP = 6
+    guaranteed_ids = set()
+    capped = []
+    seen_domains = set()
+    for r in reasons:
+        if r["domain"] not in seen_domains:
+            capped.append(r)
+            seen_domains.add(r["domain"])
+            guaranteed_ids.add(id(r))
+    for r in reasons:
+        if len(capped) >= CAP:
+            break
+        if id(r) not in guaranteed_ids:
+            capped.append(r)
+    capped.sort(key=lambda r: (-_RANK[r["severity"]], _DOMAIN_PRIORITY.get(r["domain"], 99)))
+    reasons = capped[:CAP]
     state = reasons[0]["severity"] if reasons else "ok"
     visuals = {
         "ok": ("●", "OK"), "watch": ("▲", "WATCH"),
