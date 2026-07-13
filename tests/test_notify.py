@@ -20,18 +20,18 @@ def test_alert_routes_through_ntfy_with_panel_click(monkeypatch):
 def test_push_briefing_routes_to_fcm(monkeypatch):
     calls = []
     monkeypatch.setattr(notify.fcm, "send_briefing",
-                        lambda date, text, facts: calls.append((date, text, facts)))
+                        lambda date, text, facts, version: calls.append((date, text, facts, version)))
 
-    notify.push_briefing("2026-07-12", "text", {"gym": 2})
+    notify.push_briefing("2026-07-12", "text", {"gym": 2}, "abc123")
 
-    assert calls == [("2026-07-12", "text", {"gym": 2})]
+    assert calls == [("2026-07-12", "text", {"gym": 2}, "abc123")]
 
 
 def test_push_next_tasks_routes_to_fcm(monkeypatch):
     calls = []
     monkeypatch.setattr(notify.fcm, "send_next_tasks",
-                        lambda tasks, events: calls.append((tasks, events)))
+                        lambda tasks, events, version: calls.append((tasks, events, version)))
 
-    notify.push_next_tasks([{"id": "1"}], [{"title": "BBQ"}])
+    notify.push_next_tasks([{"id": "1"}], [{"title": "BBQ"}], "abc123")
 
-    assert calls == [([{"id": "1"}], [{"title": "BBQ"}])]
+    assert calls == [([{"id": "1"}], [{"title": "BBQ"}], "abc123")]

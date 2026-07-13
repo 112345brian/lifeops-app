@@ -56,14 +56,19 @@ def register_token(token):
     os.replace(tmp, path)
     return True
 
-def _send(msg_type, payload_dict):
+def _send(msg_type, payload_dict, version):
     """Data-only message (no "notification" field) so the widget's
     BriefingFcmService.onMessageReceived always fires, foreground or
     background, rather than the OS auto-displaying it only when the app
     isn't running. Silently no-ops if there's no registered device token yet
     (widget not configured) or no service-account key on disk. `msg_type`
     lets the client dispatch to the right persist worker without guessing
-    from the payload shape."""
+    from the payload shape. `version` (a short content hash, see
+    runner.py's _push_with_ack) is echoed back by the client as an
+    `ack:<type>:<version>` ntfy signal once persisted -- messaging.send()
+    succeeding only confirms Firebase ACCEPTED this for delivery, not that
+    the device ever received it, so this is how the server actually finds
+    out whether a push landed."""
     token = _device_token()
     if not token or not os.path.exists(config.FCM_SERVICE_ACCOUNT_FILE):
         return
@@ -73,20 +78,20 @@ def _send(msg_type, payload_dict):
     # power management (confirmed: a normal-priority test send never arrived,
     # the same high-priority payload landed within seconds).
     message = messaging.Message(
-        data={"type": msg_type, "payload": json.dumps(payload_dict)}, token=token,
+        data={"type": msg_type, "version": version, "payload": json.dumps(payload_dict)}, token=token,
         android=messaging.AndroidConfig(priority="high"),
     )
     messaging.send(message, app=_firebase_app())
 
-def send_briefing(date, text, facts):
+def send_briefing(date, text, facts, version):
     """Pushes the daily briefing text + stats. See _send's docstring for the
     delivery-reliability reasoning."""
-    _send("briefing", {"date": date, "text": text, "facts": facts})
+    _send("briefing", {"date": date, "text": text, "facts": facts}, version)
 
-def send_next_tasks(tasks, events):
+def send_next_tasks(tasks, events, version):
     """Pushes a fresh next-tasks + today's-events snapshot -- the
     Tailscale-independent counterpart to NextTasksRefreshWorker's periodic
     direct pull, which stays in place as a self-heal fallback for the rare
     case a push gets dropped (FCM data-message delivery isn't guaranteed
     either, just far more often reachable than the tailnet)."""
-    _send("next_tasks", {"tasks": tasks, "events": events})
+    _send("next_tasks", {"tasks": tasks, "events": events}, version)

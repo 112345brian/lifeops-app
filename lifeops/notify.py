@@ -29,13 +29,13 @@ def alert(text, priority="default", tags=None, actions=None, click_anchor=""):
     )
 
 
-def push_briefing(date, text, facts):
+def push_briefing(date, text, facts, version):
     """Push the structured daily briefing to rich clients."""
-    fcm.send_briefing(date, text, facts)
+    fcm.send_briefing(date, text, facts, version)
 
 
-def push_next_tasks(tasks, events):
+def push_next_tasks(tasks, events, version):
     """Push a fresh next-tasks + today's-events snapshot to rich clients --
     the Tailscale-independent counterpart to the widget's periodic direct
     pull. See fcm.send_next_tasks's docstring."""
-    fcm.send_next_tasks(tasks, events)
+    fcm.send_next_tasks(tasks, events, version)

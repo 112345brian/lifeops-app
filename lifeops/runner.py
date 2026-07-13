@@ -6,7 +6,7 @@ The LLM (lifeops.llm) is touched only for the judgment slivers.
 Run:  python -m lifeops.runner          # all wired domains
       python -m lifeops.runner gym      # one domain
 """
-import sys, os, re, io, json, datetime, contextlib, requests
+import sys, os, re, io, json, datetime, contextlib, hashlib, requests
 from . import config, ntfy, notify, gather, lock, history, adherence, actions, attention, fcm
 from .flowsavvy import FlowSavvy
 from .ynab import YNAB
@@ -225,6 +225,18 @@ def ingest(fs, now):
             new_token = raw_body.split(":", 1)[1].strip()
             if not fcm.register_token(new_token):
                 print("[ingest] token signal had a malformed/missing token, skipping")
+        elif body.startswith("ack:"):
+            # Phone confirming it successfully persisted a pushed briefing/
+            # next-tasks payload -- see fcm.py's _send and runner.py's
+            # _push_with_ack. Both msg_type and the version hash are always
+            # lowercase, so parsing from the lowercased `body` is fine here
+            # (unlike token:/complete:, which need case preserved).
+            parts = body.split(":", 2)
+            if len(parts) == 3:
+                _, msg_type, version = parts
+                _mark_push_acked(msg_type, version)
+            else:
+                print("[ingest] malformed ack signal, skipping")
         st["ntfy_ts"] = max(st["ntfy_ts"], m.get("time", 0))
     st["handled_ntfy_msg_ids"] = handled_msg_ids[-1000:]
     frm = _utc_iso(14)
@@ -246,36 +258,67 @@ def ingest(fs, now):
     os.makedirs(os.path.dirname(sp), exist_ok=True)
     _save_json_atomic(sp, st)
 
+def _push_ack_state_file(msg_type):
+    return os.path.join(history.ROOT, "logs", f"push_ack_{msg_type}.json")
+
+def _push_with_ack(msg_type, snapshot, push_fn):
+    """Push-until-confirmed wrapper around an FCM send. messaging.send()
+    succeeding only means Firebase ACCEPTED the message for delivery, not
+    that the phone ever received it (data messages can be silently dropped
+    under Doze, a force-stopped app, etc.), so this tracks a real receipt
+    confirmation instead of trusting the send call: `snapshot` is hashed
+    into a short version id, `push_fn(version)` is called to actually send
+    it, and the version is recorded as unacked. The client echoes the
+    version back as an `ack:<type>:<version>` ntfy signal once it's
+    successfully persisted (see ingest()'s ack handler below).
+
+    Skips the actual send only when BOTH the content is unchanged since the
+    last push AND that push was acked -- an unacked previous push keeps
+    getting retried every call even if nothing new happened, since "unacked"
+    is exactly the signal that the last attempt may not have landed. Same
+    "don't do wasted round-trips on a fixed schedule" philosophy as spend/
+    canvas being excluded from the tick tier elsewhere in this file governs
+    the content-unchanged half of this check."""
+    version = hashlib.sha1(json.dumps(snapshot, sort_keys=True).encode()).hexdigest()[:16]
+    sp = _push_ack_state_file(msg_type)
+    try:
+        state = json.load(open(sp, encoding="utf-8"))
+    except Exception:
+        state = None
+    if state and state.get("snapshot") == snapshot and state.get("acked"):
+        return
+    push_fn(version)
+    _save_json_atomic(sp, {"snapshot": snapshot, "version": version, "acked": False})
+
+def _mark_push_acked(msg_type, version):
+    """Called from ingest()'s ack:<type>:<version> signal handler. Only
+    updates state if `version` matches the currently-tracked push -- an ack
+    for a superseded version (e.g. the phone was slow to respond and a
+    newer snapshot already went out) must not mark the NEW one acked."""
+    sp = _push_ack_state_file(msg_type)
+    try:
+        state = json.load(open(sp, encoding="utf-8"))
+    except Exception:
+        return
+    if state.get("version") == version:
+        state["acked"] = True
+        _save_json_atomic(sp, state)
+
 def push_next_tasks(fs, now, args):
     """Pushes a fresh next-tasks + today's-events snapshot via FCM -- the
     Tailscale-independent counterpart to the widget's periodic direct pull
     of /api/next-tasks (NextTasksRefreshWorker.kt), which stays in place
-    unchanged as a self-heal fallback for the rare case a push is dropped.
-    Skipped on the signal tier (~2 min, phone-tap catchup only): tick
-    (~10 min) is plenty fresh for a task list, and signal firing this too
-    would be 5x the FCM sends for no real freshness gain.
-
-    Skips the actual send when nothing changed since the last push -- same
-    "don't do wasted round-trips on a fixed schedule" philosophy as spend/
-    canvas being excluded from the tick tier elsewhere in this file. A
-    changed result (a task's "next up" rotated off the list because its
-    start time passed, even with no underlying schedule edit) still counts
-    as a real change and still pushes."""
+    unchanged as a self-heal fallback for the rare case a push is dropped
+    AND never acked. Skipped on the signal tier (~2 min, phone-tap catchup
+    only): tick (~10 min) is plenty fresh for a task list, and signal
+    firing this too would be 5x the FCM sends for no real freshness gain."""
     if args == ["signal"]:
         return
     schedule_items = gather._upcoming_schedule(fs, now)
     tasks = gather.next_tasks_input(fs, now, 3, schedule_items=schedule_items)
     events = gather.today_events_input(fs, now, schedule_items=schedule_items)
     snapshot = {"tasks": tasks, "events": events}
-    sp = os.path.join(history.ROOT, "logs", "next_tasks_push_state.json")
-    try:
-        last = json.load(open(sp, encoding="utf-8"))
-    except Exception:
-        last = None
-    if snapshot == last:
-        return
-    notify.push_next_tasks(tasks, events)
-    _save_json_atomic(sp, snapshot)
+    _push_with_ack("next_tasks", snapshot, lambda version: notify.push_next_tasks(tasks, events, version))
 
 def _alert_once(key, text, priority="default", tags=None, actions=None, click_anchor=""):
     """Send an alert at most once per calendar day per key. The tick runs every
@@ -808,9 +851,12 @@ def run_briefing(fs, yn, now):
     # ntfy's implicit io.heckel.ntfy.MESSAGE_RECEIVED broadcast can't wake a
     # stopped app on modern Android, so it was unreliable. FCM's delivery
     # path is OS-privileged and wakes the app regardless. No-ops if the
-    # widget hasn't registered a device token yet.
+    # widget hasn't registered a device token yet. Retried on the next
+    # daily run if never acked -- see _push_with_ack.
     try:
-        notify.push_briefing(today.isoformat(), text, facts)
+        briefing_snapshot = {"date": today.isoformat(), "text": text, "facts": facts}
+        _push_with_ack("briefing", briefing_snapshot,
+                       lambda version: notify.push_briefing(today.isoformat(), text, facts, version))
     except Exception as e:
         print(f"[briefing] fcm send error: {e}")
     # persist for the panel (survives the once/day ntfy dedup)

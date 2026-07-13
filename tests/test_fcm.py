@@ -1,7 +1,7 @@
 import json
 import os
 
-from lifeops import fcm, history
+from lifeops import config, fcm, history
 
 
 def test_register_token_rejects_malformed_input(tmp_path, monkeypatch):
@@ -42,13 +42,13 @@ def test_send_briefing_noop_without_registered_token(tmp_path, monkeypatch):
     credentials configured."""
     monkeypatch.setattr(history, "ROOT", str(tmp_path))
 
-    fcm.send_briefing("2026-07-13", "text", {"gym": 2})  # must not raise
+    fcm.send_briefing("2026-07-13", "text", {"gym": 2}, "v1")  # must not raise
 
 
 def test_send_next_tasks_noop_without_registered_token(tmp_path, monkeypatch):
     monkeypatch.setattr(history, "ROOT", str(tmp_path))
 
-    fcm.send_next_tasks([{"id": "1"}], [{"title": "BBQ"}])  # must not raise
+    fcm.send_next_tasks([{"id": "1"}], [{"title": "BBQ"}], "v1")  # must not raise
 
 
 def test_send_briefing_and_next_tasks_use_distinct_message_types(tmp_path, monkeypatch):
@@ -57,12 +57,35 @@ def test_send_briefing_and_next_tasks_use_distinct_message_types(tmp_path, monke
     actually distinguishable, not just both saying "payload"."""
     monkeypatch.setattr(history, "ROOT", str(tmp_path))
     calls = []
-    monkeypatch.setattr(fcm, "_send", lambda msg_type, payload: calls.append((msg_type, payload)))
+    monkeypatch.setattr(fcm, "_send",
+                        lambda msg_type, payload, version: calls.append((msg_type, payload, version)))
 
-    fcm.send_briefing("2026-07-13", "text", {"gym": 2})
-    fcm.send_next_tasks([{"id": "1"}], [{"title": "BBQ"}])
+    fcm.send_briefing("2026-07-13", "text", {"gym": 2}, "v1")
+    fcm.send_next_tasks([{"id": "1"}], [{"title": "BBQ"}], "v2")
 
     assert calls == [
-        ("briefing", {"date": "2026-07-13", "text": "text", "facts": {"gym": 2}}),
-        ("next_tasks", {"tasks": [{"id": "1"}], "events": [{"title": "BBQ"}]}),
+        ("briefing", {"date": "2026-07-13", "text": "text", "facts": {"gym": 2}}, "v1"),
+        ("next_tasks", {"tasks": [{"id": "1"}], "events": [{"title": "BBQ"}]}, "v2"),
     ]
+
+
+def test_send_embeds_version_in_message_data_for_ack_round_trip(tmp_path, monkeypatch):
+    """The version travels in the actual FCM message data, not just as a
+    Python-side parameter -- this is what the client echoes back as
+    ack:<type>:<version>, so it has to actually reach the device."""
+    monkeypatch.setattr(history, "ROOT", str(tmp_path))
+    fcm.register_token("d" * 20)
+    fake_cred_file = tmp_path / "service-account.json"
+    fake_cred_file.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(config, "FCM_SERVICE_ACCOUNT_FILE", str(fake_cred_file))
+    monkeypatch.setattr(fcm, "_firebase_app", lambda: "fake-app")
+
+    import firebase_admin.messaging as messaging
+    sent = []
+    monkeypatch.setattr(messaging, "send", lambda message, app: sent.append(message))
+
+    fcm.send_next_tasks([{"id": "1"}], [], "abc123")
+
+    assert len(sent) == 1
+    assert sent[0].data["type"] == "next_tasks"
+    assert sent[0].data["version"] == "abc123"

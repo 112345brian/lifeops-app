@@ -157,7 +157,7 @@ def test_push_next_tasks_skipped_on_signal_tier(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
     (tmp_path / "logs").mkdir(exist_ok=True)
     calls = []
-    monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events: calls.append((tasks, events)))
+    monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, version: calls.append((tasks, events, version)))
 
     runner.push_next_tasks(_NextTasksFakeFlowSavvy(), datetime.datetime(2026, 7, 13, 9, 0), ["signal"])
 
@@ -168,25 +168,44 @@ def test_push_next_tasks_fires_on_tick_tier(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
     (tmp_path / "logs").mkdir(exist_ok=True)
     calls = []
-    monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events: calls.append((tasks, events)))
+    monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, version: calls.append((tasks, events, version)))
 
     runner.push_next_tasks(_NextTasksFakeFlowSavvy(), datetime.datetime(2026, 7, 13, 9, 0), ["tick"])
 
     assert len(calls) == 1
-    tasks, events = calls[0]
+    tasks, events, version = calls[0]
     assert [t["id"] for t in tasks] == ["t1"]
+    assert version
 
 
-def test_push_next_tasks_skips_send_when_unchanged(tmp_path, monkeypatch):
+def test_push_next_tasks_retries_unacked_push_even_if_unchanged(tmp_path, monkeypatch):
+    """An unacked previous push must be retried on the next call even with
+    identical content -- "unacked" is exactly the signal the last attempt
+    may not have landed (see _push_with_ack)."""
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
     (tmp_path / "logs").mkdir(exist_ok=True)
     calls = []
-    monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events: calls.append((tasks, events)))
+    monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, version: calls.append((tasks, events, version)))
     fs = _NextTasksFakeFlowSavvy()
     now = datetime.datetime(2026, 7, 13, 9, 0)
 
     runner.push_next_tasks(fs, now, ["tick"])   # first call: nothing persisted yet, must push
-    runner.push_next_tasks(fs, now, ["tick"])   # second call: identical snapshot, must skip
+    runner.push_next_tasks(fs, now, ["tick"])   # second call: same content, but never acked -- must retry
+
+    assert len(calls) == 2
+
+
+def test_push_next_tasks_skips_send_when_unchanged_and_acked(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
+    (tmp_path / "logs").mkdir(exist_ok=True)
+    calls = []
+    monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, version: calls.append((tasks, events, version)))
+    fs = _NextTasksFakeFlowSavvy()
+    now = datetime.datetime(2026, 7, 13, 9, 0)
+
+    runner.push_next_tasks(fs, now, ["tick"])                          # first call: must push
+    runner._mark_push_acked("next_tasks", calls[0][2])                 # phone confirms receipt
+    runner.push_next_tasks(fs, now, ["tick"])                          # second call: unchanged + acked -- must skip
 
     assert len(calls) == 1
 
@@ -195,7 +214,7 @@ def test_push_next_tasks_sends_again_when_changed(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
     (tmp_path / "logs").mkdir(exist_ok=True)
     calls = []
-    monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events: calls.append((tasks, events)))
+    monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, version: calls.append((tasks, events, version)))
     now = datetime.datetime(2026, 7, 13, 9, 0)
 
     runner.push_next_tasks(_NextTasksFakeFlowSavvy(), now, ["tick"])
@@ -210,3 +229,50 @@ def test_push_next_tasks_sends_again_when_changed(tmp_path, monkeypatch):
     runner.push_next_tasks(_ChangedFakeFlowSavvy(), now, ["tick"])
 
     assert len(calls) == 2
+
+
+def test_ingest_ack_signal_marks_push_acked(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
+    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "logs" / "history.jsonl"))
+    (tmp_path / "logs").mkdir(exist_ok=True)
+    calls = []
+    monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, version: calls.append(version))
+
+    runner.push_next_tasks(_NextTasksFakeFlowSavvy(), datetime.datetime(2026, 7, 13, 9, 0), ["tick"])
+    version = calls[0]
+
+    fake_message = {"id": "msg-1", "time": 100, "message": f"ack:next_tasks:{version}"}
+    monkeypatch.setattr(runner.ntfy, "poll", lambda since: [fake_message])
+    runner.ingest(_CompleteFakeFlowSavvy(), datetime.datetime(2026, 7, 13, 9, 5))
+
+    state = json.loads((tmp_path / "logs" / "push_ack_next_tasks.json").read_text(encoding="utf-8"))
+    assert state["acked"] is True
+    assert state["version"] == version
+
+
+def test_mark_push_acked_ignores_superseded_version(tmp_path, monkeypatch):
+    """An ack for an old version must not mark a newer, already-repushed
+    version as acked -- e.g. the phone was slow to respond and the content
+    changed again before the ack arrived."""
+    monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
+    (tmp_path / "logs").mkdir(exist_ok=True)
+
+    runner._save_json_atomic(runner._push_ack_state_file("next_tasks"),
+                             {"snapshot": {"tasks": []}, "version": "current-version", "acked": False})
+
+    runner._mark_push_acked("next_tasks", "stale-version")
+
+    state = json.loads(open(runner._push_ack_state_file("next_tasks"), encoding="utf-8").read())
+    assert state["acked"] is False
+    assert state["version"] == "current-version"
+
+
+def test_ingest_malformed_ack_signal_does_not_raise(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
+    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "logs" / "history.jsonl"))
+    (tmp_path / "logs").mkdir(exist_ok=True)
+
+    fake_message = {"id": "msg-1", "time": 100, "message": "ack:not-enough-parts"}
+    monkeypatch.setattr(runner.ntfy, "poll", lambda since: [fake_message])
+
+    runner.ingest(_CompleteFakeFlowSavvy(), datetime.datetime(2026, 7, 13, 9, 0))  # must not raise
