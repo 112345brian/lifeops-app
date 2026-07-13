@@ -4,6 +4,34 @@ Notable changes, newest first. Personal project, versioned simply (see
 `VERSION` / `lifeops.__version__`) — dates and the reasoning behind each
 change matter more here than semver strictness.
 
+## [1.5.0] — 2026-07-13
+
+### Added
+- **Tailscale-independent ambient operation.** Previously, the widget's
+  day-to-day freshness depended on being reachable over the tailnet:
+  `NextTasksRefreshWorker`'s 15-min periodic pull was the only way the task
+  list stayed current, and FCM token (re-)registration was a direct-API-only
+  call. Both now follow the same push/relay pattern already proven by the
+  briefing:
+  - `runner.py` pushes a fresh next-tasks + today's-events snapshot via FCM
+    on every tick (~10 min) and daily run (not the ~2-min signal tier, to
+    avoid 5x the sends for no real freshness gain). `fcm.py`'s messages now
+    carry a `type` field (`briefing` / `next_tasks`) so
+    `BriefingFcmService` can dispatch to the right persist worker
+    (new `NextTasksPersistWorker`, mirrors `BriefingPersistWorker`'s
+    guaranteed-execution shape).
+  - FCM token registration now falls back to a `token:<value>` ntfy signal
+    (handled by `runner.py`'s `ingest()`, shared validation/persist via new
+    `fcm.register_token()`) when the direct `/api/register-fcm-token` call
+    fails -- same hybrid shape `CompleteTaskAction` already uses for task
+    completion.
+  - The periodic pull stays in place, unchanged, as a self-heal fallback for
+    the rare dropped push -- it's just no longer the only path, and it's now
+    the last remaining Tailscale-dependent piece of the widget's ambient
+    (non-panel) operation. Opening the full panel in a browser is still
+    Tailscale-gated, deliberately -- that's a use case where asking for a
+    live connection is reasonable.
+
 ## [1.4.0] — 2026-07-13
 
 ### Added
