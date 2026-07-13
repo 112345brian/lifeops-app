@@ -4,6 +4,21 @@ Notable changes, newest first. Personal project, versioned simply (see
 `VERSION` / `lifeops.__version__`) — dates and the reasoning behind each
 change matter more here than semver strictness.
 
+## [1.11.1] — 2026-07-13
+
+### Fixed
+- `attention.compute()`'s `reasons` list was capped at a flat top-6 sorted
+  purely by (severity, domain priority) -- a pile of overdue coursework
+  (all "fucked", the worst severity) could fill the entire cap by itself,
+  silently dropping every other domain's reason regardless of its own
+  severity. Confirmed live: a real -$125 discretionary balance produced
+  zero "money" reason -- not cosmetic, since the widget's severity dots
+  and money-tile background color both source their per-domain severity
+  from this exact list, so they'd have shown green/ok despite the
+  negative balance. Now guarantees each domain that produced at least one
+  reason keeps its single worst one before filling remaining slots with
+  the next-worst reasons overall.
+
 ## [1.11.0] — 2026-07-13
 
 ### Added
