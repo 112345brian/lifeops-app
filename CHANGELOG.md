@@ -4,6 +4,19 @@ Notable changes, newest first. Personal project, versioned simply (see
 `VERSION` / `lifeops.__version__`) — dates and the reasoning behind each
 change matter more here than semver strictness.
 
+## [1.8.0] — 2026-07-13
+
+### Added
+- **Widget glyph redesign catch-up.** `attention.compute()` already
+  produces a per-domain (coursework/system/money/gym) reasons list with a
+  deterministic severity per domain, but only the single overall headline
+  reached the widget. Added a per-domain severity-dot row under the
+  attention badge (one glyph per domain, colored by that domain's worst
+  open severity, green when nothing's open) at every widget size, and
+  moved money/coursework from plain text to icon+monospace-number tiles
+  matching the gym ring's icon-first visual language -- a step toward an
+  instrument-panel that reads at a glance instead of like a text message.
+
 ## [1.7.0] — 2026-07-13
 
 ### Added
