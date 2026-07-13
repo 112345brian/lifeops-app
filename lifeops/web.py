@@ -3,7 +3,7 @@
 Run:   uvicorn lifeops.web:app --host 0.0.0.0 --port 8765
 Reach: tailscale serve 8765  →  https://<your-pc>.<tailnet>.ts.net
 """
-import os, re, sys, json, subprocess, datetime, tempfile
+import os, re, sys, json, subprocess, datetime, tempfile, hmac, logging
 from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import quote
@@ -37,8 +37,11 @@ async def _auth(request: Request, call_next):
     set, open the panel once as /?token=<secret>; a cookie keeps you in."""
     if config.WEB_TOKEN:
         query_token = request.query_params.get("token")
-        supplied = query_token or request.cookies.get("lifeops_auth")
-        if supplied != config.WEB_TOKEN:
+        supplied = query_token or request.cookies.get("lifeops_auth") or ""
+        # Constant-time compare -- cheap defense-in-depth against a timing
+        # side-channel, even though exploiting it would need tailnet access
+        # to begin with under this threat model.
+        if not hmac.compare_digest(supplied, config.WEB_TOKEN):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         # Behind a TLS-terminating proxy (Tailscale funnel etc.) Uvicorn sees
         # a plain-http request even though the real connection is https --
@@ -50,12 +53,18 @@ async def _auth(request: Request, call_next):
         # are withheld on exactly that kind of navigation on some
         # OS/browser notification plumbing -- Lax still blocks the
         # cross-site POST/embed cases Strict exists to guard against.
-        # Browser pages get a clean URL and an auth cookie. API clients such
-        # as the Android widget do not maintain a browser cookie jar, so they
-        # must be allowed to authenticate each request with the query token
-        # and receive the JSON response directly.
-        if (query_token and request.method in ("GET", "HEAD")
-                and not request.url.path.startswith("/api/")):
+        # Gate the redirect/cookie dance on CLIENT CAPABILITY (does this
+        # look like a browser navigation?), not a URL-prefix convention --
+        # scoping it to "/api/*" meant the identical bug (bare HTTP clients
+        # with no CookieHandler redirect-then-401 forever, confirmed via
+        # web.log: next-tasks requests 303'd, then immediately 401'd, and
+        # NEXT_TASKS_JSON never once populated) would resurface the moment
+        # any future non-/api/ integration used a bare client, or a future
+        # browser-facing route happened to live under /api/. A real browser
+        # top-level navigation sends "text/html" in Accept; the widget's
+        # bare HttpURLConnection and any similar client don't.
+        accepts_html = "text/html" in request.headers.get("accept", "")
+        if query_token and request.method in ("GET", "HEAD") and accepts_html:
             clean_url = request.url.remove_query_params("token")
             resp = RedirectResponse(clean_url, status_code=303)
             resp.set_cookie("lifeops_auth", config.WEB_TOKEN,
@@ -63,7 +72,7 @@ async def _auth(request: Request, call_next):
                             secure=secure, samesite="lax")
             return resp
         resp = await call_next(request)
-        if query_token == config.WEB_TOKEN:
+        if accepts_html and query_token == config.WEB_TOKEN:
             resp.set_cookie("lifeops_auth", config.WEB_TOKEN,
                             max_age=90 * 24 * 3600, httponly=True,
                             secure=secure, samesite="lax")
@@ -365,7 +374,9 @@ def _today_briefing():
         return None
     if b.get("date") != datetime.date.today().isoformat():
         return None
-    return {"text": _format_briefing_text(b.get("text", "")), "facts": b.get("facts") or {}}
+    facts = b.get("facts") or {}
+    return {"text": _format_briefing_text(b.get("text", "")), "facts": facts,
+            "attention": facts.get("attention")}
 
 def _today_briefing_raw():
     """Same staleness check as _today_briefing(), but without the HTML
@@ -502,6 +513,9 @@ def _build_context(fs=None, include_cycle=False):
         for b in sched_blocks_raw
     ]
 
+    briefing = _today_briefing()
+    from . import attention
+    current_attention = attention.compute((briefing or {}).get("facts") or {}, lr or {})
     return {
         "status_dot":       dot,
         "status_text":      text,
@@ -527,7 +541,8 @@ def _build_context(fs=None, include_cycle=False):
         "canvas_status":    _canvas_status(),
         "canvas_pending":   _canvas_pending(),
         "recent_actions":   actions.recent(15),
-        "briefing":         _today_briefing(),
+        "briefing":         briefing,
+        "attention":        current_attention,
         "cashflow":         _cashflow(),
     }
 
@@ -557,18 +572,38 @@ def api_briefing():
 
 @app.get("/api/next-tasks")
 def api_next_tasks(n: int = 3):
-    return JSONResponse({"tasks": gather.next_tasks_input(FlowSavvy(), datetime.datetime.now(), n)})
+    fs = FlowSavvy()
+    now = datetime.datetime.now()
+    try:
+        schedule_items = gather._upcoming_schedule(fs, now)
+    except Exception as e:
+        # A real FlowSavvy fetch failure must fail this request, not
+        # silently return {"tasks": [], "events": []} -- that used to be
+        # indistinguishable from genuine emptiness and would overwrite the
+        # widget's perfectly good existing state with "nothing to show."
+        # The Android client already treats any non-200 as "leave state
+        # alone, retry later" (NextTasksRefreshWorker), so failing loudly
+        # here is strictly safer than succeeding with a false empty result.
+        raise HTTPException(502, f"FlowSavvy fetch failed: {e}")
+    return JSONResponse({"tasks": gather.next_tasks_input(fs, now, n, schedule_items=schedule_items),
+                        "events": gather.today_events_input(fs, now, schedule_items=schedule_items)})
 
 @app.post("/api/tasks/{task_id}/complete")
 def api_task_complete(task_id: str, n: int = 3):
     """Completes a task straight from the widget's checkbox tap and returns
-    the fresh next-tasks list in the same response, so the widget updates
-    immediately without a follow-up GET."""
+    the fresh next-tasks list (+ today's events) in the same response, so
+    the widget updates immediately without a follow-up GET. This is the
+    primary completion path when the phone is reachable on the tailnet; the
+    ntfy `complete:<id>` signal handled by runner.py's ingest() cycle is the
+    fallback for when it isn't (see notify.py's docstring)."""
     fs = FlowSavvy()
     fs.complete_task(task_id)
     fs.recalculate()
+    now = datetime.datetime.now()
+    schedule_items = gather._upcoming_schedule(fs, now)
     return JSONResponse({"completed_id": task_id,
-                        "tasks": gather.next_tasks_input(fs, datetime.datetime.now(), n)})
+                        "tasks": gather.next_tasks_input(fs, now, n, schedule_items=schedule_items),
+                        "events": gather.today_events_input(fs, now, schedule_items=schedule_items)})
 
 FCM_TOKEN_FILE = os.path.join(ROOT, "logs", "fcm_token.json")
 
@@ -577,10 +612,18 @@ async def api_register_fcm_token(request: Request):
     """The widget calls this once per token (install, or whenever Firebase
     rotates it) so run_briefing knows where to push. Single-user app -- one
     token on file, last write wins."""
-    body = await request.json()
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "malformed JSON body")
+    if not isinstance(body, dict):
+        raise HTTPException(400, "expected a JSON object")
     token = body.get("fcm_token")
-    if not token:
-        raise HTTPException(400, "fcm_token required")
+    # FCM registration tokens are long opaque strings (typically 140-200+
+    # chars); a generous sanity bound catches obvious garbage without
+    # hardcoding Firebase's exact format.
+    if not isinstance(token, str) or not (10 <= len(token) <= 4096):
+        raise HTTPException(400, "fcm_token required (string, 10-4096 chars)")
     _write_json(FCM_TOKEN_FILE, {"token": token})
     return JSONResponse({"ok": True})
 
@@ -966,18 +1009,57 @@ def history_page(request: Request):
     return _page(request, "history.html", "history")
 
 
+class _RedactTokenFilter(logging.Filter):
+    """Strips `token=<value>` out of uvicorn access-log records so WEB_TOKEN
+    never lands in logs/web.log in cleartext (see main())."""
+    _pat = re.compile(r"token=[^&\s\"]+")
+
+    def filter(self, record):
+        if isinstance(record.args, tuple):
+            record.args = tuple(
+                self._pat.sub("token=REDACTED", a) if isinstance(a, str) else a
+                for a in record.args)
+        elif isinstance(record.msg, str):
+            record.msg = self._pat.sub("token=REDACTED", record.msg)
+        return True
+
+
 def main():
     """Windowless-safe entry point: `pythonw -m lifeops.web`.
     pythonw has no console, so sys.stdout/stderr are None and uvicorn's default
     logging crashes on startup — point them at a logfile before serving. Run via
     the `uvicorn` CLI instead for interactive/console use (see module docstring)."""
+    import copy
     import uvicorn
+
+    # Uvicorn's default formatters have no timestamp, which makes root-causing
+    # a silent death (no exception, process just stops) impossible after the
+    # fact. Prefix every log line with one.
+    log_config = copy.deepcopy(uvicorn.config.LOGGING_CONFIG)
+    for formatter in log_config["formatters"].values():
+        formatter["fmt"] = "%(asctime)s " + formatter["fmt"]
+
+    # The access logger includes the full request path -- e.g.
+    # "GET /api/next-tasks?token=<WEB_TOKEN> HTTP/1.1" -- so once /api/*
+    # clients started being served directly on every call (no cookie
+    # bootstrap), WEB_TOKEN ended up in logs/web.log in cleartext on every
+    # single poll, forever, rather than a one-time bootstrap (caught
+    # 2026-07-12). Redact it at the logging layer rather than relying on
+    # every call site to build token-free URLs for logging.
+    logging.getLogger("uvicorn.access").addFilter(_RedactTokenFilter())
+
     if sys.stdout is None or sys.stderr is None:   # running under pythonw
         log = os.path.join(ROOT, "logs", "web.log")
         os.makedirs(os.path.dirname(log), exist_ok=True)
         f = open(log, "a", buffering=1, encoding="utf-8")
         sys.stdout = sys.stderr = f
-    uvicorn.run("lifeops.web:app", host="127.0.0.1", port=8765)
+
+    print(f"=== starting (pid {os.getpid()}) {datetime.datetime.now().isoformat()} ===", flush=True)
+    try:
+        uvicorn.run("lifeops.web:app", host="127.0.0.1", port=8765, log_config=log_config)
+    finally:
+        # If this doesn't print, the process was killed rather than exiting cleanly.
+        print(f"=== exiting (pid {os.getpid()}) {datetime.datetime.now().isoformat()} ===", flush=True)
 
 
 if __name__ == "__main__":

@@ -26,7 +26,7 @@ def test_token_query_redirects_to_clean_url_and_sets_cookie(monkeypatch):
     monkeypatch.setattr(config, "WEB_TOKEN", "secret")
     client = TestClient(web.app)
 
-    response = client.get("/?token=secret", follow_redirects=False)
+    response = client.get("/?token=secret", headers={"accept": "text/html"}, follow_redirects=False)
 
     assert response.status_code == 303
     assert response.headers["location"] == "http://testserver/"

@@ -11,7 +11,7 @@ import androidx.security.crypto.MasterKey
  * token is a real credential (WEB_TOKEN) used for the next-tasks pull/
  * complete calls. */
 object WidgetConfigStore {
-    private fun prefs(context: Context) = EncryptedSharedPreferences.create(
+    private fun open(context: Context) = EncryptedSharedPreferences.create(
         context,
         WidgetKeys.CONFIG_PREFS_NAME,
         MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build(),
@@ -19,16 +19,42 @@ object WidgetConfigStore {
         EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
     )
 
+    // Defense in depth alongside data_extraction_rules.xml/backup_rules.xml:
+    // if an undecryptable prefs file ever ends up on disk again (a restored
+    // backup predating those rules, a corrupted write, etc.), the Keystore
+    // throws on the FIRST read/write, not just once -- so without this the
+    // app is permanently crash-looped until someone manually clears app data.
+    // Wipe the file and start fresh instead of taking the whole app down.
+    //
+    // Nullable return: if the RETRY also throws (a genuinely broken
+    // Keystore/StrongBox, not just a stale file -- rare but real on some
+    // OEM devices), there's nothing more we can do here. Every caller
+    // treats null as "not configured yet" rather than crashing -- this used
+    // to propagate uncaught into SettingsActivity (the app's only launcher
+    // activity), OpenPanelAction, NextTasksRefreshWorker, and
+    // BriefingFcmService.onNewToken's bare coroutine launch, any one of
+    // which crashing the whole process on a broken Keystore.
+    private fun prefs(context: Context): android.content.SharedPreferences? = try {
+        open(context)
+    } catch (e: Exception) {
+        try {
+            context.deleteSharedPreferences(WidgetKeys.CONFIG_PREFS_NAME)
+            open(context)
+        } catch (e2: Exception) {
+            null
+        }
+    }
+
     fun getBaseUrl(context: Context): String? =
-        prefs(context).getString(WidgetKeys.KEY_BASE_URL, null)?.trimEnd('/')?.takeIf { it.isNotBlank() }
+        prefs(context)?.getString(WidgetKeys.KEY_BASE_URL, null)?.trimEnd('/')?.takeIf { it.isNotBlank() }
 
     fun getToken(context: Context): String? =
-        prefs(context).getString(WidgetKeys.KEY_TOKEN, null)?.takeIf { it.isNotBlank() }
+        prefs(context)?.getString(WidgetKeys.KEY_TOKEN, null)?.takeIf { it.isNotBlank() }
 
     fun save(context: Context, baseUrl: String, token: String) {
-        prefs(context).edit()
-            .putString(WidgetKeys.KEY_BASE_URL, baseUrl.trimEnd('/'))
-            .putString(WidgetKeys.KEY_TOKEN, token)
-            .apply()
+        prefs(context)?.edit()
+            ?.putString(WidgetKeys.KEY_BASE_URL, baseUrl.trimEnd('/'))
+            ?.putString(WidgetKeys.KEY_TOKEN, token)
+            ?.apply()
     }
 }

@@ -6,8 +6,8 @@ The LLM (lifeops.llm) is touched only for the judgment slivers.
 Run:  python -m lifeops.runner          # all wired domains
       python -m lifeops.runner gym      # one domain
 """
-import sys, os, re, io, json, datetime, contextlib
-from . import config, ntfy, fcm, gather, lock, history, adherence, actions
+import sys, os, re, io, json, datetime, contextlib, requests
+from . import config, ntfy, notify, gather, lock, history, adherence, actions, attention
 from .flowsavvy import FlowSavvy
 from .ynab import YNAB
 from .engines import gym_engine, ynab_engine
@@ -90,18 +90,82 @@ def _classify(title, notes=None):
         return "course"
     return None
 
+def check_panel_health(now):
+    """Watchdog for the lifeops.web panel process. This runs from a SEPARATE
+    process (runner.py, invoked by LifeOps-signal/-tick/-daily) that doesn't
+    depend on the panel being alive, so it can detect and alert on exactly
+    the failure mode nothing else catches: the panel dying silently with no
+    independent monitoring (confirmed 2026-07-12 -- it was killed multiple
+    times with nothing paging anyone; a human had to notice the widget or
+    dashboard was broken, potentially hours later). Sends at most one alert
+    per continuous outage, and one recovery alert when it comes back, via
+    ntfy directly (not through the panel -- alerts must work precisely when
+    the panel doesn't)."""
+    sp = os.path.join(history.ROOT, "logs", "panel_health_state.json")
+    st = {"down_since": None, "alerted": False}
+    try:
+        st.update(json.load(open(sp, encoding="utf-8")))
+    except Exception:
+        pass
+    try:
+        # Any HTTP response at all (even a 401 with no token) proves the
+        # process is up and listening -- this isn't checking auth, just
+        # liveness, so no WEB_TOKEN is needed here.
+        requests.get("http://127.0.0.1:8765/api/status", timeout=5)
+        is_up = True
+    except Exception:
+        is_up = False
+
+    if is_up:
+        if st["down_since"] and st["alerted"]:
+            try:
+                down_since = datetime.datetime.fromisoformat(st["down_since"])
+                down_for_min = (now - down_since).total_seconds() / 60
+                notify.alert(f"LifeOps panel is back up (was down ~{down_for_min:.0f} min).")
+            except Exception as e:
+                print(f"[panel_health] recovery alert failed (non-fatal): {e}")
+        st["down_since"] = None
+        st["alerted"] = False
+    else:
+        if not st["down_since"]:
+            st["down_since"] = now.isoformat(timespec="seconds")
+        down_since = datetime.datetime.fromisoformat(st["down_since"])
+        down_for_min = (now - down_since).total_seconds() / 60
+        # A few missed ticks' grace before paging -- a single hiccup (e.g.
+        # mid-restart from register_web.ps1's own RestartCount cycle)
+        # shouldn't alert; a sustained outage should. LifeOps-signal's
+        # ~2-min cadence means ~6 min is only 2-3 consecutive misses.
+        if down_for_min >= 6 and not st["alerted"]:
+            try:
+                notify.alert(f"⚠️ LifeOps panel unreachable for ~{down_for_min:.0f} min.",
+                             priority="high")
+                st["alerted"] = True
+            except Exception as e:
+                print(f"[panel_health] alert failed (non-fatal): {e}")
+    os.makedirs(os.path.dirname(sp), exist_ok=True)
+    _save_json_atomic(sp, st)
+
 def ingest(fs, now):
     """Harvest completions from ntfy signals + FlowSavvy check-offs into the
     permanent history log. Runs every cycle; cheap and deduped."""
     sp = os.path.join(history.ROOT, "logs", "ingest_state.json")
-    st = {"ntfy_ts": 0, "logged_ids": []}
+    st = {"ntfy_ts": 0, "logged_ids": [], "handled_ntfy_msg_ids": []}
     try:
         st.update(json.load(open(sp, encoding="utf-8")))
     except Exception:
         pass
     logged = set(st["logged_ids"])
+    # ntfy's own delivery guarantee isn't exactly-once (redelivery on
+    # reconnect/retry is real), and the phone can also redeliver via a
+    # re-tap if the app's optimistic local removal silently failed --
+    # dedupe by ntfy's own per-message id so a replayed "complete:<id>"
+    # doesn't re-fire fs.complete_task (relying on FlowSavvy's completion
+    # endpoint being idempotent is a documented assumption elsewhere, not a
+    # guarantee this code should also depend on with zero defense-in-depth).
+    handled_msg_ids = set(st["handled_ntfy_msg_ids"])
     for m in ntfy.poll(since=st["ntfy_ts"]):
-        body = (m.get("message") or "").strip().lower()
+        raw_body = (m.get("message") or "").strip()
+        body = raw_body.lower()
         ts = datetime.datetime.fromtimestamp(m["time"]).isoformat(timespec="seconds")
         act = _SIG.get(body)
         if act:
@@ -112,7 +176,34 @@ def ingest(fs, now):
                                meta={"minutes": int(float(body.split(":", 1)[1]))})
             except Exception:
                 pass
+        elif body.startswith("complete:"):
+            # Widget checkbox tap, relayed via ntfy instead of a direct
+            # Tailscale call to the panel -- the whole point being the phone
+            # never needs tailnet connectivity just to check off a task. The
+            # completed-tasks scan below (fs.list_items completed=True) picks
+            # this up and logs it to history same as any other completion,
+            # so there's nothing else to do here but tell FlowSavvy.
+            # Extract the id from raw_body, NOT the lowercased body -- a
+            # FlowSavvy task id isn't guaranteed to be safely lowercasable
+            # (currently numeric in practice, but the field is a plain
+            # String client-side with no case contract), and mangling it
+            # here would 404 silently forever with no user-visible failure.
+            tid = raw_body.split(":", 1)[1].strip()
+            msg_id = m.get("id")
+            if not tid:
+                print("[ingest] complete signal missing a task id, skipping")
+            elif msg_id and msg_id in handled_msg_ids:
+                pass  # already processed this exact ntfy message once
+            else:
+                try:
+                    fs.complete_task(tid)
+                    fs.recalculate()
+                except Exception as e:
+                    print(f"[ingest] complete signal failed for {tid}: {e}")
+                if msg_id:
+                    handled_msg_ids.add(msg_id)
         st["ntfy_ts"] = max(st["ntfy_ts"], m.get("time", 0))
+    st["handled_ntfy_msg_ids"] = list(handled_msg_ids)[-1000:]
     frm = _utc_iso(14)
     try:
         comp = fs.list_items(itemType="task", completed=True, modifiedAfter=frm).get("items", [])
@@ -146,8 +237,8 @@ def _alert_once(key, text, priority="default", tags=None, actions=None, click_an
     today = datetime.date.today().isoformat()
     if st.get(key) == today:
         return
-    ntfy.alert(text, priority=priority, tags=tags, actions=actions,
-              click=ntfy.panel_url(click_anchor))
+    notify.alert(text, priority=priority, tags=tags, actions=actions,
+                 click_anchor=click_anchor)
     st[key] = today
     os.makedirs(os.path.dirname(sp), exist_ok=True)
     _save_json_atomic(sp, st)
@@ -385,7 +476,7 @@ def run_ynab(fs, yn, now):
            f"{len(out['novel'])} novel, {len(out['holds'])} held, covered {len(out['cover'])} cat(s)")
     print("[ynab] " + msg)
     if appr or out["holds"]:
-        ntfy.alert(msg, click=ntfy.panel_url())
+        notify.alert(msg)
 
 def run_chore(fs, yn, now):
     sp = os.path.join(history.ROOT, "logs", "chore_state.json")
@@ -429,13 +520,12 @@ def run_catchup(fs, yn, now):
     if fired:
         fs.recalculate(reschedule_past=True)
         # The recalculate already happened -- a failed/rate-limited alert
-        # (ntfy.alert now raises on non-2xx) must not stop "lastHandled"
+        # (the ntfy-backed alert path raises on non-2xx) must not stop "lastHandled"
         # from being persisted below, or the same trigger message gets
         # replayed on every future tick, re-firing a full reschedule each
         # time until an alert happens to succeed.
         try:
-            ntfy.alert("Catch-up: re-packed your whole schedule around what's left.",
-                      click=ntfy.panel_url())
+            notify.alert("Catch-up: re-packed your whole schedule around what's left.")
         except Exception as e:
             print(f"[catchup] alert failed (non-fatal): {e}")
         print("[catchup] re-packed")
@@ -608,29 +698,48 @@ def run_briefing(fs, yn, now):
     # generalized "won't fit" crunch across ALL deadline tasks (not just coursework)
     risks += [t for t, _lvl in load_engine.deadline_risk(gather.deadline_input(fs, now))["alerts"]]
     due_today = [a["title"] for a in hw if 0 <= a.get("due_in_h", 1e9) <= 24]
+    overdue = [{"title": a["title"], "due_in_h": a.get("due_in_h"),
+                "due": a.get("due")}
+               for a in hw if a.get("due_in_h", 0) < 0 and a.get("remaining_min", 0) > 0]
     load_7d_h = round(sum(a.get("remaining_min", 0) for a in hw
                           if a.get("due_in_days", 99) <= 7) / 60.0, 1)
 
-    # gym: sessions this (calendar) week vs target, and whether trained today
-    wk_start = (today - datetime.timedelta(days=today.weekday())).isoformat()
-    gym_this_week = len(history.days_with("gym", wk_start, today.isoformat()))
-    trained_today = bool(history.days_with("gym", today.isoformat(), today.isoformat()))
+    # gym: sessions in the trailing 7 days vs target, and whether trained
+    # today. Rolling, not calendar-week -- matches gym_input's own window
+    # (engines/gym_engine's actual scheduling decisions already reason in
+    # "≈N sessions in any trailing 7 days," specifically to avoid the
+    # Monday reset letting the count get gamed across the boundary). The
+    # briefing stat used to use a calendar week instead, which disagreed
+    # with how the system actually judges "healthy" cadence and could look
+    # arbitrarily bad/good purely based on which weekday it happened to be
+    # (confirmed 2026-07-12).
+    trail_start = (today - datetime.timedelta(days=6)).isoformat()
+    trail_end = today.isoformat()
+    gym_dates = history.days_with("gym", trail_start, trail_end)
+    gym_last_7d = len(gym_dates - history.days_with("gym_skip", trail_start, trail_end))
+    trained_today = today.isoformat() in gym_dates
 
     # money: discretionary balance + the nearest upcoming paid social events
     try:
         sp = gather.spend_input(fs, yn, now)
         fun_money = round(sp.get("fun_money", 0))
         near = sorted(sp.get("events", []), key=lambda e: e.get("days_until", 99))[:2]
-        upcoming = [f"{e['label']} in {e['days_until']}d (~${e['cost']})" for e in near]
+        # No dollar figure in the label -- a calendar event is assumed
+        # already paid for; cost still feeds fun_money's margin math below,
+        # just never gets narrated (2026-07-12: user doesn't want ticket
+        # prices mentioned at all).
+        upcoming = [f"{e['label']} in {e['days_until']}d" for e in near]
     except Exception:
         fun_money, upcoming = None, []
 
     facts = {"date": today.isoformat(), "weekday": now.strftime("%A"),
              "coursework_at_risk": risks, "due_today": due_today,
+             "overdue": overdue,
              "coursework_hours_next_7d": load_7d_h,
-             "gym_this_week": gym_this_week, "gym_target": 4,
+             "gym_last_7d": gym_last_7d, "gym_target": 4,
              "trained_today": trained_today,
              "discretionary_dollars": fun_money, "upcoming_paid_events": upcoming}
+    facts["attention"] = attention.compute(facts)
     try:
         text = llm.daily_briefing(facts)
     except Exception as e:
@@ -646,7 +755,7 @@ def run_briefing(fs, yn, now):
     # path is OS-privileged and wakes the app regardless. No-ops if the
     # widget hasn't registered a device token yet.
     try:
-        fcm.send_briefing(today.isoformat(), text, facts)
+        notify.push_briefing(today.isoformat(), text, facts)
     except Exception as e:
         print(f"[briefing] fcm send error: {e}")
     # persist for the panel (survives the once/day ntfy dedup)
@@ -1132,6 +1241,12 @@ def _run():
     except Exception as e:
         errors["ingest"] = str(e); details["ingest"] = f"ERROR: {e}"
         print(f"[ingest] ERROR: {e}")
+
+    try:                              # watchdog: is the web panel itself alive?
+        details["panel_health"] = _capture(check_panel_health, now)
+    except Exception as e:
+        errors["panel_health"] = str(e); details["panel_health"] = f"ERROR: {e}"
+        print(f"[panel_health] ERROR: {e}")
 
     args = sys.argv[1:] or ["tick"]
     try:

@@ -30,7 +30,12 @@ class OpenPanelAction : ActionCallback {
         val intent = if (baseUrl == null) {
             Intent(context, SettingsActivity::class.java)
         } else {
-            Intent(Intent.ACTION_VIEW, Uri.parse("$baseUrl/#briefing"))
+            // Token must come before the #fragment -- fragments never reach
+            // the server, so a token appended after one would authenticate
+            // nothing (see ntfy.panel_url's matching fix server-side).
+            val token = WidgetConfigStore.getToken(context)
+            val url = if (token != null) "$baseUrl/?token=${Uri.encode(token)}#briefing" else "$baseUrl/#briefing"
+            Intent(Intent.ACTION_VIEW, Uri.parse(url))
         }
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(intent)

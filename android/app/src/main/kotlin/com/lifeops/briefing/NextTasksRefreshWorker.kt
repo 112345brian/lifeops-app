@@ -11,6 +11,7 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.lifeops.briefing.data.BriefingState
 import com.lifeops.briefing.data.NextTasksState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -22,15 +23,27 @@ import java.net.URL
 import java.util.concurrent.TimeUnit
 
 /**
- * Periodically pulls the "what's next" task list from the lifeops server and
- * pushes it into every placed widget's Glance state. Unlike the briefing
- * (push-only via FCM), this is a real periodic pull: the user confirmed
- * 15-minute staleness is fine here since completing 3 tasks in under 15
- * minutes isn't realistic, and this is scoped narrowly to just this one
- * field rather than the whole widget.
+ * Periodically pulls BOTH the "what's next" task list AND the current
+ * briefing from the lifeops server, pushing each into every placed widget's
+ * Glance state. The briefing itself is delivered push-only via FCM
+ * (BriefingFcmService) for low-latency delivery, but push has no
+ * self-healing: a push missed for any reason (server down at that exact
+ * moment, FCM token not registered yet, widget freshly placed/reinstalled,
+ * phone off) means the briefing just never updates until the next lucky
+ * push. This periodic pull (same /api/briefing endpoint push already uses)
+ * closes that gap the same way next-tasks always has -- confirmed
+ * 2026-07-12 as the root cause of "sometimes it just shows one old
+ * sentence/nothing": next-tasks self-healed via this exact mechanism,
+ * briefing didn't, and the two silently drifted out of sync with each
+ * other.
  *
- * HTTP client choice: one GET, no request body, no need for a full HTTP
- * client.
+ * 15-minute staleness is fine for next-tasks (completing 3 tasks in under
+ * 15 minutes isn't realistic) and acceptable as a *fallback* for briefing
+ * too, since the push path still delivers near-instantly when it works --
+ * this only matters when push has already failed.
+ *
+ * HTTP client choice: same reasoning as before -- one GET, no request body,
+ * no need for a full HTTP client.
  */
 class NextTasksRefreshWorker(
     appContext: Context,
@@ -46,29 +59,72 @@ class NextTasksRefreshWorker(
             return@withContext Result.success()
         }
 
+        val nextTasksResult = refreshNextTasks(baseUrl, token)
+        refreshBriefing(baseUrl, token) // best-effort; never overrides nextTasksResult
+        nextTasksResult
+    }
+
+    private suspend fun refreshNextTasks(baseUrl: String, token: String): Result {
         val body: String
         try {
             body = fetchNextTasks(baseUrl, token)
         } catch (e: SocketTimeoutException) {
             Log.e(TAG, "timeout fetching $baseUrl/api/next-tasks", e)
-            return@withContext Result.retry()
+            return Result.retry()
         } catch (e: IOException) {
             Log.e(TAG, "error fetching $baseUrl/api/next-tasks", e)
-            return@withContext Result.retry()
+            return Result.retry()
         } catch (e: JSONException) {
             // Malformed body shouldn't happen per the server contract; don't
             // crash the worker or hammer a response shape that won't change.
             Log.e(TAG, "malformed next-tasks response body", e)
-            return@withContext Result.success()
+            return Result.success()
         }
 
         val state = NextTasksState.fromApiResponse(body, System.currentTimeMillis())
         applyToAllInstances(applicationContext, state)
-        Result.success()
+        return Result.success()
+    }
+
+    /** Best-effort: a briefing-fetch failure shouldn't fail the whole worker
+     * (next-tasks may have already succeeded) -- just log and let the next
+     * 15-minute cycle retry naturally. */
+    private suspend fun refreshBriefing(baseUrl: String, token: String) {
+        val body = try {
+            fetchBriefing(baseUrl, token) ?: return // 404 = no briefing generated yet today
+        } catch (e: SocketTimeoutException) {
+            Log.e(TAG, "timeout fetching $baseUrl/api/briefing", e)
+            return
+        } catch (e: IOException) {
+            Log.e(TAG, "error fetching $baseUrl/api/briefing", e)
+            return
+        }
+        val state = try {
+            BriefingState.fromApiResponse(body, System.currentTimeMillis())
+        } catch (e: JSONException) {
+            Log.e(TAG, "malformed briefing response body", e)
+            return
+        }
+        val manager = GlanceAppWidgetManager(applicationContext)
+        for (glanceId in manager.getGlanceIds(BriefingWidget::class.java)) {
+            persistBriefingForInstance(applicationContext, glanceId, state)
+        }
     }
 
     private fun fetchNextTasks(baseUrl: String, token: String): String {
-        val url = URL(authenticatedUrl(baseUrl, "/api/next-tasks", token))
+        return httpRequest(
+            url = "$baseUrl/api/next-tasks?token=$token",
+            method = "GET",
+            connectTimeoutMs = CONNECT_TIMEOUT_MS,
+            readTimeoutMs = READ_TIMEOUT_MS,
+            requireExactCode = HttpURLConnection.HTTP_OK,
+        )
+    }
+
+    /** Null return means "no briefing generated yet today" (server's 404),
+     * which is a normal, expected state -- not an error. */
+    private fun fetchBriefing(baseUrl: String, token: String): String? {
+        val url = URL("$baseUrl/api/briefing?token=$token")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = CONNECT_TIMEOUT_MS
@@ -76,8 +132,12 @@ class NextTasksRefreshWorker(
         }
         try {
             val code = connection.responseCode
+            if (code == 404) return null
             if (code != HttpURLConnection.HTTP_OK) {
-                throw IOException("Unexpected HTTP status $code from $url")
+                // Redact the query string (carries ?token=...) -- Log.e(tag,
+                // msg, throwable) logs this exception's own message in full
+                // even when the catch site's own log string omits the token.
+                throw IOException("Unexpected HTTP status $code from ${url.toString().substringBefore('?')}")
             }
             return connection.inputStream.bufferedReader().use { it.readText() }
         } finally {
@@ -118,10 +178,17 @@ class NextTasksRefreshWorker(
 }
 
 /** Shared by both this worker and CompleteTaskAction so a fresh NextTasksState
- * is persisted identically from either path. */
+ * is persisted identically from either path. Filters out any task the user
+ * just completed locally (see PendingRemovals.kt) that the server hasn't
+ * caught up to reflecting yet -- otherwise this full overwrite would
+ * silently resurrect it in the widget for however long remains until the
+ * server-side ingest() cycle actually completes it. */
 internal suspend fun persistNextTasksForInstance(context: Context, glanceId: GlanceId, state: NextTasksState) {
     updateAppWidgetState(context, glanceId) { prefs ->
-        prefs[WidgetKeys.NEXT_TASKS_JSON] = state.toJson()
+        val now = System.currentTimeMillis()
+        val pending = PendingRemovals.readActive(prefs, now)
+        val filtered = if (pending.isEmpty()) state else state.copy(tasks = state.tasks.filterNot { it.id in pending })
+        prefs[WidgetKeys.NEXT_TASKS_JSON] = filtered.toJson()
     }
     BriefingWidget().update(context, glanceId)
 }

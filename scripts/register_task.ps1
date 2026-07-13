@@ -6,6 +6,14 @@
 # All run whether or not Claude is open; they only need the PC on. A single global
 # run-lock (lock.py) serializes them, so overlapping fires can't race FlowSavvy.
 
+# Fail loudly instead of silently: without this, a transient Task Scheduler/
+# WMI hiccup on any ONE of the three Register-ScheduledTask calls below just
+# prints a non-terminating error and the script carries on to the final
+# "Registered all three" banner anyway -- confirmed as the exact mechanism
+# that let "LifeOps-signal" go missing on this machine for an unknown
+# stretch, discovered only by chance during unrelated debugging (2026-07-12).
+$ErrorActionPreference = "Stop"
+
 # pythonw.exe = no console window (silent/inconspicuous); fall back to python.exe
 $py = (Get-Command python).Source -replace 'python\.exe$', 'pythonw.exe'
 if (-not (Test-Path $py)) { $py = (Get-Command python).Source }
@@ -34,4 +42,12 @@ $dailyTrigger = New-ScheduledTaskTrigger -Daily -At 7:10am
 Register-ScheduledTask -TaskName "LifeOps-daily" -Action $dailyAction -Trigger $dailyTrigger `
   -Settings $settings -Description "LifeOps daily loop (heavier / LLM work)" -Force
 
-Write-Host "Registered LifeOps-signal (every 2 min), LifeOps-tick (every 10 min) and LifeOps-daily (7:10am)."
+# Verify, don't just assume: print a clear PASS/FAIL per task rather than
+# one unconditional success banner regardless of what actually happened.
+$expected = "LifeOps-signal", "LifeOps-tick", "LifeOps-daily"
+$missing = $expected | Where-Object { -not (Get-ScheduledTask -TaskName $_ -ErrorAction SilentlyContinue) }
+if ($missing) {
+    Write-Error "Registration verification FAILED -- missing: $($missing -join ', ')"
+    exit 1
+}
+Write-Host "Verified: LifeOps-signal (every 2 min), LifeOps-tick (every 10 min), LifeOps-daily (7:10am) all registered."

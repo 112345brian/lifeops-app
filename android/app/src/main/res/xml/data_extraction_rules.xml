@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Excludes the EncryptedSharedPreferences file from cloud backup/device
+     transfer. Its AES key lives in the hardware Keystore and is never
+     restorable, so a restored copy is undecryptable garbage that crashes
+     WidgetConfigStore.prefs() on first read (confirmed via logcat on a
+     real device, 2026-07-12). Re-entering the panel URL/token after a
+     reinstall is a one-time cost; crashing on every reinstall isn't. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="lifeops_widget_config.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="lifeops_widget_config.xml" />
+    </device-transfer>
+</data-extraction-rules>
