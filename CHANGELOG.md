@@ -31,6 +31,24 @@ change matter more here than semver strictness.
 - `push_next_tasks()` sent a fresh FCM message every tick even when
   nothing had changed since the last (now-acked) push; skips the send in
   that case.
+- `_push_with_ack` marked every push "unacked" even when nothing was
+  actually sent (e.g. no FCM token registered yet on a fresh install),
+  so a not-yet-configured device would retry forever. Send functions now
+  report whether a send was actually attempted; nothing-to-send is
+  treated as trivially acked.
+- `_mark_push_acked` could raise on a corrupt/non-dict ack state file --
+  since it runs inside `ingest()`'s per-message loop, that would have
+  dropped the rest of that poll batch's already-processed signals too.
+- **Retroactive review of the v1.5.0 batch below** (it shipped without
+  one, unlike the batches before and after it): `fcm.register_token()`
+  wrote to a fixed temp filename with no fsync, and is called from two
+  separate OS processes (the web server and the runner subprocess via
+  the ntfy relay) -- a genuine concurrent-write collision risk, not just
+  a single-writer durability nit. Now uses a unique temp file + fsync,
+  matching the rest of the codebase's durable writes. Also: 
+  `push_next_tasks()` ran before domain dispatch/`recalculate()` in
+  `_run()`, so a pushed snapshot could miss a change the same tick's
+  domains just made -- moved to run after.
 
 ## [1.5.0] — 2026-07-13
 
