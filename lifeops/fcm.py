@@ -68,10 +68,17 @@ def _send(msg_type, payload_dict, version):
     `ack:<type>:<version>` ntfy signal once persisted -- messaging.send()
     succeeding only confirms Firebase ACCEPTED this for delivery, not that
     the device ever received it, so this is how the server actually finds
-    out whether a push landed."""
+    out whether a push landed.
+
+    Returns True if a send was actually attempted (token + service account
+    both present), False if it no-oped. This is NOT delivery confirmation --
+    just enough for _push_with_ack to tell "genuinely sent, awaiting an ack"
+    apart from "nothing to send yet" (e.g. a fresh install with no
+    registered token), which would otherwise be marked unacked forever and
+    retried every tick indefinitely for no reason."""
     token = _device_token()
     if not token or not os.path.exists(config.FCM_SERVICE_ACCOUNT_FILE):
-        return
+        return False
     from firebase_admin import messaging
     # AndroidConfig priority="high" is required for prompt delivery -- the
     # FCM default ("normal") can be delayed indefinitely by the device's
@@ -82,16 +89,18 @@ def _send(msg_type, payload_dict, version):
         android=messaging.AndroidConfig(priority="high"),
     )
     messaging.send(message, app=_firebase_app())
+    return True
 
 def send_briefing(date, text, facts, version):
     """Pushes the daily briefing text + stats. See _send's docstring for the
-    delivery-reliability reasoning."""
-    _send("briefing", {"date": date, "text": text, "facts": facts}, version)
+    delivery-reliability reasoning and return value."""
+    return _send("briefing", {"date": date, "text": text, "facts": facts}, version)
 
 def send_next_tasks(tasks, events, version):
     """Pushes a fresh next-tasks + today's-events snapshot -- the
     Tailscale-independent counterpart to NextTasksRefreshWorker's periodic
     direct pull, which stays in place as a self-heal fallback for the rare
     case a push gets dropped (FCM data-message delivery isn't guaranteed
-    either, just far more often reachable than the tailnet)."""
-    _send("next_tasks", {"tasks": tasks, "events": events}, version)
+    either, just far more often reachable than the tailnet). See _send's
+    docstring for the return value."""
+    return _send("next_tasks", {"tasks": tasks, "events": events}, version)

@@ -39,16 +39,18 @@ def test_register_token_last_write_wins(tmp_path, monkeypatch):
 def test_send_briefing_noop_without_registered_token(tmp_path, monkeypatch):
     """No token on file -- must not even attempt to import/call
     firebase_admin, so this is safe to run without real Firebase
-    credentials configured."""
+    credentials configured. Must return False (nothing was sent) so
+    runner.py's _push_with_ack can tell "no-op" apart from "sent, awaiting
+    ack" instead of marking this unacked forever."""
     monkeypatch.setattr(history, "ROOT", str(tmp_path))
 
-    fcm.send_briefing("2026-07-13", "text", {"gym": 2}, "v1")  # must not raise
+    assert fcm.send_briefing("2026-07-13", "text", {"gym": 2}, "v1") is False
 
 
 def test_send_next_tasks_noop_without_registered_token(tmp_path, monkeypatch):
     monkeypatch.setattr(history, "ROOT", str(tmp_path))
 
-    fcm.send_next_tasks([{"id": "1"}], [{"title": "BBQ"}], "v1")  # must not raise
+    assert fcm.send_next_tasks([{"id": "1"}], [{"title": "BBQ"}], "v1") is False
 
 
 def test_send_briefing_and_next_tasks_use_distinct_message_types(tmp_path, monkeypatch):
@@ -84,8 +86,9 @@ def test_send_embeds_version_in_message_data_for_ack_round_trip(tmp_path, monkey
     sent = []
     monkeypatch.setattr(messaging, "send", lambda message, app: sent.append(message))
 
-    fcm.send_next_tasks([{"id": "1"}], [], "abc123")
+    result = fcm.send_next_tasks([{"id": "1"}], [], "abc123")
 
+    assert result is True
     assert len(sent) == 1
     assert sent[0].data["type"] == "next_tasks"
     assert sent[0].data["version"] == "abc123"

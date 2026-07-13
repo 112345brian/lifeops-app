@@ -1,5 +1,6 @@
 package com.lifeops.briefing
 
+import android.util.Log
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
@@ -54,4 +55,21 @@ internal fun postNtfySignal(body: String) {
         method = "POST",
         body = body,
     )
+}
+
+/** Best-effort receipt confirmation for a persisted FCM push -- see
+ * runner.py's _push_with_ack. Shared by BriefingPersistWorker and
+ * NextTasksPersistWorker so the null-check/try-catch/log shape lives in
+ * one place instead of being copy-pasted per worker. Never throws: a
+ * failed ack just means the server retries the same content next tick
+ * (the correct fallback), so it must not fail an otherwise-successful
+ * persist. No-ops if [version] is null (an in-flight push sent before the
+ * server started tagging messages with one). */
+internal fun postPushAck(msgType: String, version: String?, tag: String) {
+    version ?: return
+    try {
+        postNtfySignal("ack:$msgType:$version")
+    } catch (e: IOException) {
+        Log.w(tag, "failed to post ack for $msgType $version", e)
+    }
 }

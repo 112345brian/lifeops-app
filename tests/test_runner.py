@@ -157,7 +157,7 @@ def test_push_next_tasks_skipped_on_signal_tier(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
     (tmp_path / "logs").mkdir(exist_ok=True)
     calls = []
-    monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, version: calls.append((tasks, events, version)))
+    monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, version: calls.append((tasks, events, version)) or True)
 
     runner.push_next_tasks(_NextTasksFakeFlowSavvy(), datetime.datetime(2026, 7, 13, 9, 0), ["signal"])
 
@@ -168,7 +168,7 @@ def test_push_next_tasks_fires_on_tick_tier(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
     (tmp_path / "logs").mkdir(exist_ok=True)
     calls = []
-    monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, version: calls.append((tasks, events, version)))
+    monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, version: calls.append((tasks, events, version)) or True)
 
     runner.push_next_tasks(_NextTasksFakeFlowSavvy(), datetime.datetime(2026, 7, 13, 9, 0), ["tick"])
 
@@ -185,7 +185,7 @@ def test_push_next_tasks_retries_unacked_push_even_if_unchanged(tmp_path, monkey
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
     (tmp_path / "logs").mkdir(exist_ok=True)
     calls = []
-    monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, version: calls.append((tasks, events, version)))
+    monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, version: calls.append((tasks, events, version)) or True)
     fs = _NextTasksFakeFlowSavvy()
     now = datetime.datetime(2026, 7, 13, 9, 0)
 
@@ -199,7 +199,7 @@ def test_push_next_tasks_skips_send_when_unchanged_and_acked(tmp_path, monkeypat
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
     (tmp_path / "logs").mkdir(exist_ok=True)
     calls = []
-    monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, version: calls.append((tasks, events, version)))
+    monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, version: calls.append((tasks, events, version)) or True)
     fs = _NextTasksFakeFlowSavvy()
     now = datetime.datetime(2026, 7, 13, 9, 0)
 
@@ -214,7 +214,7 @@ def test_push_next_tasks_sends_again_when_changed(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
     (tmp_path / "logs").mkdir(exist_ok=True)
     calls = []
-    monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, version: calls.append((tasks, events, version)))
+    monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, version: calls.append((tasks, events, version)) or True)
     now = datetime.datetime(2026, 7, 13, 9, 0)
 
     runner.push_next_tasks(_NextTasksFakeFlowSavvy(), now, ["tick"])
@@ -236,7 +236,7 @@ def test_ingest_ack_signal_marks_push_acked(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "logs" / "history.jsonl"))
     (tmp_path / "logs").mkdir(exist_ok=True)
     calls = []
-    monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, version: calls.append(version))
+    monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, version: calls.append(version) or True)
 
     runner.push_next_tasks(_NextTasksFakeFlowSavvy(), datetime.datetime(2026, 7, 13, 9, 0), ["tick"])
     version = calls[0]
@@ -276,3 +276,44 @@ def test_ingest_malformed_ack_signal_does_not_raise(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.ntfy, "poll", lambda since: [fake_message])
 
     runner.ingest(_CompleteFakeFlowSavvy(), datetime.datetime(2026, 7, 13, 9, 0))  # must not raise
+
+
+def test_push_with_ack_marks_acked_immediately_when_nothing_was_sent(tmp_path, monkeypatch):
+    """A push_fn that returns False (e.g. fcm._send no-op'd because no
+    device has registered an FCM token yet) must be marked acked right
+    away -- there's nothing to await a confirmation for, and treating it as
+    unacked would retry forever every tick on a device that may never
+    register a token."""
+    monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
+    (tmp_path / "logs").mkdir(exist_ok=True)
+
+    runner._push_with_ack("next_tasks", {"tasks": []}, lambda version: False)
+
+    state = json.loads(open(runner._push_ack_state_file("next_tasks"), encoding="utf-8").read())
+    assert state["acked"] is True
+
+
+def test_push_with_ack_retries_when_send_was_attempted_but_unacked(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
+    (tmp_path / "logs").mkdir(exist_ok=True)
+    calls = []
+
+    def push_fn(version):
+        calls.append(version)
+        return True
+
+    runner._push_with_ack("next_tasks", {"tasks": []}, push_fn)
+    runner._push_with_ack("next_tasks", {"tasks": []}, push_fn)  # same content, never acked -- must retry
+
+    assert len(calls) == 2
+
+
+def test_mark_push_acked_ignores_non_dict_state(tmp_path, monkeypatch):
+    """A corrupt/non-dict ack state file must not raise -- _mark_push_acked
+    runs inside ingest()'s per-message loop, where an uncaught exception
+    would also drop that poll batch's other already-processed signals."""
+    monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
+    (tmp_path / "logs").mkdir(exist_ok=True)
+    runner._save_json_atomic(runner._push_ack_state_file("next_tasks"), ["not", "a", "dict"])
+
+    runner._mark_push_acked("next_tasks", "some-version")  # must not raise

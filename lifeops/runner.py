@@ -261,6 +261,19 @@ def ingest(fs, now):
 def _push_ack_state_file(msg_type):
     return os.path.join(history.ROOT, "logs", f"push_ack_{msg_type}.json")
 
+def _load_push_ack_state(sp):
+    """Returns the parsed state dict, or None if missing/corrupt/not a dict
+    (a plain set-to-`{}` or malformed file must not crash the caller --
+    _mark_push_acked in particular runs inside ingest()'s per-message loop,
+    where an uncaught exception would also drop the rest of that poll
+    batch's ntfy_ts/handled_ntfy_msg_ids persistence)."""
+    try:
+        with open(sp, encoding="utf-8") as f:
+            state = json.load(f)
+    except Exception:
+        return None
+    return state if isinstance(state, dict) else None
+
 def _push_with_ack(msg_type, snapshot, push_fn):
     """Push-until-confirmed wrapper around an FCM send. messaging.send()
     succeeding only means Firebase ACCEPTED the message for delivery, not
@@ -268,9 +281,14 @@ def _push_with_ack(msg_type, snapshot, push_fn):
     under Doze, a force-stopped app, etc.), so this tracks a real receipt
     confirmation instead of trusting the send call: `snapshot` is hashed
     into a short version id, `push_fn(version)` is called to actually send
-    it, and the version is recorded as unacked. The client echoes the
-    version back as an `ack:<type>:<version>` ntfy signal once it's
-    successfully persisted (see ingest()'s ack handler below).
+    it (returning whether anything was actually sent -- see fcm._send), and
+    the version is recorded as unacked UNLESS nothing was sent (e.g. no FCM
+    token registered yet), in which case there's nothing to await an ack
+    for and it's marked acked immediately -- otherwise a device that has
+    never registered a token would retry this every tick forever, since
+    "unacked" would never become true. The client echoes the version back
+    as an `ack:<type>:<version>` ntfy signal once it's successfully
+    persisted (see ingest()'s ack handler below).
 
     Skips the actual send only when BOTH the content is unchanged since the
     last push AND that push was acked -- an unacked previous push keeps
@@ -281,14 +299,12 @@ def _push_with_ack(msg_type, snapshot, push_fn):
     the content-unchanged half of this check."""
     version = hashlib.sha1(json.dumps(snapshot, sort_keys=True).encode()).hexdigest()[:16]
     sp = _push_ack_state_file(msg_type)
-    try:
-        state = json.load(open(sp, encoding="utf-8"))
-    except Exception:
-        state = None
-    if state and state.get("snapshot") == snapshot and state.get("acked"):
+    state = _load_push_ack_state(sp)
+    if state and state.get("version") == version and state.get("acked"):
         return
-    push_fn(version)
-    _save_json_atomic(sp, {"snapshot": snapshot, "version": version, "acked": False})
+    sent = push_fn(version)
+    os.makedirs(os.path.dirname(sp), exist_ok=True)
+    _save_json_atomic(sp, {"version": version, "acked": not sent})
 
 def _mark_push_acked(msg_type, version):
     """Called from ingest()'s ack:<type>:<version> signal handler. Only
@@ -296,11 +312,8 @@ def _mark_push_acked(msg_type, version):
     for a superseded version (e.g. the phone was slow to respond and a
     newer snapshot already went out) must not mark the NEW one acked."""
     sp = _push_ack_state_file(msg_type)
-    try:
-        state = json.load(open(sp, encoding="utf-8"))
-    except Exception:
-        return
-    if state.get("version") == version:
+    state = _load_push_ack_state(sp)
+    if state and state.get("version") == version:
         state["acked"] = True
         _save_json_atomic(sp, state)
 
