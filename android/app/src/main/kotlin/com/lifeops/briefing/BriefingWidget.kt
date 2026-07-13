@@ -44,6 +44,7 @@ import androidx.glance.text.FontWeight
 import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
+import com.lifeops.briefing.data.AttentionReason
 import com.lifeops.briefing.data.BriefingState
 import com.lifeops.briefing.data.GymRing
 import com.lifeops.briefing.data.NextTask
@@ -163,7 +164,7 @@ internal fun BriefingContent(state: BriefingState, nextTasks: NextTasksState) {
                 GymBar(state.gymLast7d, state.gymTarget)
             }
 
-            StatRow(state)
+            StatTilesRow(state)
             StaleIndicator(state.fetchedAtEpochMillis)
         }
 
@@ -230,8 +231,72 @@ private fun AttentionHeader(state: BriefingState, compact: Boolean) {
         Text(text = it, style = TextStyle(fontWeight = FontWeight.Bold,
             color = GlanceTheme.colors.onSurface))
     }
+    if (state.reasons.isNotEmpty()) {
+        Spacer(modifier = GlanceModifier.height(4.dp))
+        SeverityDots(state.reasons)
+    }
     if (!compact) {
         Spacer(modifier = GlanceModifier.height(6.dp))
+    }
+}
+
+/** Per-domain glyph row -- one dot per tracked domain (coursework, system,
+ * money, gym, matching attention.py's _DOMAIN_PRIORITY order), colored by
+ * the worst severity attention.compute() found for that domain, green when
+ * a domain has no open reason at all. Lets a glance answer "which of my
+ * four areas needs something" without reading any text -- the instrument-
+ * panel glyph language the rest of the widget is moving toward, rather
+ * than one linear headline trying to speak for every domain at once. */
+private val DOT_DOMAIN_ORDER = listOf("coursework", "system", "money", "gym")
+private const val DOT_SIZE_DP = 7
+private val SEVERITY_RANK = mapOf("ok" to 0, "watch" to 1, "risk" to 2, "fucked" to 3)
+
+private fun severityDotColor(severity: String): Color = when (severity) {
+    "fucked" -> Color(0xFFB3261E)
+    "risk" -> Color(0xFFC25100)
+    "watch" -> Color(0xFF8A5A00)
+    else -> COLOR_OK
+}
+
+private fun renderDotBitmap(sizePx: Int, colorArgb: Int): Bitmap {
+    val bitmap = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bitmap)
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = colorArgb }
+    val radius = sizePx / 2f
+    canvas.drawCircle(radius, radius, radius, paint)
+    return bitmap
+}
+
+// A fixed source-bitmap resolution, not device density -- Image scales the
+// bitmap to the GlanceModifier.size(DOT_SIZE_DP.dp) box regardless of the
+// source's raw pixel dimensions, so (unlike the ring, whose stroke width
+// must scale with its dp size) a plain filled circle needs no density
+// lookup at all.
+private const val DOT_BITMAP_PX = 32
+
+@Composable
+private fun SeverityDots(reasons: List<AttentionReason>) {
+    val worstByDomain = mutableMapOf<String, String>()
+    for (r in reasons) {
+        val rank = SEVERITY_RANK[r.severity] ?: continue
+        val currentRank = SEVERITY_RANK[worstByDomain[r.domain]] ?: -1
+        if (rank > currentRank) {
+            worstByDomain[r.domain] = r.severity
+        }
+    }
+    Row {
+        DOT_DOMAIN_ORDER.forEachIndexed { index, domain ->
+            if (index > 0) {
+                Spacer(modifier = GlanceModifier.width(5.dp))
+            }
+            val severity = worstByDomain[domain] ?: "ok"
+            val bitmap = renderDotBitmap(DOT_BITMAP_PX, severityDotColor(severity).toArgb())
+            Image(
+                provider = ImageProvider(bitmap),
+                contentDescription = "$domain: $severity",
+                modifier = GlanceModifier.size(DOT_SIZE_DP.dp),
+            )
+        }
     }
 }
 
@@ -259,26 +324,42 @@ private fun BriefingParagraph(text: String) {
     }
 }
 
+/** Icon+monospace-number card -- glyph replaces the label, number is the
+ * one thing that needs to read at a glance, matching the gym ring's
+ * icon-first visual language instead of a plain "$340" text run. */
 @Composable
-private fun StatRow(state: BriefingState) {
-    val stats = buildList {
+private fun StatTile(emoji: String, value: String, modifier: GlanceModifier = GlanceModifier) {
+    Column(
+        modifier = modifier
+            .background(GlanceTheme.colors.surfaceVariant)
+            .padding(6.dp),
+    ) {
+        Text(text = emoji, style = TextStyle(fontSize = 12.sp))
+        Text(
+            text = value,
+            style = TextStyle(fontWeight = FontWeight.Bold, fontSize = 16.sp,
+                color = GlanceTheme.colors.onSurface),
+        )
+    }
+}
+
+@Composable
+private fun StatTilesRow(state: BriefingState) {
+    val tiles = buildList {
         if (state.discretionaryDollars != null) {
-            add("$${state.discretionaryDollars}")
+            add("💰" to "$${state.discretionaryDollars}")
         }
         if (state.courseworkHoursNext7d != null) {
-            add("${state.courseworkHoursNext7d}h/7d")
+            add("📚" to "${state.courseworkHoursNext7d}h")
         }
     }
-    if (stats.isEmpty()) return
+    if (tiles.isEmpty()) return
     Row(modifier = GlanceModifier.fillMaxWidth().padding(top = 4.dp)) {
-        stats.forEachIndexed { index, stat ->
+        tiles.forEachIndexed { index, (emoji, value) ->
             if (index > 0) {
-                Spacer(modifier = GlanceModifier.width(8.dp))
+                Spacer(modifier = GlanceModifier.width(6.dp))
             }
-            Text(
-                text = stat,
-                style = TextStyle(color = GlanceTheme.colors.onSurfaceVariant),
-            )
+            StatTile(emoji, value, modifier = GlanceModifier.width(STAT_TILE_WIDTH_DP.dp))
         }
     }
 }
@@ -310,6 +391,7 @@ private fun StaleIndicator(fetchedAtEpochMillis: Long?) {
 
 private const val STALE_THRESHOLD_MINUTES = 120L
 private const val GYM_BAR_WIDTH_DP = 60
+private const val STAT_TILE_WIDTH_DP = 100
 
 /** Compact proportional meter: filled portion in teal once at/above target,
  * amber while short of it -- same two colors the stat text already used, now
