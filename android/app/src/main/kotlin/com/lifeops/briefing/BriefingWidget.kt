@@ -179,29 +179,31 @@ internal fun BriefingContent(state: BriefingState, nextTasks: NextTasksState) {
         // because it wasn't a risk/deadline). This is the deterministic
         // "don't forget you have an obligation" line, not advisory.
         if (nextTasks.events.isNotEmpty()) {
-            Spacer(modifier = GlanceModifier.height(8.dp))
-            for (event in nextTasks.events) {
+            Column(modifier = GlanceModifier.padding(top = 8.dp)) {
+                for (event in nextTasks.events) {
+                    Text(
+                        text = formatEventLine(event),
+                        style = TextStyle(
+                            fontWeight = FontWeight.Bold,
+                            color = GlanceTheme.colors.onSurface,
+                        ),
+                    )
+                }
+            }
+        }
+
+        if (nextTasks.tasks.isNotEmpty()) {
+            Column(modifier = GlanceModifier.padding(top = 8.dp)) {
                 Text(
-                    text = formatEventLine(event),
+                    text = "Up next",
                     style = TextStyle(
                         fontWeight = FontWeight.Bold,
                         color = GlanceTheme.colors.onSurface,
                     ),
                 )
-            }
-        }
-
-        if (nextTasks.tasks.isNotEmpty()) {
-            Spacer(modifier = GlanceModifier.height(8.dp))
-            Text(
-                text = "Up next",
-                style = TextStyle(
-                    fontWeight = FontWeight.Bold,
-                    color = GlanceTheme.colors.onSurface,
-                ),
-            )
-            for (task in nextTasks.tasks) {
-                NextTaskRow(task)
+                for (task in nextTasks.tasks) {
+                    NextTaskRow(task)
+                }
             }
         }
     }
@@ -214,6 +216,18 @@ internal fun BriefingContent(state: BriefingState, nextTasks: NextTasksState) {
 private val COLOR_OK = Color(0xFF276B5E)
 private val COLOR_WARN = Color(0xFFA8641F)
 
+// Glance enforces a hard "no more than 10 direct children per
+// Column/Row container" limit when translating to RemoteViews on a real
+// device (NOT enforced by runGlanceAppWidgetUnitTest's Robolectric harness
+// -- confirmed the hard way: unit tests all green, real device threw
+// "IllegalArgumentException: Column container cannot have more than 10
+// elements" and silently kept showing the last successfully-rendered
+// content instead of the crash being visible anywhere). A composable that
+// doesn't wrap its own emissions in a Column/Row/Box flattens them into
+// direct children of whatever container calls it -- so every logical
+// section below gets its own wrapping Column specifically to keep
+// BriefingContent's outer Column under that limit as more sections
+// (severity dots, stat tiles, gym ring) get added over time.
 @Composable
 private fun AttentionHeader(state: BriefingState, compact: Boolean) {
     if (state.attentionState == null) return
@@ -223,20 +237,22 @@ private fun AttentionHeader(state: BriefingState, compact: Boolean) {
         "watch" -> Color(0xFF8A5A00)
         else -> COLOR_OK
     }
-    Text(
-        text = "${state.attentionSymbol ?: "●"} ${state.attentionLabel ?: state.attentionState.uppercase()}",
-        style = TextStyle(fontWeight = FontWeight.Bold, color = ColorProvider(statusColor)),
-    )
-    state.attentionHeadline?.let {
-        Text(text = it, style = TextStyle(fontWeight = FontWeight.Bold,
-            color = GlanceTheme.colors.onSurface))
-    }
-    if (state.reasons.isNotEmpty()) {
-        Spacer(modifier = GlanceModifier.height(4.dp))
-        SeverityDots(state.reasons)
-    }
-    if (!compact) {
-        Spacer(modifier = GlanceModifier.height(6.dp))
+    Column {
+        Text(
+            text = "${state.attentionSymbol ?: "●"} ${state.attentionLabel ?: state.attentionState.uppercase()}",
+            style = TextStyle(fontWeight = FontWeight.Bold, color = ColorProvider(statusColor)),
+        )
+        state.attentionHeadline?.let {
+            Text(text = it, style = TextStyle(fontWeight = FontWeight.Bold,
+                color = GlanceTheme.colors.onSurface))
+        }
+        if (state.reasons.isNotEmpty()) {
+            Spacer(modifier = GlanceModifier.height(4.dp))
+            SeverityDots(state.reasons)
+        }
+        if (!compact) {
+            Spacer(modifier = GlanceModifier.height(6.dp))
+        }
     }
 }
 
