@@ -238,14 +238,15 @@ private fun AttentionHeader(state: BriefingState, compact: Boolean) {
         else -> COLOR_OK
     }
     Column {
+        // The recommended_action headline ("Do it now or deliberately
+        // reschedule it.") used to render here too, but it's implied by the
+        // severity badge itself (2026-07-12: user doesn't want it repeated
+        // below "FUCKED") -- state.attentionHeadline is still parsed/kept in
+        // BriefingState for whatever else might want it, just not shown here.
         Text(
             text = "${state.attentionSymbol ?: "●"} ${state.attentionLabel ?: state.attentionState.uppercase()}",
             style = TextStyle(fontWeight = FontWeight.Bold, color = ColorProvider(statusColor)),
         )
-        state.attentionHeadline?.let {
-            Text(text = it, style = TextStyle(fontWeight = FontWeight.Bold,
-                color = GlanceTheme.colors.onSurface))
-        }
         if (state.reasons.isNotEmpty()) {
             Spacer(modifier = GlanceModifier.height(4.dp))
             SeverityDots(state.reasons)

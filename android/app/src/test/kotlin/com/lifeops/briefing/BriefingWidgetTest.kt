@@ -71,7 +71,7 @@ class BriefingWidgetTest {
     )
 
     @Test
-    fun smallSize_showsOnlyBadgeAndHeadline() = runGlanceAppWidgetUnitTest {
+    fun smallSize_showsOnlyTheBadge() = runGlanceAppWidgetUnitTest {
         setAppWidgetSize(DpSize(120.dp, 90.dp))
         provideComposable {
             GlanceTheme {
@@ -84,7 +84,10 @@ class BriefingWidgetTest {
         }
 
         onNode(hasText("◆ RISK", true)).assertExists()
-        onNode(hasText("Finish the reading.", true)).assertExists()
+        // The recommended_action headline is implied by the badge itself and
+        // deliberately not rendered (2026-07-12) -- attentionHeadline is
+        // still parsed/carried on BriefingState, just not shown here.
+        onNode(hasText("Finish the reading.", true)).assertDoesNotExist()
         onNode(hasText("Gym 2/3", true)).assertDoesNotExist()
         onNode(hasText("All clear.", true)).assertDoesNotExist()
     }
