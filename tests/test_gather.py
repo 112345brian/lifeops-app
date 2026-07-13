@@ -309,3 +309,67 @@ def test_spend_input_broad_sweep_is_cached_across_calls_with_same_fs(monkeypatch
     gather.spend_input(real_fs, _FakeYnab(200), now)
 
     assert len(calls) == 1
+
+
+def _patch_social_config(monkeypatch, social_cal=""):
+    monkeypatch.setattr(config, "PARTNER_TASK", "Partner time")
+    monkeypatch.setattr(config, "FRIENDS_TASK", "Friends")
+    monkeypatch.setattr(config, "SOCIAL_CAL", social_cal)
+    monkeypatch.setattr(config, "PROPOSE_AHEAD_DAYS", 7)
+
+
+def test_social_input_days_until_none_when_nothing_planned(monkeypatch):
+    _patch_social_config(monkeypatch)
+    fs = _FakeSpendFlowSavvy({}, tasks=[])
+    now = datetime.datetime(2026, 7, 13, 9, 0)
+
+    out = gather.social_input(fs, now)
+
+    assert out["has_partner"] is False
+    assert out["partner_days_until"] is None
+    assert out["has_friend"] is False
+    assert out["friend_days_until"] is None
+
+
+def test_social_input_days_until_reads_soonest_scheduled_task(monkeypatch):
+    _patch_social_config(monkeypatch)
+    fs = _FakeSpendFlowSavvy({}, tasks=[
+        {"title": "Friends (proposed)", "startDateTime": "2026-07-20T18:00:00", "completed": False},
+        {"title": "Friends", "startDateTime": "2026-07-17T18:00:00", "completed": False},
+    ])
+    now = datetime.datetime(2026, 7, 13, 9, 0)
+
+    out = gather.social_input(fs, now)
+
+    assert out["has_friend"] is True
+    assert out["friend_days_until"] == 4
+
+
+def test_social_input_days_until_reads_social_cal_event(monkeypatch):
+    _patch_social_config(monkeypatch, social_cal="cal1")
+    fs = _FakeSpendFlowSavvy({"cal1": [
+        {"id": "e1", "title": "Date night", "startDateTime": "2026-07-16T18:00:00"},
+    ]}, tasks=[])
+    now = datetime.datetime(2026, 7, 13, 9, 0)
+
+    out = gather.social_input(fs, now)
+
+    assert out["has_partner"] is True
+    assert out["partner_days_until"] == 3
+
+
+def test_social_input_ignores_undated_open_task_for_days_until(monkeypatch):
+    """A "Friends" task with no scheduled time yet (still up for
+    auto-scheduling) counts toward has_friend, same as always, but must not
+    claim a phantom "planned for today" (days_until=0) -- only a task that
+    actually has a start/due time on the calendar counts as "planned"."""
+    _patch_social_config(monkeypatch)
+    fs = _FakeSpendFlowSavvy({}, tasks=[
+        {"title": "Friends", "startDateTime": None, "completed": False},
+    ])
+    now = datetime.datetime(2026, 7, 13, 9, 0)
+
+    out = gather.social_input(fs, now)
+
+    assert out["has_friend"] is True
+    assert out["friend_days_until"] is None

@@ -877,8 +877,11 @@ def run_briefing(fs, yn, now):
         social = gather.social_input(fs, now)
         partner_days_since = social.get("partner_days")
         friend_days_since = social.get("friend_days")
+        partner_days_until = social.get("partner_days_until")
+        friend_days_until = social.get("friend_days_until")
     except Exception:
         partner_days_since, friend_days_since = None, None
+        partner_days_until, friend_days_until = None, None
 
     facts = {"date": today.isoformat(), "weekday": now.strftime("%A"),
              "coursework_at_risk": risks, "due_today": due_today,
@@ -890,7 +893,8 @@ def run_briefing(fs, yn, now):
              "temperature_f": w.get("temp_f"), "weather_high_f": w.get("high_f"),
              "weather_low_f": w.get("low_f"), "weather_condition": w.get("condition"),
              "sleep_minutes": sleep_min,
-             "partner_days_since": partner_days_since, "friend_days_since": friend_days_since}
+             "partner_days_since": partner_days_since, "friend_days_since": friend_days_since,
+             "partner_days_until": partner_days_until, "friend_days_until": friend_days_until}
     facts["attention"] = attention.compute(facts)
     try:
         text = llm.daily_briefing(facts)

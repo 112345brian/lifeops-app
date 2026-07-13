@@ -686,9 +686,6 @@ internal fun formatSleepDuration(minutes: Int): String {
     return if (m == 0) "${h}h" else "${h}h${m}m"
 }
 
-private const val BASE_SOCIAL_ICON_SP = 20f
-private const val BASE_SOCIAL_VALUE_SP = 16f
-
 /** "Xd since partner" / "Yd since friends" side by side -- two independent
  * figures (social_input tracks them separately, same as PARTNER_TASK vs.
  * FRIENDS_TASK elsewhere in the app), so unlike the other stats this isn't
@@ -697,42 +694,43 @@ private const val BASE_SOCIAL_VALUE_SP = 16f
  * does -- two paired numbers read better as their own row than squeezed
  * into the ~100dp gym/money/coursework/sleep tile width. Either figure can
  * be missing independently (e.g. no FRIEND_NAMES configured) without
- * hiding the other. */
+ * hiding the other. Reuses [StatTile] itself (used to have its own
+ * near-identical SocialStat composable with its own, mismatched font
+ * sizes -- the icon read BIGGER than the value, inverted from every other
+ * tile's "the number is the point" hierarchy; confirmed 2026-07-13 as an
+ * oversight, not a deliberate difference, since the two composables were
+ * structurally identical).
+ *
+ * When a plan already exists (social_input's has_partner/has_friend), the
+ * value appends "→Nd" for the soonest scheduled/proposed date -- "2d" alone
+ * doesn't say whether that's 2 days of silence with nothing on the horizon,
+ * or 2 days since with something already booked for Friday; the arrow makes
+ * "nothing planned yet" visually distinct (bare "2d") from "already handled"
+ * (confirmed 2026-07-13, user couldn't tell which case they were looking at). */
 @Composable
 private fun SocialSection(state: BriefingState, scale: Float) {
+    fun label(daysSince: Int?, daysUntil: Int?): String? =
+        daysSince?.let { s -> daysUntil?.let { u -> "${s}d→${u}d" } ?: "${s}d" }
     Row(modifier = GlanceModifier.fillMaxWidth().padding(top = 4.dp)) {
-        state.partnerDaysSince?.let {
-            SocialStat("💜", "${it}d", scale, modifier = GlanceModifier.defaultWeight())
+        label(state.partnerDaysSince, state.partnerDaysUntil)?.let {
+            StatTile("💜", it, scale, modifier = GlanceModifier.defaultWeight())
         }
         if (state.partnerDaysSince != null && state.friendDaysSince != null) {
             Spacer(modifier = GlanceModifier.width(6.dp))
         }
-        state.friendDaysSince?.let {
-            SocialStat("👥", "${it}d", scale, modifier = GlanceModifier.defaultWeight())
+        label(state.friendDaysSince, state.friendDaysUntil)?.let {
+            StatTile("👥", it, scale, modifier = GlanceModifier.defaultWeight())
         }
     }
 }
 
-@Composable
-private fun SocialStat(emoji: String, value: String, scale: Float, modifier: GlanceModifier = GlanceModifier) {
-    Row(
-        modifier = modifier
-            .cornerRadius(10.dp)
-            .background(GlanceTheme.colors.surfaceVariant)
-            .padding(6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(text = emoji, style = TextStyle(fontSize = (BASE_SOCIAL_ICON_SP * scale).sp))
-        Spacer(modifier = GlanceModifier.width(4.dp))
-        Text(
-            text = value,
-            style = TextStyle(fontWeight = FontWeight.Bold, fontSize = (BASE_SOCIAL_VALUE_SP * scale).sp,
-                color = GlanceTheme.colors.onSurface),
-        )
-    }
-}
-
-private val WEATHER_BG = Color(0xFF3B4A78)
+// Matches the app's one established accent blue (the web panel's
+// --md-primary-container / WidgetConfigActivity's LifeOpsDarkColors
+// primaryContainer, both #2F4D80) instead of an unrelated blue lifted
+// straight from the original reference mockup image -- confirmed
+// 2026-07-13 that the old #3B4A78 didn't tie into anything else in the
+// app's palette, it just happened to be close in hue.
+private val WEATHER_BG = Color(0xFF2F4D80)
 private const val BASE_WEATHER_TEMP_SP = 40f
 private const val BASE_WEATHER_UNIT_SP = 16f
 private const val BASE_WEATHER_HILO_SP = 14f

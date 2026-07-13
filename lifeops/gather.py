@@ -516,6 +516,18 @@ def social_input(fs, now):
     def _has(base):  # proposed / planning / locked all count as "has a plan"
         return any((t.get("title") or "") in (base, f"{base} (proposed)", f"Plan {base}")
                    for t in open_tasks)
+    def _next_date(titles):
+        """Earliest scheduled date (today or later) among open tasks whose
+        title is one of `titles`, using startDateTime or, for auto-scheduled
+        tasks, dueDateTime (same fallback as next_up_input, line ~497)."""
+        dates = []
+        for t in open_tasks:
+            if (t.get("title") or "") not in titles:
+                continue
+            st = t.get("startDateTime") or t.get("dueDateTime")
+            if st and _d(st) >= start:
+                dates.append(datetime.date.fromisoformat(_d(st)))
+        return min(dates) if dates else None
     has_partner = _has(config.PARTNER_TASK)
     # A task titled "Friends" always counts, same as before -- but so does
     # any task that _is_friend_hangout would also log as a friend hangout
@@ -524,18 +536,28 @@ def social_input(fs, now):
     # get double-proposed/nagged about.
     has_friend = _has(config.FRIENDS_TASK) or any(
         _is_friend_hangout(t.get("title"), t.get("notes")) for t in open_tasks)
+    partner_next = _next_date((config.PARTNER_TASK, f"{config.PARTNER_TASK} (proposed)",
+                                f"Plan {config.PARTNER_TASK}"))
+    friend_next = _next_date((config.FRIENDS_TASK, f"{config.FRIENDS_TASK} (proposed)",
+                               f"Plan {config.FRIENDS_TASK}"))
     if config.SOCIAL_CAL:
         try:
             for e in fs.list_items(itemType="event", calendarId=config.SOCIAL_CAL).get("items", []):
                 st = e.get("startDateTime")
                 if st and start <= _d(st) <= weekend:
                     has_partner = True
+                    ed = datetime.date.fromisoformat(_d(st))
+                    if partner_next is None or ed < partner_next:
+                        partner_next = ed
         except Exception:
             pass
     lo = max(1, config.PROPOSE_AHEAD_DAYS - 3); hi = config.PROPOSE_AHEAD_DAYS + 4
     days = [now.date() + datetime.timedelta(days=i) for i in range(lo, hi)]
     days.sort(key=lambda d: (d.weekday() < 5, d))   # weekends first, ~3 weeks out
+    def _until(d):
+        return (d - now.date()).days if d else None
     return {"partner_days": ago(history.last("partner")), "friend_days": ago(history.last("friends")),
             "has_partner": has_partner, "has_friend": has_friend,
+            "partner_days_until": _until(partner_next), "friend_days_until": _until(friend_next),
             "good_days": [d.isoformat() for d in days],
             "is_protect_day": now.strftime("%a") in ("Sun", "Thu")}

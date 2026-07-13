@@ -4,6 +4,26 @@ Notable changes, newest first. Personal project, versioned simply (see
 `VERSION` / `lifeops.__version__`) — dates and the reasoning behind each
 change matter more here than semver strictness.
 
+## [1.13.0] — 2026-07-13
+
+### Added
+- **Social widget now shows "days until" alongside "days since."** `💜 2d`
+  alone didn't say whether that 2 days was heading toward radio silence or
+  something already booked — `social_input` now also reports the soonest
+  scheduled/proposed date for a partner or friend hangout, and the widget
+  (and its config-screen preview) render it as `💜 2d→4d` when a plan
+  exists, `💜 2d` (unchanged) when nothing's on the calendar yet.
+
+### Fixed
+- **Widget visual consistency pass.** The Social section's chips (`SocialStat`)
+  had their own near-identical composable with an inverted font-size
+  hierarchy (emoji bigger than the number) versus every other stat tile —
+  deleted in favor of reusing `StatTile` directly. The Weather card's
+  background color (`#3B4A78`) was an arbitrary blue lifted from the
+  original reference mockup and didn't tie into the app's actual palette —
+  changed to `#2F4D80`, the same accent blue used by the web panel and the
+  widget config screen.
+
 ## [1.12.0] — 2026-07-13
 
 ### Added

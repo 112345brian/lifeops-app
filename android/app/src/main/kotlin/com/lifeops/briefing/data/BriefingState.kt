@@ -27,6 +27,8 @@ data class BriefingState(
     val sleepMinutes: Int? = null,
     val partnerDaysSince: Int? = null,
     val friendDaysSince: Int? = null,
+    val partnerDaysUntil: Int? = null,
+    val friendDaysUntil: Int? = null,
     val fetchedAtEpochMillis: Long? = null,
     val attentionState: String? = null,
     val attentionSymbol: String? = null,
@@ -48,6 +50,8 @@ data class BriefingState(
         put("sleepMinutes", sleepMinutes)
         put("partnerDaysSince", partnerDaysSince)
         put("friendDaysSince", friendDaysSince)
+        put("partnerDaysUntil", partnerDaysUntil)
+        put("friendDaysUntil", friendDaysUntil)
         put("fetchedAtEpochMillis", fetchedAtEpochMillis)
         put("attentionState", attentionState)
         put("attentionSymbol", attentionSymbol)
@@ -113,6 +117,8 @@ data class BriefingState(
                 sleepMinutes = o.optIntOrNull("sleepMinutes"),
                 partnerDaysSince = o.optIntOrNull("partnerDaysSince"),
                 friendDaysSince = o.optIntOrNull("friendDaysSince"),
+                partnerDaysUntil = o.optIntOrNull("partnerDaysUntil"),
+                friendDaysUntil = o.optIntOrNull("friendDaysUntil"),
                 fetchedAtEpochMillis = o.optLongOrNull("fetchedAtEpochMillis"),
                 attentionState = o.optStringOrNull("attentionState"),
                 attentionSymbol = o.optStringOrNull("attentionSymbol"),
@@ -143,6 +149,8 @@ data class BriefingState(
                 sleepMinutes = facts.optIntOrNull("sleep_minutes"),
                 partnerDaysSince = facts.optIntOrNull("partner_days_since"),
                 friendDaysSince = facts.optIntOrNull("friend_days_since"),
+                partnerDaysUntil = facts.optIntOrNull("partner_days_until"),
+                friendDaysUntil = facts.optIntOrNull("friend_days_until"),
                 fetchedAtEpochMillis = fetchedAtEpochMillis,
                 attentionState = attention.optStringOrNull("state"),
                 attentionSymbol = attention.optStringOrNull("symbol"),

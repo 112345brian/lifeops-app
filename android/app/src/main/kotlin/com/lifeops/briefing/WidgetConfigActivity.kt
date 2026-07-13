@@ -10,6 +10,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -21,14 +22,23 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.Button
-import androidx.compose.material3.Checkbox
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -57,6 +67,30 @@ import com.lifeops.briefing.data.TodayEvent
 import com.lifeops.briefing.data.WidgetDisplayConfig
 import com.lifeops.briefing.data.WidgetSection
 import kotlinx.coroutines.launch
+
+/** Matches the web control panel's dark M3 palette (lifeops/templates/base.html's
+ * CSS custom properties) so the two surfaces feel like the same product
+ * instead of the configure screen looking like an unstyled default
+ * MaterialTheme{} form dropped on top of a widget (confirmed 2026-07-13:
+ * that mismatch was a big part of why this screen read as "fugly"). */
+private val LifeOpsDarkColors = darkColorScheme(
+    primary = Color(0xFFA9C7FF),
+    onPrimary = Color(0xFF0A2F5C),
+    primaryContainer = Color(0xFF2F4D80),
+    onPrimaryContainer = Color(0xFFDAE5FF),
+    secondaryContainer = Color(0xFF24262F),
+    onSecondaryContainer = Color(0xFFE4E2E9),
+    background = Color(0xFF101116),
+    onBackground = Color(0xFFE4E2E9),
+    surface = Color(0xFF101116),
+    onSurface = Color(0xFFE4E2E9),
+    surfaceVariant = Color(0xFF1A1C23),
+    onSurfaceVariant = Color(0xFFA4A2AE),
+    outline = Color(0xFF4A4B57),
+    outlineVariant = Color(0xFF2C2E38),
+    error = Color(0xFFFFB4AB),
+    errorContainer = Color(0xFF5C1A1A),
+)
 
 /** Per-widget-instance display customization screen -- Android's standard
  * AppWidget "configure" activity, launched by the App Widget host whenever
@@ -98,8 +132,8 @@ class WidgetConfigActivity : ComponentActivity() {
         val presetDefault = WidgetPresets.defaultConfigFor(providerClassName)
 
         setContent {
-            MaterialTheme {
-                Surface(modifier = Modifier.fillMaxSize()) {
+            MaterialTheme(colorScheme = LifeOpsDarkColors) {
+                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     WidgetConfigScreen(
                         loadInitial = { loadInitialState(appWidgetId, glanceId, presetDefault) },
                         onSave = { config -> saveAndFinish(appWidgetId, glanceId, config) },
@@ -235,84 +269,162 @@ private fun WidgetConfigScreen(
     var maxTasksAuto by remember { mutableStateOf(loaded.config.maxTasksOverride == null) }
     var maxTasksValue by remember { mutableStateOf((loaded.config.maxTasksOverride ?: 3).toFloat()) }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp)
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text(text = "Preview", style = MaterialTheme.typography.titleLarge)
-        WidgetPreview(
-            state = loaded.state,
-            nextTasks = loaded.nextTasks,
-            order = order,
-            hidden = hidden,
-            scale = scale,
-            bucket = loaded.bucket,
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(text = "Widget layout", style = MaterialTheme.typography.titleLarge)
-        Text(text = "Toggle sections on/off, reorder with ▲▼.",
-            style = MaterialTheme.typography.bodySmall)
-
-        order.forEachIndexed { index, section ->
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                Checkbox(
-                    checked = section !in hidden,
-                    onCheckedChange = { checked ->
-                        hidden = if (checked) hidden - section else hidden + section
+    // Save lives in a Scaffold bottomBar, not as the last item in the
+    // scrolling content -- on a long section list it used to be scrolled
+    // out of reach until you happened to keep scrolling past everything
+    // else; now it's always one tap away regardless of scroll position.
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        bottomBar = {
+            Surface(shadowElevation = 8.dp, color = MaterialTheme.colorScheme.surfaceVariant) {
+                Button(
+                    onClick = {
+                        val config = WidgetDisplayConfig(
+                            sectionOrder = order,
+                            hiddenSections = hidden,
+                            scale = scale,
+                            maxTasksOverride = if (maxTasksAuto) null else maxTasksValue.toInt(),
+                        )
+                        // rememberCoroutineScope, not GlobalScope -- tied to
+                        // this composable's lifecycle so it can't leak past
+                        // the screen being torn down mid-save.
+                        scope.launch { onSave(config) }
                     },
-                )
-                Text(text = sectionLabel(section), modifier = Modifier.weight(1f))
-                TextButton(onClick = { order = order.moved(index, index - 1) }, enabled = index > 0) {
-                    Text("▲")
-                }
-                TextButton(onClick = { order = order.moved(index, index + 1) }, enabled = index < order.lastIndex) {
-                    Text("▼")
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                ) {
+                    Text("Save")
                 }
             }
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(text = "Font & icon size: ${"%.2f".format(scale)}x")
-        Slider(value = scale, onValueChange = { scale = it },
-            valueRange = WidgetDisplayConfig.MIN_SCALE..WidgetDisplayConfig.MAX_SCALE)
-
-        Spacer(modifier = Modifier.height(8.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Checkbox(checked = maxTasksAuto, onCheckedChange = { maxTasksAuto = it })
-            Text(text = "Auto-size \"Up next\" task count")
-        }
-        if (!maxTasksAuto) {
-            Text(text = "Max tasks shown: ${maxTasksValue.toInt()}")
-            Slider(
-                value = maxTasksValue,
-                onValueChange = { maxTasksValue = it },
-                valueRange = 1f..MAX_TASKS_SLIDER_MAX,
-                steps = MAX_TASKS_SLIDER_STEPS,
-            )
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-        Button(
-            onClick = {
-                val config = WidgetDisplayConfig(
-                    sectionOrder = order,
-                    hiddenSections = hidden,
-                    scale = scale,
-                    maxTasksOverride = if (maxTasksAuto) null else maxTasksValue.toInt(),
-                )
-                // rememberCoroutineScope, not GlobalScope -- tied to this
-                // composable's lifecycle so it can't leak past the screen
-                // being torn down mid-save.
-                scope.launch { onSave(config) }
-            },
-            modifier = Modifier.fillMaxWidth(),
+        },
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .padding(horizontal = 20.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Text("Save")
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(text = "Widget setup", style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold)
+
+            ConfigCard(title = "Preview") {
+                WidgetPreview(
+                    state = loaded.state,
+                    nextTasks = loaded.nextTasks,
+                    order = order,
+                    hidden = hidden,
+                    scale = scale,
+                    bucket = loaded.bucket,
+                )
+            }
+
+            ConfigCard(title = "Sections", subtitle = "Toggle on/off, reorder with the arrows.") {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    order.forEachIndexed { index, section ->
+                        if (index > 0) HorizontalDivider()
+                        SectionRow(
+                            label = sectionLabel(section),
+                            enabled = section !in hidden,
+                            onToggle = { checked ->
+                                hidden = if (checked) hidden - section else hidden + section
+                            },
+                            onMoveUp = { order = order.moved(index, index - 1) },
+                            onMoveDown = { order = order.moved(index, index + 1) },
+                            moveUpEnabled = index > 0,
+                            moveDownEnabled = index < order.lastIndex,
+                        )
+                    }
+                }
+            }
+
+            ConfigCard(title = "Font & icon size", subtitle = "${"%.2f".format(scale)}x") {
+                Slider(value = scale, onValueChange = { scale = it },
+                    valueRange = WidgetDisplayConfig.MIN_SCALE..WidgetDisplayConfig.MAX_SCALE)
+            }
+
+            ConfigCard(title = "Task list") {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(text = "Auto-size to the widget's placed height", modifier = Modifier.weight(1f))
+                    Switch(checked = maxTasksAuto, onCheckedChange = { maxTasksAuto = it })
+                }
+                if (!maxTasksAuto) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(text = "Max tasks shown: ${maxTasksValue.toInt()}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Slider(
+                        value = maxTasksValue,
+                        onValueChange = { maxTasksValue = it },
+                        valueRange = 1f..MAX_TASKS_SLIDER_MAX,
+                        steps = MAX_TASKS_SLIDER_STEPS,
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
         }
+    }
+}
+
+/** One card, consistent title/subtitle/content styling and spacing --
+ * every section of the screen (Preview/Sections/Font/Task list) wraps in
+ * one of these instead of being loose Text+content siblings directly on
+ * the page background, which read as an unstyled form rather than a
+ * designed screen (confirmed 2026-07-13). */
+@Composable
+private fun ConfigCard(title: String, subtitle: String? = null, content: @Composable ColumnScope.() -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column {
+                Text(text = title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                if (subtitle != null) {
+                    Text(text = subtitle, style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            content()
+        }
+    }
+}
+
+@Composable
+private fun SectionRow(
+    label: String,
+    enabled: Boolean,
+    onToggle: (Boolean) -> Unit,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit,
+    moveUpEnabled: Boolean,
+    moveDownEnabled: Boolean,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            modifier = Modifier.weight(1f),
+            color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        IconButton(onClick = onMoveUp, enabled = moveUpEnabled, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.Filled.KeyboardArrowUp, contentDescription = "Move up",
+                tint = if (moveUpEnabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.outlineVariant)
+        }
+        IconButton(onClick = onMoveDown, enabled = moveDownEnabled, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Move down",
+                tint = if (moveDownEnabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.outlineVariant)
+        }
+        Spacer(modifier = Modifier.width(4.dp))
+        Switch(checked = enabled, onCheckedChange = onToggle)
     }
 }
 
@@ -331,7 +443,7 @@ private val SAMPLE_STATE = BriefingState(
     attentionState = "watch", attentionSymbol = "◆", attentionLabel = "WATCH",
     gymLast7d = 3, gymTarget = 4, discretionaryDollars = 250, courseworkHoursNext7d = 4.5,
     temperatureF = 72, weatherHighF = 80, weatherLowF = 60, weatherCondition = "Sunny",
-    sleepMinutes = 420, partnerDaysSince = 2, friendDaysSince = 5,
+    sleepMinutes = 420, partnerDaysSince = 2, friendDaysSince = 5, friendDaysUntil = 4,
     reasons = listOf(AttentionReason("coursework", "risk"), AttentionReason("money", "watch")),
 )
 private val SAMPLE_TASKS = NextTasksState(
@@ -485,7 +597,12 @@ private fun PreviewWeatherCard(state: BriefingState, scale: Float) {
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
-            .background(Color(0xFF3B4A78))
+            // Matches the real WeatherSection's WEATHER_BG -- kept as its
+            // own literal here since the preview is plain Compose (not
+            // Glance), not something that can import a GlanceModifier-side
+            // color, but it's the same #2F4D80 app-accent blue, not a
+            // separately-drifting value.
+            .background(Color(0xFF2F4D80))
             .padding((10 * scale).dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.Top,
@@ -510,12 +627,14 @@ private fun PreviewWeatherCard(state: BriefingState, scale: Float) {
 
 @Composable
 private fun PreviewSocialRow(state: BriefingState, scale: Float) {
+    fun label(daysSince: Int?, daysUntil: Int?): String? =
+        daysSince?.let { s -> daysUntil?.let { u -> "${s}d→${u}d" } ?: "${s}d" }
     Row(horizontalArrangement = Arrangement.spacedBy((6 * scale).dp)) {
-        state.partnerDaysSince?.let {
-            Text(text = "💜 ${it}d", color = PREVIEW_ON_BG, fontSize = (11 * scale).sp)
+        label(state.partnerDaysSince, state.partnerDaysUntil)?.let {
+            Text(text = "💜 $it", color = PREVIEW_ON_BG, fontSize = (11 * scale).sp)
         }
-        state.friendDaysSince?.let {
-            Text(text = "👥 ${it}d", color = PREVIEW_ON_BG, fontSize = (11 * scale).sp)
+        label(state.friendDaysSince, state.friendDaysUntil)?.let {
+            Text(text = "👥 $it", color = PREVIEW_ON_BG, fontSize = (11 * scale).sp)
         }
     }
 }
