@@ -53,6 +53,14 @@ class NextTasksRefreshWorker(
 ) : CoroutineWorker(appContext, workerParams) {
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+        // Runs first and unconditionally (before any network call, and
+        // regardless of whether one succeeds) -- this is the only place a
+        // stuck optimistic completion (see PendingRemovals.kt) gets reverted
+        // back to visible, so it must not depend on connectivity. Piggybacks
+        // on this worker's existing 15-min periodic cadence rather than
+        // scheduling a dedicated timer for it.
+        revertExpiredPendingCompletions(applicationContext)
+
         val baseUrl = WidgetConfigStore.getBaseUrl(applicationContext)
         val token = WidgetConfigStore.getToken(applicationContext)
 
@@ -64,6 +72,35 @@ class NextTasksRefreshWorker(
         val nextTasksResult = refreshNextTasks(baseUrl, token)
         refreshBriefing(baseUrl, token) // best-effort; never overrides nextTasksResult
         nextTasksResult
+    }
+
+    /** For each placed widget instance, restores any task whose pending
+     * completion (checkbox tap) has passed the ~10-min hard timeout without
+     * ever being confirmed complete or confirmed failed -- see
+     * PendingRemovals.takeExpired. Uses only the locally stored title/start,
+     * so this works even with zero connectivity. */
+    private suspend fun revertExpiredPendingCompletions(context: Context) {
+        val manager = GlanceAppWidgetManager(context)
+        val now = System.currentTimeMillis()
+        for (glanceId in manager.getGlanceIds(BriefingWidget::class.java)) {
+            var didRestore = false
+            updateAppWidgetState(context, glanceId) { prefs ->
+                val expired = PendingRemovals.takeExpired(prefs, now)
+                if (expired.isEmpty()) return@updateAppWidgetState
+                val currentJson = prefs[WidgetKeys.NEXT_TASKS_JSON] ?: return@updateAppWidgetState
+                val current = try {
+                    NextTasksState.fromJson(currentJson)
+                } catch (e: JSONException) {
+                    return@updateAppWidgetState
+                }
+                val existingIds = current.tasks.map { it.id }.toSet()
+                val restored = expired.filterNot { it.id in existingIds }
+                if (restored.isEmpty()) return@updateAppWidgetState
+                prefs[WidgetKeys.NEXT_TASKS_JSON] = current.copy(tasks = current.tasks + restored).toJson()
+                didRestore = true
+            }
+            if (didRestore) BriefingWidget().update(context, glanceId)
+        }
     }
 
     private suspend fun refreshNextTasks(baseUrl: String, token: String): Result {
@@ -179,17 +216,38 @@ class NextTasksRefreshWorker(
     }
 }
 
-/** Shared by both this worker and CompleteTaskAction so a fresh NextTasksState
- * is persisted identically from either path. Filters out any task the user
- * just completed locally (see PendingRemovals.kt) that the server hasn't
- * caught up to reflecting yet -- otherwise this full overwrite would
- * silently resurrect it in the widget for however long remains until the
- * server-side ingest() cycle actually completes it. */
+/** Shared by both this worker and CompleteTaskAction (via NextTasksPersistWorker's
+ * FCM path too) so a fresh NextTasksState is persisted identically from any
+ * path. Reconciles it against locally pending completions (see
+ * PendingRemovals.kt):
+ *  - a pending id absent from this fresh snapshot is confirmed complete --
+ *    clear its pending record now rather than waiting out the full timeout.
+ *  - a pending id still present, but past the grace window, is treated as a
+ *    genuine failure signal -- clear its pending record and let it show
+ *    normally in this write (no need to wait for the hard timeout).
+ *  - a pending id still present and still within grace is masked out of
+ *    this write as before -- the server most likely just hasn't caught up
+ *    yet, and un-masking here would flicker the row back for the ~2 min
+ *    until it does. */
 internal suspend fun persistNextTasksForInstance(context: Context, glanceId: GlanceId, state: NextTasksState) {
     updateAppWidgetState(context, glanceId) { prefs ->
         val now = System.currentTimeMillis()
         val pending = PendingRemovals.readActive(prefs, now)
-        val filtered = if (pending.isEmpty()) state else state.copy(tasks = state.tasks.filterNot { it.id in pending })
+        if (pending.isEmpty()) {
+            prefs[WidgetKeys.NEXT_TASKS_JSON] = state.toJson()
+            return@updateAppWidgetState
+        }
+
+        val incomingIds = state.tasks.map { it.id }.toSet()
+        val confirmedComplete = pending.keys.filterNot { it in incomingIds }.toSet()
+        val stillPresent = pending.keys - confirmedComplete
+        val confirmedFailed = stillPresent.filter { id -> pending.getValue(id).isPastGrace(now) }.toSet()
+
+        val resolved = confirmedComplete + confirmedFailed
+        if (resolved.isNotEmpty()) PendingRemovals.clearConfirmed(prefs, resolved)
+
+        val toMask = stillPresent - confirmedFailed
+        val filtered = if (toMask.isEmpty()) state else state.copy(tasks = state.tasks.filterNot { it.id in toMask })
         prefs[WidgetKeys.NEXT_TASKS_JSON] = filtered.toJson()
     }
     BriefingWidget().update(context, glanceId)

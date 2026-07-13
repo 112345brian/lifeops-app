@@ -7,6 +7,7 @@ import androidx.glance.GlanceId
 import androidx.glance.action.ActionParameters
 import androidx.glance.appwidget.action.ActionCallback
 import androidx.glance.appwidget.state.updateAppWidgetState
+import com.lifeops.briefing.data.NextTask
 import com.lifeops.briefing.data.NextTasksState
 import java.io.IOException
 import java.net.HttpURLConnection
@@ -78,23 +79,34 @@ class CompleteTaskAction : ActionCallback {
 
     private suspend fun removeTaskLocally(context: Context, glanceId: GlanceId, taskId: String) {
         updateAppWidgetState(context, glanceId) { prefs ->
+            val currentJson = prefs[WidgetKeys.NEXT_TASKS_JSON]
+            // A malformed persisted NEXT_TASKS_JSON shouldn't crash this
+            // action callback -- leave state untouched and let the next
+            // periodic pull (which replaces it wholesale) recover instead.
+            val current = currentJson?.let {
+                try {
+                    NextTasksState.fromJson(it)
+                } catch (e: org.json.JSONException) {
+                    null
+                }
+            }
+            // Prefer the title/start from the locally cached list (needed to
+            // restore this row if the completion never lands -- see
+            // PendingRemovals.kt); fall back to a title-less placeholder if
+            // it's not there so the id is still tracked and maskable even
+            // when the cache is empty/stale.
+            val task = current?.tasks?.firstOrNull { it.id == taskId }
+                ?: NextTask(id = taskId, title = taskId, start = null)
+
             // Mark this id pending-removed FIRST and unconditionally -- a
             // concurrent full refresh (periodic pull, or the one-time pull
             // on widget placement/Settings Save) landing before the
             // server-side completion catches up must not resurrect this
             // task, whether or not we have a local task list to also filter
             // right now. See PendingRemovals.kt.
-            PendingRemovals.add(prefs, taskId, System.currentTimeMillis())
+            PendingRemovals.add(prefs, task, System.currentTimeMillis())
 
-            val currentJson = prefs[WidgetKeys.NEXT_TASKS_JSON] ?: return@updateAppWidgetState
-            // A malformed persisted NEXT_TASKS_JSON shouldn't crash this
-            // action callback -- leave state untouched and let the next
-            // periodic pull (which replaces it wholesale) recover instead.
-            val current = try {
-                NextTasksState.fromJson(currentJson)
-            } catch (e: org.json.JSONException) {
-                return@updateAppWidgetState
-            }
+            if (current == null) return@updateAppWidgetState
             val updated = current.copy(tasks = current.tasks.filterNot { it.id == taskId })
             prefs[WidgetKeys.NEXT_TASKS_JSON] = updated.toJson()
         }
