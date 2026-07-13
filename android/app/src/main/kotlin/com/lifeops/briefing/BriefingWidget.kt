@@ -152,20 +152,10 @@ internal fun BriefingContent(state: BriefingState, nextTasks: NextTasksState) {
                 BriefingParagraph(state.text)
             }
 
-            // Gym gets a real meter, not just a fraction as text -- it's the
-            // one stat with a clear target to fill toward. The ring
-            // (nextTasks.gymRing, refreshed ~every 10 min or instantly on
-            // task completion) is preferred over the once-daily briefing's
-            // plain bar because it also carries the same-day action signal
-            // (color) the bar can't express -- see GymRing's docstring.
-            val gymRing = nextTasks.gymRing
-            if (gymRing != null) {
-                GymRingIndicator(gymRing)
-            } else if (state.gymLast7d != null && state.gymTarget != null) {
-                GymBar(state.gymLast7d, state.gymTarget)
-            }
-
-            StatTilesRow(state)
+            // Gym ring, money, and coursework all share one row now -- one
+            // instrument-panel strip instead of a ring on its own line
+            // followed by a separate stat-tile row underneath.
+            StatsRow(state, nextTasks.gymRing)
             StaleIndicator(state.fetchedAtEpochMillis)
         }
 
@@ -329,15 +319,23 @@ private fun SeverityDots(reasons: List<AttentionReason>) {
 private fun BriefingParagraph(text: String) {
     Column {
         for (line in text.split("\n")) {
-            Row(modifier = GlanceModifier.fillMaxWidth()) {
-                for ((segment, isBold) in parseMarkupLine(line)) {
-                    Text(
-                        text = segment,
-                        style = TextStyle(
-                            fontWeight = if (isBold) FontWeight.Bold else FontWeight.Normal,
-                            color = GlanceTheme.colors.onSurface,
-                        ),
-                    )
+            if (line.isBlank()) {
+                // A blank line marks a paragraph break in the source text --
+                // a small fixed Spacer reads as a paragraph gap without the
+                // extra height a full blank Text row's line-height added.
+                Spacer(modifier = GlanceModifier.height(4.dp))
+            } else {
+                Row(modifier = GlanceModifier.fillMaxWidth()) {
+                    for ((segment, isBold) in parseMarkupLine(line)) {
+                        Text(
+                            text = segment,
+                            style = TextStyle(
+                                fontWeight = if (isBold) FontWeight.Bold else FontWeight.Normal,
+                                fontSize = 15.sp,
+                                color = GlanceTheme.colors.onSurface,
+                            ),
+                        )
+                    }
                 }
             }
         }
@@ -346,62 +344,78 @@ private fun BriefingParagraph(text: String) {
 
 /** Icon+monospace-number card -- glyph replaces the label, number is the
  * one thing that needs to read at a glance, matching the gym ring's
- * icon-first visual language instead of a plain "$340" text run. */
+ * icon-first visual language instead of a plain "$340" text run. Rounded
+ * corners match MoneyTile's shape so the two read as one family of tile. */
 @Composable
 private fun StatTile(emoji: String, value: String, modifier: GlanceModifier = GlanceModifier) {
     Column(
         modifier = modifier
+            .cornerRadius(10.dp)
             .background(GlanceTheme.colors.surfaceVariant)
             .padding(6.dp),
     ) {
-        Text(text = emoji, style = TextStyle(fontSize = 12.sp))
+        Text(text = emoji, style = TextStyle(fontSize = 16.sp))
         Text(
             text = value,
-            style = TextStyle(fontWeight = FontWeight.Bold, fontSize = 16.sp,
+            style = TextStyle(fontWeight = FontWeight.Bold, fontSize = 18.sp,
                 color = GlanceTheme.colors.onSurface),
         )
     }
 }
 
+private val MONEY_TILE_OK_BG = Color(0x4D276B5E)
 private val MONEY_TILE_WATCH_BG = Color(0x4DA8641F)
 private val MONEY_TILE_RISK_BG = Color(0x4DB3261E)
 
 /** No glyph, no label -- just the dollar figure, big and bold, since it's
  * the one number where the amount itself IS the message. Background color
- * carries the same money severity attention.compute() already decided
- * (2026-07-12: "if it thinks I'm close to not being balanced, transparent
- * yellow rounded rect; if it thinks I'm gonna go over budget, red") --
- * looked up from state.reasons rather than re-deriving the <0/<100
- * thresholds here, so the widget can never disagree with the engine that
- * owns severity. */
+ * carries the same money severity attention.compute() already decided --
+ * green when fine, transparent yellow when the buffer's thin, red when
+ * discretionary has gone negative -- looked up from state.reasons rather
+ * than re-deriving the <0/<100 thresholds here, so the widget can never
+ * disagree with the engine that owns severity. */
 @Composable
 private fun MoneyTile(dollars: Int, severity: String?, modifier: GlanceModifier = GlanceModifier) {
     val bg = when (severity) {
-        "risk", "fucked" -> ColorProvider(MONEY_TILE_RISK_BG)
-        "watch" -> ColorProvider(MONEY_TILE_WATCH_BG)
-        else -> GlanceTheme.colors.surfaceVariant
+        "risk", "fucked" -> MONEY_TILE_RISK_BG
+        "watch" -> MONEY_TILE_WATCH_BG
+        else -> MONEY_TILE_OK_BG
     }
     Column(
         modifier = modifier
             .cornerRadius(10.dp)
-            .background(bg)
+            .background(ColorProvider(bg))
             .padding(6.dp),
     ) {
         Text(
             text = "$${dollars}",
-            style = TextStyle(fontWeight = FontWeight.Bold, fontSize = 20.sp,
+            style = TextStyle(fontWeight = FontWeight.Bold, fontSize = 22.sp,
                 color = GlanceTheme.colors.onSurface),
         )
     }
 }
 
+/** Gym ring, money, and coursework hours all in one row -- one instrument-
+ * panel strip instead of a ring on its own line above a separate stat-tile
+ * row underneath. */
 @Composable
-private fun StatTilesRow(state: BriefingState) {
-    if (state.discretionaryDollars == null && state.courseworkHoursNext7d == null) return
+private fun StatsRow(state: BriefingState, gymRing: GymRing?) {
+    val hasGym = gymRing != null || (state.gymLast7d != null && state.gymTarget != null)
+    if (!hasGym && state.discretionaryDollars == null && state.courseworkHoursNext7d == null) return
     val moneySeverity = state.reasons.firstOrNull { it.domain == "money" }?.severity
     Row(modifier = GlanceModifier.fillMaxWidth().padding(top = 4.dp)) {
         var addedFirst = false
+        if (gymRing != null) {
+            GymRingIndicator(gymRing)
+            addedFirst = true
+        } else if (state.gymLast7d != null && state.gymTarget != null) {
+            GymBar(state.gymLast7d, state.gymTarget)
+            addedFirst = true
+        }
         if (state.discretionaryDollars != null) {
+            if (addedFirst) {
+                Spacer(modifier = GlanceModifier.width(6.dp))
+            }
             MoneyTile(state.discretionaryDollars, moneySeverity, modifier = GlanceModifier.width(STAT_TILE_WIDTH_DP.dp))
             addedFirst = true
         }
@@ -454,25 +468,29 @@ private fun GymBar(completed: Int, target: Int) {
     val filledDp = (GYM_BAR_WIDTH_DP * ratio).toInt()
     val barColor = if (completed >= target) COLOR_OK else COLOR_WARN
 
-    Row(modifier = GlanceModifier.padding(top = 4.dp)) {
+    // Wrapped in a Column so this whole fallback counts as ONE child of
+    // whatever row/column calls it (see the container-child-limit note on
+    // AttentionHeader) -- rare path, only used before nextTasks.gymRing has
+    // loaded for the first time.
+    Column {
         Text(
             text = "Gym ${completed}/${target} (7d)",
             style = TextStyle(color = GlanceTheme.colors.onSurfaceVariant),
         )
-    }
-    Row(modifier = GlanceModifier.height(6.dp).padding(top = 2.dp)) {
-        if (filledDp > 0) {
-            Box(modifier = GlanceModifier.width(filledDp.dp).height(6.dp)
-                .background(ColorProvider(barColor))) {}
-        }
-        if (filledDp < GYM_BAR_WIDTH_DP) {
-            Box(modifier = GlanceModifier.width((GYM_BAR_WIDTH_DP - filledDp).dp).height(6.dp)
-                .background(GlanceTheme.colors.surfaceVariant)) {}
+        Row(modifier = GlanceModifier.height(6.dp).padding(top = 2.dp)) {
+            if (filledDp > 0) {
+                Box(modifier = GlanceModifier.width(filledDp.dp).height(6.dp)
+                    .background(ColorProvider(barColor))) {}
+            }
+            if (filledDp < GYM_BAR_WIDTH_DP) {
+                Box(modifier = GlanceModifier.width((GYM_BAR_WIDTH_DP - filledDp).dp).height(6.dp)
+                    .background(GlanceTheme.colors.surfaceVariant)) {}
+            }
         }
     }
 }
 
-private const val GYM_RING_SIZE_DP = 36
+private const val GYM_RING_SIZE_DP = 44
 private const val GYM_RING_STROKE_DP = 4
 private val GYM_RING_RED = Color(0xFFB3261E)
 
@@ -523,18 +541,16 @@ private fun GymRingIndicator(gymRing: GymRing) {
         trackColor = Color(0x33FFFFFF).toArgb(),
         fillColor = ringColor.toArgb(),
     )
-    Row(modifier = GlanceModifier.padding(top = 4.dp)) {
-        Box(
-            modifier = GlanceModifier.size(GYM_RING_SIZE_DP.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Image(
-                provider = ImageProvider(bitmap),
-                contentDescription = "Gym ${gymRing.gymLast7d}/${gymRing.gymTarget}, ${gymRing.color}",
-                modifier = GlanceModifier.fillMaxSize(),
-            )
-            Text(text = "🏋", style = TextStyle(fontSize = 16.sp))
-        }
+    Box(
+        modifier = GlanceModifier.size(GYM_RING_SIZE_DP.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Image(
+            provider = ImageProvider(bitmap),
+            contentDescription = "Gym ${gymRing.gymLast7d}/${gymRing.gymTarget}, ${gymRing.color}",
+            modifier = GlanceModifier.fillMaxSize(),
+        )
+        Text(text = "🏋", style = TextStyle(fontSize = 20.sp))
     }
 }
 
