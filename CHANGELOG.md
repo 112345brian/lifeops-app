@@ -4,6 +4,39 @@ Notable changes, newest first. Personal project, versioned simply (see
 `VERSION` / `lifeops.__version__`) — dates and the reasoning behind each
 change matter more here than semver strictness.
 
+## [1.10.0] — 2026-07-13
+
+### Added
+- **Per-widget-instance display customization.** Full control over which of
+  7 sections show (severity dots, gym ring, money tile, coursework tile,
+  briefing text, today's events, up-next tasks), their display order, a
+  font/icon scale (0.85-1.3x), and an "Up next" task-count override --
+  configured per placed widget instance via Android's standard AppWidget
+  configure flow (`android:configure` -> `WidgetConfigActivity`, launched on
+  add/edit). Gym ring/money/coursework tiles stay merged into one row when
+  left adjacent in the default order, and split apart automatically the
+  moment one is reordered away from the others -- no separate "grouped vs.
+  independent" toggle needed. Severity dots stay inline on the attention
+  badge's row only in their default position; moved elsewhere, they detach
+  into their own standalone row. Persisted in the same per-instance Glance
+  Preferences DataStore as the briefing/next-tasks state, so it's cleaned
+  up automatically when a widget instance is removed.
+
+### Fixed
+- The widget couldn't be resized at all -- `maxResizeWidth`/`maxResizeHeight`
+  were never set in `briefing_widget_info.xml`, so the launcher computed a
+  max resize bound of `(0,0)` (confirmed via logcat). Added explicit
+  min/max resize bounds.
+- Code review on the display-customization batch surfaced and fixed 5
+  issues: the default section order silently reversed the briefing-
+  paragraph/tiles order for every never-configured widget; a "No briefing
+  yet" placeholder's early return also suppressed today's events/up-next
+  tasks (which were always meant to be independent of briefing text);
+  severity-dots-inline detection used the wrong (unfiltered) section
+  order; the gym-ring fallback never received the new font/icon scale;
+  and a corrupted persisted scale value had no clamping to the config
+  screen's slider range.
+
 ## [1.9.0] — 2026-07-13
 
 ### Added
