@@ -1,5 +1,6 @@
 import datetime
 import json
+import os
 
 from lifeops import config, runner
 from lifeops.engines import canvas_engine
@@ -278,19 +279,60 @@ def test_ingest_malformed_ack_signal_does_not_raise(tmp_path, monkeypatch):
     runner.ingest(_CompleteFakeFlowSavvy(), datetime.datetime(2026, 7, 13, 9, 0))  # must not raise
 
 
-def test_push_with_ack_marks_acked_immediately_when_nothing_was_sent(tmp_path, monkeypatch):
+def test_push_with_ack_writes_no_state_when_nothing_was_sent(tmp_path, monkeypatch):
     """A push_fn that returns False (e.g. fcm._send no-op'd because no
-    device has registered an FCM token yet) must be marked acked right
-    away -- there's nothing to await a confirmation for, and treating it as
-    unacked would retry forever every tick on a device that may never
-    register a token."""
+    device has registered an FCM token yet) must not persist a fabricated
+    "acked" sentinel -- doing so would incorrectly suppress a later, GENUINE
+    send for this same unchanged content once a device finally registers a
+    token (see test_push_with_ack_sends_after_token_registers_for_unchanged_content)."""
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
     (tmp_path / "logs").mkdir(exist_ok=True)
 
     runner._push_with_ack("next_tasks", {"tasks": []}, lambda version: False)
 
-    state = json.loads(open(runner._push_ack_state_file("next_tasks"), encoding="utf-8").read())
-    assert state["acked"] is True
+    assert not os.path.exists(runner._push_ack_state_file("next_tasks"))
+
+
+def test_push_with_ack_retries_cheaply_every_call_when_nothing_was_sent(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
+    (tmp_path / "logs").mkdir(exist_ok=True)
+    calls = []
+
+    def push_fn(version):
+        calls.append(version)
+        return False
+
+    runner._push_with_ack("next_tasks", {"tasks": []}, push_fn)
+    runner._push_with_ack("next_tasks", {"tasks": []}, push_fn)
+    runner._push_with_ack("next_tasks", {"tasks": []}, push_fn)
+
+    assert len(calls) == 3
+
+
+def test_push_with_ack_sends_after_token_registers_for_unchanged_content(tmp_path, monkeypatch):
+    """Reproduces the P1 finding: a device with no FCM token gets a no-op
+    "push" for some content; the device then registers a token via
+    fcm.register_token; the SAME (unchanged) content must still be sent for
+    real on the next call, not skipped as already-acked."""
+    monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
+    (tmp_path / "logs").mkdir(exist_ok=True)
+    snapshot = {"tasks": [{"id": "t1"}]}
+    calls = []
+
+    # First call: no token registered yet -- fcm._send's real no-op path,
+    # simulated here as push_fn returning False without doing anything.
+    runner._push_with_ack("next_tasks", snapshot, lambda version: calls.append(("noop", version)) or False)
+    assert len(calls) == 1
+
+    # Device registers a token in between (irrelevant to _push_with_ack
+    # directly -- what matters is push_fn can now genuinely send).
+    runner.fcm.register_token("d" * 20)
+
+    # Second call: SAME unchanged snapshot, but push_fn can now really send.
+    runner._push_with_ack("next_tasks", snapshot, lambda version: calls.append(("sent", version)) or True)
+
+    assert len(calls) == 2
+    assert calls[1][0] == "sent"
 
 
 def test_push_with_ack_retries_when_send_was_attempted_but_unacked(tmp_path, monkeypatch):

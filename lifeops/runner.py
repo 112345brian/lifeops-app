@@ -282,13 +282,19 @@ def _push_with_ack(msg_type, snapshot, push_fn):
     confirmation instead of trusting the send call: `snapshot` is hashed
     into a short version id, `push_fn(version)` is called to actually send
     it (returning whether anything was actually sent -- see fcm._send), and
-    the version is recorded as unacked UNLESS nothing was sent (e.g. no FCM
-    token registered yet), in which case there's nothing to await an ack
-    for and it's marked acked immediately -- otherwise a device that has
-    never registered a token would retry this every tick forever, since
-    "unacked" would never become true. The client echoes the version back
-    as an `ack:<type>:<version>` ntfy signal once it's successfully
-    persisted (see ingest()'s ack handler below).
+    on a genuine send the version is recorded as unacked. The client echoes
+    the version back as an `ack:<type>:<version>` ntfy signal once it's
+    successfully persisted (see ingest()'s ack handler below).
+
+    When push_fn reports nothing was actually sent (e.g. no FCM token
+    registered yet), NO state is written at all -- persisting a fabricated
+    "acked" sentinel here would be wrong: once a token is later registered
+    via fcm.register_token, the very next call for this SAME unchanged
+    snapshot would hash to the same version and get skipped by the
+    unchanged-and-acked check below, even though nothing was ever actually
+    delivered to the device. Leaving state untouched means an unconfigured
+    device just retries (cheaply -- push_fn no-ops before any network call)
+    every call until a real send finally succeeds.
 
     Skips the actual send only when BOTH the content is unchanged since the
     last push AND that push was acked -- an unacked previous push keeps
@@ -303,8 +309,10 @@ def _push_with_ack(msg_type, snapshot, push_fn):
     if state and state.get("version") == version and state.get("acked"):
         return
     sent = push_fn(version)
+    if not sent:
+        return
     os.makedirs(os.path.dirname(sp), exist_ok=True)
-    _save_json_atomic(sp, {"version": version, "acked": not sent})
+    _save_json_atomic(sp, {"version": version, "acked": False})
 
 def _mark_push_acked(msg_type, version):
     """Called from ingest()'s ack:<type>:<version> signal handler. Only

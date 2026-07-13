@@ -115,7 +115,7 @@ class NextTasksRefreshWorker(
 
     private fun fetchNextTasks(baseUrl: String, token: String): String {
         return httpRequest(
-            url = "$baseUrl/api/next-tasks?token=$token",
+            url = authenticatedUrl(baseUrl, "/api/next-tasks", token),
             method = "GET",
             connectTimeoutMs = CONNECT_TIMEOUT_MS,
             readTimeoutMs = READ_TIMEOUT_MS,
@@ -126,7 +126,7 @@ class NextTasksRefreshWorker(
     /** Null return means "no briefing generated yet today" (server's 404),
      * which is a normal, expected state -- not an error. */
     private fun fetchBriefing(baseUrl: String, token: String): String? {
-        val url = URL("$baseUrl/api/briefing?token=$token")
+        val url = URL(authenticatedUrl(baseUrl, "/api/briefing", token))
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = CONNECT_TIMEOUT_MS

@@ -1,6 +1,7 @@
 package com.lifeops.briefing
 
 import android.content.Context
+import android.net.Uri
 import android.util.Log
 import androidx.glance.GlanceId
 import androidx.glance.action.ActionParameters
@@ -64,8 +65,12 @@ class CompleteTaskAction : ActionCallback {
     }
 
     private fun completeTaskDirect(baseUrl: String, token: String, taskId: String): String {
+        // taskId is a plain server-supplied String with no case/character
+        // contract (currently numeric in practice, but not guaranteed), so
+        // it's encoded into the path the same way the token is encoded into
+        // the query string -- see authenticatedUrl's docstring.
         return httpRequest(
-            url = "$baseUrl/api/tasks/$taskId/complete?token=$token",
+            url = authenticatedUrl(baseUrl, "/api/tasks/${Uri.encode(taskId)}/complete", token),
             method = "POST",
             requireExactCode = HttpURLConnection.HTTP_OK,
         )

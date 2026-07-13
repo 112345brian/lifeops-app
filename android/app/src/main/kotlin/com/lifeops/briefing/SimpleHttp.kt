@@ -1,5 +1,6 @@
 package com.lifeops.briefing
 
+import android.net.Uri
 import android.util.Log
 import java.io.IOException
 import java.net.HttpURLConnection
@@ -38,6 +39,18 @@ internal fun httpRequest(
     } finally {
         connection.disconnect()
     }
+}
+
+/** Builds `$baseUrl$path?token=<url-encoded token>` -- shared by every
+ * direct call to the panel API. WEB_TOKEN is free-text (editable through
+ * the panel's own Settings page), so it can contain &, #, +, % and other
+ * characters that would otherwise corrupt or truncate the query string;
+ * OpenPanelAction.kt already encodes its token for exactly this reason,
+ * this is the same fix for the direct-API call sites. `path` should
+ * already have any of its own path-segment values (e.g. a task id)
+ * encoded by the caller via [Uri.encode] -- this only encodes the token. */
+internal fun authenticatedUrl(baseUrl: String, path: String, token: String): String {
+    return "$baseUrl$path?token=${Uri.encode(token)}"
 }
 
 /** Posts a signal to the public ntfy topic lifeops's runner.py polls for
