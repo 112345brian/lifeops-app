@@ -8,6 +8,7 @@ import androidx.glance.testing.unit.hasContentDescription
 import androidx.glance.testing.unit.hasText
 import com.lifeops.briefing.data.AttentionReason
 import com.lifeops.briefing.data.BriefingState
+import com.lifeops.briefing.data.NextTask
 import com.lifeops.briefing.data.NextTasksState
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -162,5 +163,37 @@ class BriefingWidgetTest {
         onNode(hasContentDescription("money: watch")).assertExists()
         onNode(hasContentDescription("system: ok")).assertExists()
         onNode(hasContentDescription("gym: ok")).assertExists()
+    }
+
+    private val eightTasks = (1..8).map { NextTask(id = "$it", title = "Task $it", start = null) }
+
+    @Test
+    fun upNext_showsOnlyThreeTasksAtBaseLargeHeight() = runGlanceAppWidgetUnitTest {
+        setAppWidgetSize(DpSize(250.dp, 250.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(state = fullState, nextTasks = NextTasksState(tasks = eightTasks))
+            }
+        }
+
+        onNode(hasText("Task 1", true)).assertExists()
+        onNode(hasText("Task 3", true)).assertExists()
+        onNode(hasText("Task 4", true)).assertDoesNotExist()
+    }
+
+    @Test
+    fun upNext_showsMoreTasksWhenWidgetIsPlacedTaller() = runGlanceAppWidgetUnitTest {
+        // A widget resized well past the ~4x4 target (e.g. 4x6+) has real
+        // extra room -- 2026-07-13: "why is there so much padding... all
+        // that empty space" was a fixed 3-task list not using it.
+        setAppWidgetSize(DpSize(250.dp, 600.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(state = fullState, nextTasks = NextTasksState(tasks = eightTasks))
+            }
+        }
+
+        onNode(hasText("Task 1", true)).assertExists()
+        onNode(hasText("Task 8", true)).assertExists()
     }
 }

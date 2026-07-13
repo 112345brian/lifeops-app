@@ -91,7 +91,12 @@ internal fun bucketFor(size: DpSize): WidgetSizeBucket = when {
  */
 class BriefingWidget : GlanceAppWidget() {
 
-    override val sizeMode = SizeMode.Responsive(setOf(SMALL_SIZE, MEDIUM_SIZE, LARGE_SIZE))
+    // Exact (not Responsive's 3 fixed snapshots) so LocalSize.current reports
+    // the widget's true continuous placed size -- needed for the LARGE
+    // bucket to scale how many upcoming tasks it shows to the actual room
+    // available, instead of a placed-larger-than-4x4 widget just showing the
+    // same fixed content with dead space below it (2026-07-13).
+    override val sizeMode = SizeMode.Exact
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         provideContent {
@@ -184,6 +189,15 @@ internal fun BriefingContent(state: BriefingState, nextTasks: NextTasksState) {
         }
 
         if (nextTasks.tasks.isNotEmpty()) {
+            // A widget placed taller than the ~4x4 target has real extra
+            // room -- show more of the tasks the server already sent
+            // (up to 8, see gather.next_tasks_input's call sites) instead of
+            // always stopping at 3 and leaving the rest of the frame blank
+            // (2026-07-13). maxTasksForHeight is a rough per-row-height
+            // estimate, not a real measurement -- Glance/RemoteViews has no
+            // layout-measurement API to size this exactly.
+            val maxTasks = maxTasksForHeight(LocalSize.current.height.value.toInt())
+            val tasksToShow = nextTasks.tasks.take(maxTasks)
             Column(modifier = GlanceModifier.padding(top = 8.dp)) {
                 Text(
                     text = "Up next",
@@ -192,12 +206,26 @@ internal fun BriefingContent(state: BriefingState, nextTasks: NextTasksState) {
                         color = GlanceTheme.colors.onSurface,
                     ),
                 )
-                for (task in nextTasks.tasks) {
+                for (task in tasksToShow) {
                     NextTaskRow(task)
                 }
             }
         }
     }
+}
+
+private const val LARGE_BASE_HEIGHT_DP = 250
+private const val TASK_ROW_HEIGHT_DP = 34
+private const val MIN_TASKS_SHOWN = 3
+
+/** Rough estimate of how many "Up next" rows fit past the base ~250dp LARGE
+ * layout -- not a real measurement (Glance/RemoteViews has no layout-
+ * measurement API), just enough to make a widget placed taller than 4x4
+ * actually use the extra room instead of sitting on a fixed 3-task list
+ * with dead space below it. */
+private fun maxTasksForHeight(heightDp: Int): Int {
+    val extraDp = (heightDp - LARGE_BASE_HEIGHT_DP).coerceAtLeast(0)
+    return MIN_TASKS_SHOWN + extraDp / TASK_ROW_HEIGHT_DP
 }
 
 /** Shared with GymBar's on/off-target color and StaleIndicator's warning

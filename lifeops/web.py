@@ -601,7 +601,7 @@ def _tasks_and_events(fs, now, n):
             "gym_ring": gather.gym_ring_now(fs, now)}
 
 @app.get("/api/next-tasks")
-def api_next_tasks(n: int = 3):
+def api_next_tasks(n: int = 8):
     fs = FlowSavvy()
     now = datetime.datetime.now()
     try:
@@ -617,7 +617,7 @@ def api_next_tasks(n: int = 3):
         raise HTTPException(502, f"FlowSavvy fetch failed: {e}")
 
 @app.post("/api/tasks/{task_id}/complete")
-def api_task_complete(task_id: str, n: int = 3):
+def api_task_complete(task_id: str, n: int = 8):
     """Completes a task straight from the widget's checkbox tap and returns
     the fresh next-tasks list (+ today's events) in the same response, so
     the widget updates immediately without a follow-up GET. This is the

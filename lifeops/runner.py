@@ -336,7 +336,7 @@ def push_next_tasks(fs, now, args):
     if args == ["signal"]:
         return
     schedule_items = gather._upcoming_schedule(fs, now)
-    tasks = gather.next_tasks_input(fs, now, 3, schedule_items=schedule_items)
+    tasks = gather.next_tasks_input(fs, now, 8, schedule_items=schedule_items)
     events = gather.today_events_input(fs, now, schedule_items=schedule_items)
     gym_ring = gather.gym_ring_now(fs, now)
     snapshot = {"tasks": tasks, "events": events, "gym_ring": gym_ring}
