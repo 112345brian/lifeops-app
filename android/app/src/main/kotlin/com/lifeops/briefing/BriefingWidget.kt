@@ -2,17 +2,20 @@ package com.lifeops.briefing
 
 import android.content.Context
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.Color
 import androidx.datastore.preferences.core.Preferences
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
 import androidx.glance.GlanceTheme
+import androidx.glance.LocalSize
 import androidx.glance.action.ActionParameters
 import androidx.glance.action.clickable
 import androidx.glance.action.actionParametersOf
 import androidx.glance.appwidget.CheckBox
 import androidx.glance.appwidget.GlanceAppWidget
+import androidx.glance.appwidget.SizeMode
 import androidx.glance.appwidget.action.actionRunCallback
 import androidx.glance.appwidget.provideContent
 import androidx.glance.background
@@ -38,6 +41,24 @@ import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
 
+/** The three layouts BriefingContent renders, keyed to how much room the
+ * placed widget actually has (see BriefingWidget.sizeMode). A user can
+ * resize this widget down well below its 4x3 target, and Glance's
+ * SizeMode.Single default would previously just hand every size the same
+ * full layout to be clipped by the OS -- this codebase has already hit that
+ * failure mode once (see the Column/Spacer overflow bug referenced below). */
+internal enum class WidgetSizeBucket { SMALL, MEDIUM, LARGE }
+
+private val SMALL_SIZE = DpSize(130.dp, 100.dp)
+private val MEDIUM_SIZE = DpSize(250.dp, 150.dp)
+private val LARGE_SIZE = DpSize(250.dp, 250.dp)
+
+internal fun bucketFor(size: DpSize): WidgetSizeBucket = when {
+    size.height < MEDIUM_SIZE.height -> WidgetSizeBucket.SMALL
+    size.height < LARGE_SIZE.height -> WidgetSizeBucket.MEDIUM
+    else -> WidgetSizeBucket.LARGE
+}
+
 /**
  * The Glance widget itself: describes what to render for each widget instance.
  *
@@ -54,6 +75,8 @@ import java.time.format.DateTimeParseException
  * immediate update after a checkbox tap.
  */
 class BriefingWidget : GlanceAppWidget() {
+
+    override val sizeMode = SizeMode.Responsive(setOf(SMALL_SIZE, MEDIUM_SIZE, LARGE_SIZE))
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         provideContent {
@@ -82,53 +105,36 @@ class BriefingWidget : GlanceAppWidget() {
     }
 }
 
+/** Renders progressively more content as the placed widget size grows --
+ * SMALL shows only the status badge + one-line headline (the minimum "am I
+ * OK, and what's my next move" signal), MEDIUM adds the gym meter/stats/
+ * freshness line, LARGE (the 4x3 target size) adds the full briefing
+ * paragraph, today's events, and the up-next task list. Every bucket still
+ * gets the attention badge -- that's the one thing that must never get
+ * squeezed out, no matter how small the widget is resized. */
 @Composable
 internal fun BriefingContent(state: BriefingState, nextTasks: NextTasksState) {
+    val bucket = bucketFor(LocalSize.current)
     Column(
         modifier = GlanceModifier
             .fillMaxSize()
             .padding(12.dp)
             .clickable(actionRunCallback<OpenPanelAction>()),
     ) {
-        if (state.attentionState != null) {
-            val statusColor = when (state.attentionState) {
-                "fucked" -> Color(0xFFB3261E)
-                "risk" -> Color(0xFFC25100)
-                "watch" -> Color(0xFF8A5A00)
-                else -> Color(0xFF276B5E)
-            }
-            Text(
-                text = "${state.attentionSymbol ?: "●"} ${state.attentionLabel ?: state.attentionState.uppercase()}",
-                style = TextStyle(fontWeight = FontWeight.Bold, color = ColorProvider(statusColor)),
-            )
-            state.attentionHeadline?.let {
-                Text(text = it, style = TextStyle(fontWeight = FontWeight.Bold,
-                    color = GlanceTheme.colors.onSurface))
-            }
-            Spacer(modifier = GlanceModifier.height(6.dp))
+        AttentionHeader(state, compact = bucket == WidgetSizeBucket.SMALL)
+
+        if (bucket == WidgetSizeBucket.SMALL) {
+            return@Column
         }
+
         if (state.text == null) {
             Text(
                 text = "No briefing yet — tap to configure",
                 style = TextStyle(color = GlanceTheme.colors.onSurfaceVariant),
             )
         } else {
-            // Body: each source line becomes a Row of bold/non-bold Text
-            // runs, stacked in a Column to preserve line breaks.
-            Column {
-                for (line in state.text.split("\n")) {
-                    Row(modifier = GlanceModifier.fillMaxWidth()) {
-                        for ((segment, isBold) in parseMarkupLine(line)) {
-                            Text(
-                                text = segment,
-                                style = TextStyle(
-                                    fontWeight = if (isBold) FontWeight.Bold else FontWeight.Normal,
-                                    color = GlanceTheme.colors.onSurface,
-                                ),
-                            )
-                        }
-                    }
-                }
+            if (bucket == WidgetSizeBucket.LARGE) {
+                BriefingParagraph(state.text)
             }
 
             // Gym gets a compact proportional bar (a real meter, not just a
@@ -139,51 +145,12 @@ internal fun BriefingContent(state: BriefingState, nextTasks: NextTasksState) {
                 GymBar(state.gymLast7d, state.gymTarget)
             }
 
-            // Remaining stat row -- only the facts that are present.
-            val stats = buildList {
-                if (state.discretionaryDollars != null) {
-                    add("$${state.discretionaryDollars}")
-                }
-                if (state.courseworkHoursNext7d != null) {
-                    add("${state.courseworkHoursNext7d}h/7d")
-                }
-            }
-            if (stats.isNotEmpty()) {
-                Row(modifier = GlanceModifier.fillMaxWidth().padding(top = 4.dp)) {
-                    stats.forEachIndexed { index, stat ->
-                        if (index > 0) {
-                            Spacer(modifier = GlanceModifier.width(8.dp))
-                        }
-                        Text(
-                            text = stat,
-                            style = TextStyle(color = GlanceTheme.colors.onSurfaceVariant),
-                        )
-                    }
-                }
-            }
+            StatRow(state)
+            StaleIndicator(state.fetchedAtEpochMillis)
+        }
 
-            // "As of" info line -- when this snapshot was received, if known.
-            // A stale snapshot is worse than a missing one (it looks current
-            // but isn't), so anything past STALE_THRESHOLD_MINUTES gets a
-            // warning glyph ahead of the age, not just the age itself.
-            state.fetchedAtEpochMillis?.let {
-                val ageMinutes = (System.currentTimeMillis() - it) / 60_000L
-                val label = if (ageMinutes >= STALE_THRESHOLD_MINUTES) {
-                    "⚠ stale, as of ${relativeTime(it)}"
-                } else {
-                    "as of ${relativeTime(it)}"
-                }
-                Text(
-                    text = label,
-                    style = TextStyle(
-                        color = if (ageMinutes >= STALE_THRESHOLD_MINUTES) {
-                            ColorProvider(Color(0xFFA8641F))
-                        } else {
-                            GlanceTheme.colors.onSurfaceVariant
-                        },
-                    ),
-                )
-            }
+        if (bucket != WidgetSizeBucket.LARGE) {
+            return@Column
         }
 
         // Today's real calendar events -- shown above "Up next" and
@@ -219,6 +186,101 @@ internal fun BriefingContent(state: BriefingState, nextTasks: NextTasksState) {
             }
         }
     }
+}
+
+@Composable
+private fun AttentionHeader(state: BriefingState, compact: Boolean) {
+    if (state.attentionState == null) return
+    val statusColor = when (state.attentionState) {
+        "fucked" -> Color(0xFFB3261E)
+        "risk" -> Color(0xFFC25100)
+        "watch" -> Color(0xFF8A5A00)
+        else -> Color(0xFF276B5E)
+    }
+    Text(
+        text = "${state.attentionSymbol ?: "●"} ${state.attentionLabel ?: state.attentionState.uppercase()}",
+        style = TextStyle(fontWeight = FontWeight.Bold, color = ColorProvider(statusColor)),
+    )
+    state.attentionHeadline?.let {
+        Text(text = it, style = TextStyle(fontWeight = FontWeight.Bold,
+            color = GlanceTheme.colors.onSurface))
+    }
+    if (!compact) {
+        Spacer(modifier = GlanceModifier.height(6.dp))
+    }
+}
+
+/** Full LLM-generated briefing text -- each source line becomes a Row of
+ * bold/non-bold Text runs, stacked in a Column to preserve line breaks. Only
+ * shown at the LARGE bucket: it's the least essential content relative to
+ * the deterministic status/stats above it, and the first thing that should
+ * drop away as the widget shrinks. */
+@Composable
+private fun BriefingParagraph(text: String) {
+    Column {
+        for (line in text.split("\n")) {
+            Row(modifier = GlanceModifier.fillMaxWidth()) {
+                for ((segment, isBold) in parseMarkupLine(line)) {
+                    Text(
+                        text = segment,
+                        style = TextStyle(
+                            fontWeight = if (isBold) FontWeight.Bold else FontWeight.Normal,
+                            color = GlanceTheme.colors.onSurface,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatRow(state: BriefingState) {
+    val stats = buildList {
+        if (state.discretionaryDollars != null) {
+            add("$${state.discretionaryDollars}")
+        }
+        if (state.courseworkHoursNext7d != null) {
+            add("${state.courseworkHoursNext7d}h/7d")
+        }
+    }
+    if (stats.isEmpty()) return
+    Row(modifier = GlanceModifier.fillMaxWidth().padding(top = 4.dp)) {
+        stats.forEachIndexed { index, stat ->
+            if (index > 0) {
+                Spacer(modifier = GlanceModifier.width(8.dp))
+            }
+            Text(
+                text = stat,
+                style = TextStyle(color = GlanceTheme.colors.onSurfaceVariant),
+            )
+        }
+    }
+}
+
+/** "as of" info line -- when this snapshot was received, if known. A stale
+ * snapshot is worse than a missing one (it looks current but isn't), so
+ * anything past STALE_THRESHOLD_MINUTES gets a warning glyph ahead of the
+ * age, not just the age itself. */
+@Composable
+private fun StaleIndicator(fetchedAtEpochMillis: Long?) {
+    val fetchedAt = fetchedAtEpochMillis ?: return
+    val ageMinutes = (System.currentTimeMillis() - fetchedAt) / 60_000L
+    val label = if (ageMinutes >= STALE_THRESHOLD_MINUTES) {
+        "⚠ stale, as of ${relativeTime(fetchedAt)}"
+    } else {
+        "as of ${relativeTime(fetchedAt)}"
+    }
+    Text(
+        text = label,
+        style = TextStyle(
+            color = if (ageMinutes >= STALE_THRESHOLD_MINUTES) {
+                ColorProvider(Color(0xFFA8641F))
+            } else {
+                GlanceTheme.colors.onSurfaceVariant
+            },
+        ),
+    )
 }
 
 private const val STALE_THRESHOLD_MINUTES = 120L

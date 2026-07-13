@@ -1,5 +1,7 @@
 package com.lifeops.briefing
 
+import androidx.compose.ui.unit.DpSize
+import androidx.compose.ui.unit.dp
 import androidx.glance.GlanceTheme
 import androidx.glance.appwidget.testing.unit.runGlanceAppWidgetUnitTest
 import androidx.glance.testing.unit.hasText
@@ -58,5 +60,57 @@ class BriefingWidgetTest {
         }
 
         onNode(hasText("⚠ stale, as of 3h ago", true)).assertExists()
+    }
+
+    private val fullState = BriefingState(
+        date = "2026-07-12", text = "All clear.",
+        gymLast7d = 2, gymTarget = 3,
+        fetchedAtEpochMillis = System.currentTimeMillis(),
+    )
+
+    @Test
+    fun smallSize_showsOnlyBadgeAndHeadline() = runGlanceAppWidgetUnitTest {
+        setAppWidgetSize(DpSize(120.dp, 90.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(attentionState = "risk", attentionSymbol = "◆",
+                        attentionLabel = "RISK", attentionHeadline = "Finish the reading."),
+                    nextTasks = NextTasksState.empty(),
+                )
+            }
+        }
+
+        onNode(hasText("◆ RISK", true)).assertExists()
+        onNode(hasText("Finish the reading.", true)).assertExists()
+        onNode(hasText("Gym 2/3", true)).assertDoesNotExist()
+        onNode(hasText("All clear.", true)).assertDoesNotExist()
+    }
+
+    @Test
+    fun mediumSize_showsStatsButNotFullBriefingText() = runGlanceAppWidgetUnitTest {
+        setAppWidgetSize(DpSize(250.dp, 200.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(state = fullState, nextTasks = NextTasksState.empty())
+            }
+        }
+
+        onNode(hasText("Gym 2/3 (7d)", true)).assertExists()
+        onNode(hasText("just now", true)).assertExists()
+        onNode(hasText("All clear.", true)).assertDoesNotExist()
+    }
+
+    @Test
+    fun largeSize_showsFullBriefingText() = runGlanceAppWidgetUnitTest {
+        setAppWidgetSize(DpSize(250.dp, 250.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(state = fullState, nextTasks = NextTasksState.empty())
+            }
+        }
+
+        onNode(hasText("Gym 2/3 (7d)", true)).assertExists()
+        onNode(hasText("All clear.", true)).assertExists()
     }
 }
