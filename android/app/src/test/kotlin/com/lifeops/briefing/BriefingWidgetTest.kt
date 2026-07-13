@@ -37,6 +37,28 @@ class BriefingWidgetTest {
     }
 
     @Test
+    fun singleStatGymPreset_stillShowsGymRingWhenResizedToItsSmallestDeclaredSize() = runGlanceAppWidgetUnitTest {
+        // Regression test for the exact bug reported 2026-07-13: a
+        // single-stat preset widget (WidgetDisplayConfig.singleStat) could
+        // be dragged onto the home screen but not actually resized down to
+        // its own declared minimum (gym_widget_info.xml's 110x56dp) without
+        // its only content vanishing, because BriefingContent's SMALL
+        // bucket used to hard-stop right after the attention badge.
+        setAppWidgetSize(DpSize(110.dp, 56.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState,
+                    nextTasks = NextTasksState.empty(),
+                    config = WidgetDisplayConfig.singleStat(WidgetSection.GYM_RING),
+                )
+            }
+        }
+
+        onNode(hasText("Gym 2/3 (7d)", true)).assertExists()
+    }
+
+    @Test
     fun freshSnapshot_showsPlainAsOfLine_noStaleGlyph() = runGlanceAppWidgetUnitTest {
         provideComposable {
             GlanceTheme {
@@ -74,7 +96,7 @@ class BriefingWidgetTest {
     )
 
     @Test
-    fun smallSize_showsOnlyTheBadge() = runGlanceAppWidgetUnitTest {
+    fun smallSize_showsBadgeAndCompactTiles_butNotParagraphOrFreshness() = runGlanceAppWidgetUnitTest {
         setAppWidgetSize(DpSize(120.dp, 90.dp))
         provideComposable {
             GlanceTheme {
@@ -91,8 +113,17 @@ class BriefingWidgetTest {
         // deliberately not rendered (2026-07-12) -- attentionHeadline is
         // still parsed/carried on BriefingState, just not shown here.
         onNode(hasText("Finish the reading.", true)).assertDoesNotExist()
-        onNode(hasText("Gym 2/3", true)).assertDoesNotExist()
+        // 2026-07-13: SMALL used to hard-stop right after the badge, which
+        // meant a single-stat preset widget (e.g. "LifeOps Gym") couldn't
+        // actually be resized down to its own declared minimum without
+        // losing its only content. TILE_SECTIONS (gym/money/coursework/
+        // sleep) are compact single-row tiles, so they render at every
+        // size, including SMALL -- only the wider/richer sections
+        // (paragraph, freshness line, events, up-next, weather, social)
+        // still require at least MEDIUM.
+        onNode(hasText("Gym 2/3", true)).assertExists()
         onNode(hasText("All clear.", true)).assertDoesNotExist()
+        onNode(hasText("just now", true)).assertDoesNotExist()
     }
 
     @Test
@@ -140,6 +171,95 @@ class BriefingWidgetTest {
         onNode(hasText("💰", true)).assertDoesNotExist()
         onNode(hasText("📚", true)).assertExists()
         onNode(hasText("6.5h", true)).assertExists()
+    }
+
+    @Test
+    fun weatherSection_showsTempHighLowAndCondition() = runGlanceAppWidgetUnitTest {
+        setAppWidgetSize(DpSize(250.dp, 200.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(temperatureF = 73, weatherHighF = 85, weatherLowF = 67,
+                        weatherCondition = "Cloudy"),
+                    nextTasks = NextTasksState.empty(),
+                )
+            }
+        }
+
+        onNode(hasText("73", true)).assertExists()
+        onNode(hasText("↑85°", true)).assertExists()
+        onNode(hasText("↓67°", true)).assertExists()
+        onNode(hasText("Cloudy", true)).assertExists()
+        onNode(hasText("☁️", true)).assertExists()
+    }
+
+    @Test
+    fun weatherSection_hiddenUntilFirstBriefingArrives() = runGlanceAppWidgetUnitTest {
+        setAppWidgetSize(DpSize(250.dp, 200.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    // temperatureF wouldn't actually be set with text still
+                    // null in practice (both come from the same facts
+                    // snapshot -- see TEXT_GATED_SECTIONS' docstring), but
+                    // this isolates that the gate itself still applies.
+                    state = BriefingState(date = "2026-07-12", text = null, temperatureF = 73),
+                    nextTasks = NextTasksState.empty(),
+                )
+            }
+        }
+
+        onNode(hasText("73", true)).assertDoesNotExist()
+    }
+
+    @Test
+    fun sleepTile_showsFormattedDuration() = runGlanceAppWidgetUnitTest {
+        setAppWidgetSize(DpSize(250.dp, 200.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(sleepMinutes = 402),
+                    nextTasks = NextTasksState.empty(),
+                )
+            }
+        }
+
+        onNode(hasText("😴", true)).assertExists()
+        onNode(hasText("6h42m", true)).assertExists()
+    }
+
+    @Test
+    fun socialSection_showsBothPartnerAndFriendDays() = runGlanceAppWidgetUnitTest {
+        setAppWidgetSize(DpSize(250.dp, 200.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(partnerDaysSince = 4, friendDaysSince = 2),
+                    nextTasks = NextTasksState.empty(),
+                )
+            }
+        }
+
+        onNode(hasText("💜", true)).assertExists()
+        onNode(hasText("👥", true)).assertExists()
+        onNode(hasText("4d", true)).assertExists()
+        onNode(hasText("2d", true)).assertExists()
+    }
+
+    @Test
+    fun socialSection_showsOnlyThePartnerFigureWhenFriendsIsMissing() = runGlanceAppWidgetUnitTest {
+        setAppWidgetSize(DpSize(250.dp, 200.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(partnerDaysSince = 4, friendDaysSince = null),
+                    nextTasks = NextTasksState.empty(),
+                )
+            }
+        }
+
+        onNode(hasText("4d", true)).assertExists()
+        onNode(hasText("👥", true)).assertDoesNotExist()
     }
 
     @Test
@@ -197,6 +317,33 @@ class BriefingWidgetTest {
 
         onNode(hasText("Task 1", true)).assertExists()
         onNode(hasText("Task 8", true)).assertExists()
+    }
+
+    @Test
+    fun maxTasksForHeight_reservesRoomForTheFreshnessLine() = runGlanceAppWidgetUnitTest {
+        // 2026-07-13: maxTasksForHeight used to spend every extra dp on
+        // task rows with nothing held back for the "as of ..." freshness
+        // line below -- Glance/RemoteViews clips overflow rather than
+        // scrolling it, so on a real device that line was the first thing
+        // silently clipped off as a resized widget's task count grew to
+        // fill the space (not observable via this Robolectric harness,
+        // which doesn't simulate real pixel clipping -- see the file's own
+        // "Glance enforces a hard 10-child limit... NOT enforced by
+        // Robolectric" note for the same class of gap). What IS directly
+        // testable here: at 386dp tall, the unreserved calculation would
+        // fit a 7th task ((386-250)/34 + 3 = 7); reserving
+        // STALE_INDICATOR_RESERVED_DP first drops that to 6, trading one
+        // task row for headroom the freshness line actually needs.
+        setAppWidgetSize(DpSize(250.dp, 386.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(state = fullState, nextTasks = NextTasksState(tasks = eightTasks))
+            }
+        }
+
+        onNode(hasText("Task 6", true)).assertExists()
+        onNode(hasText("Task 7", true)).assertDoesNotExist()
+        onNode(hasText("just now", true)).assertExists()
     }
 
     @Test

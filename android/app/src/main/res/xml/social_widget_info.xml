@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Single-stat preset (social only): see gym_widget_info.xml's comment
+     for why minHeight/minResizeHeight are held at 150dp. Slightly wider
+     default than the narrow icon+number presets (targetCellWidth 3, not
+     2): SocialSection shows two side-by-side figures (partner + friends),
+     not one. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="160dp"
+    android:minHeight="150dp"
+    android:minResizeWidth="160dp"
+    android:minResizeHeight="150dp"
+    android:maxResizeWidth="280dp"
+    android:maxResizeHeight="250dp"
+    android:targetCellWidth="3"
+    android:targetCellHeight="2"
+    android:resizeMode="horizontal|vertical"
+    android:widgetCategory="home_screen"
+    android:updatePeriodMillis="1800000"
+    android:initialLayout="@layout/widget_loading"
+    android:previewLayout="@layout/widget_loading"
+    android:configure="com.lifeops.briefing.WidgetConfigActivity" />

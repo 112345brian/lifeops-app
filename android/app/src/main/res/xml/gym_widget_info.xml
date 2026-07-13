@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Single-stat preset (gym ring only): see BriefingWidgetReceiver.kt's
+     docstring. Sized to Android's real 2x1 handheld minimum (56dp tall):
+     BriefingContent's SMALL bucket now renders TILE_SECTIONS content (the
+     gym ring included) instead of just the attention badge, so this no
+     longer needs to be artificially held at 150dp/MEDIUM to avoid losing
+     its content when resized down (confirmed 2026-07-13: the widget
+     couldn't actually be shrunk to its declared minimum before this fix). -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="110dp"
+    android:minHeight="56dp"
+    android:minResizeWidth="110dp"
+    android:minResizeHeight="56dp"
+    android:maxResizeWidth="250dp"
+    android:maxResizeHeight="276dp"
+    android:targetCellWidth="2"
+    android:targetCellHeight="1"
+    android:resizeMode="horizontal|vertical"
+    android:widgetCategory="home_screen"
+    android:updatePeriodMillis="1800000"
+    android:initialLayout="@layout/widget_loading"
+    android:previewLayout="@layout/widget_loading"
+    android:configure="com.lifeops.briefing.WidgetConfigActivity" />

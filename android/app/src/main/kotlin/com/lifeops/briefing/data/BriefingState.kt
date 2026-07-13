@@ -20,6 +20,13 @@ data class BriefingState(
     val gymTarget: Int? = null,
     val discretionaryDollars: Int? = null,
     val courseworkHoursNext7d: Double? = null,
+    val temperatureF: Int? = null,
+    val weatherHighF: Int? = null,
+    val weatherLowF: Int? = null,
+    val weatherCondition: String? = null,
+    val sleepMinutes: Int? = null,
+    val partnerDaysSince: Int? = null,
+    val friendDaysSince: Int? = null,
     val fetchedAtEpochMillis: Long? = null,
     val attentionState: String? = null,
     val attentionSymbol: String? = null,
@@ -34,6 +41,13 @@ data class BriefingState(
         put("gymTarget", gymTarget)
         put("discretionaryDollars", discretionaryDollars)
         put("courseworkHoursNext7d", courseworkHoursNext7d)
+        put("temperatureF", temperatureF)
+        put("weatherHighF", weatherHighF)
+        put("weatherLowF", weatherLowF)
+        put("weatherCondition", weatherCondition)
+        put("sleepMinutes", sleepMinutes)
+        put("partnerDaysSince", partnerDaysSince)
+        put("friendDaysSince", friendDaysSince)
         put("fetchedAtEpochMillis", fetchedAtEpochMillis)
         put("attentionState", attentionState)
         put("attentionSymbol", attentionSymbol)
@@ -52,6 +66,29 @@ data class BriefingState(
     companion object {
         fun empty() = BriefingState(date = null, text = null)
 
+        /** has()-and-not-null()-safe Int read -- optInt() alone can't tell
+         * "key absent" apart from "key present with an explicit JSON null"
+         * (both fall through to its default), and Python's json module
+         * always writes explicit nulls for None facts values rather than
+         * omitting the key, so has()-only silently reads back as 0 instead
+         * of Kotlin null (confirmed 2026-07-13 via the weather fields'
+         * first test run). */
+        private fun JSONObject.optIntOrNull(key: String): Int? =
+            if (has(key) && !isNull(key)) optInt(key) else null
+
+        /** Same has()-and-not-null() concern as [optIntOrNull], but for
+         * strings: optString() on an explicit JSON null returns the
+         * literal STRING "null" (four characters, non-empty), not Kotlin
+         * null, so isNotEmpty() alone doesn't catch it either. */
+        private fun JSONObject.optStringOrNull(key: String): String? =
+            if (isNull(key)) null else optString(key).takeIf { it.isNotEmpty() }
+
+        private fun JSONObject.optDoubleOrNull(key: String): Double? =
+            if (has(key) && !isNull(key)) optDouble(key) else null
+
+        private fun JSONObject.optLongOrNull(key: String): Long? =
+            if (has(key) && !isNull(key)) optLong(key) else null
+
         private fun parseReasons(arr: JSONArray?): List<AttentionReason> {
             if (arr == null) return emptyList()
             return (0 until arr.length()).map { i ->
@@ -63,19 +100,24 @@ data class BriefingState(
         fun fromJson(raw: String): BriefingState {
             val o = JSONObject(raw)
             return BriefingState(
-                date = o.optString("date").takeIf { it.isNotEmpty() },
-                text = o.optString("text").takeIf { it.isNotEmpty() },
-                gymLast7d = o.optInt("gymLast7d", -1).takeIf { it >= 0 },
-                gymTarget = o.optInt("gymTarget", -1).takeIf { it >= 0 },
-                discretionaryDollars = o.optInt("discretionaryDollars", Int.MIN_VALUE)
-                    .takeIf { it != Int.MIN_VALUE },
-                courseworkHoursNext7d = o.optDouble("courseworkHoursNext7d", Double.NaN)
-                    .takeIf { !it.isNaN() },
-                fetchedAtEpochMillis = o.optLong("fetchedAtEpochMillis", -1L).takeIf { it >= 0 },
-                attentionState = o.optString("attentionState").takeIf { it.isNotEmpty() },
-                attentionSymbol = o.optString("attentionSymbol").takeIf { it.isNotEmpty() },
-                attentionLabel = o.optString("attentionLabel").takeIf { it.isNotEmpty() },
-                attentionHeadline = o.optString("attentionHeadline").takeIf { it.isNotEmpty() },
+                date = o.optStringOrNull("date"),
+                text = o.optStringOrNull("text"),
+                gymLast7d = o.optIntOrNull("gymLast7d"),
+                gymTarget = o.optIntOrNull("gymTarget"),
+                discretionaryDollars = o.optIntOrNull("discretionaryDollars"),
+                courseworkHoursNext7d = o.optDoubleOrNull("courseworkHoursNext7d"),
+                temperatureF = o.optIntOrNull("temperatureF"),
+                weatherHighF = o.optIntOrNull("weatherHighF"),
+                weatherLowF = o.optIntOrNull("weatherLowF"),
+                weatherCondition = o.optStringOrNull("weatherCondition"),
+                sleepMinutes = o.optIntOrNull("sleepMinutes"),
+                partnerDaysSince = o.optIntOrNull("partnerDaysSince"),
+                friendDaysSince = o.optIntOrNull("friendDaysSince"),
+                fetchedAtEpochMillis = o.optLongOrNull("fetchedAtEpochMillis"),
+                attentionState = o.optStringOrNull("attentionState"),
+                attentionSymbol = o.optStringOrNull("attentionSymbol"),
+                attentionLabel = o.optStringOrNull("attentionLabel"),
+                attentionHeadline = o.optStringOrNull("attentionHeadline"),
                 reasons = parseReasons(o.optJSONArray("reasons")),
             )
         }
@@ -88,19 +130,24 @@ data class BriefingState(
             val facts = o.optJSONObject("facts") ?: JSONObject()
             val attention = facts.optJSONObject("attention") ?: JSONObject()
             return BriefingState(
-                date = o.optString("date").takeIf { it.isNotEmpty() },
-                text = o.optString("text").takeIf { it.isNotEmpty() },
-                gymLast7d = if (facts.has("gym_last_7d")) facts.optInt("gym_last_7d") else null,
-                gymTarget = if (facts.has("gym_target")) facts.optInt("gym_target") else null,
-                discretionaryDollars = if (facts.has("discretionary_dollars"))
-                    facts.optInt("discretionary_dollars") else null,
-                courseworkHoursNext7d = if (facts.has("coursework_hours_next_7d"))
-                    facts.optDouble("coursework_hours_next_7d") else null,
+                date = o.optStringOrNull("date"),
+                text = o.optStringOrNull("text"),
+                gymLast7d = facts.optIntOrNull("gym_last_7d"),
+                gymTarget = facts.optIntOrNull("gym_target"),
+                discretionaryDollars = facts.optIntOrNull("discretionary_dollars"),
+                courseworkHoursNext7d = facts.optDoubleOrNull("coursework_hours_next_7d"),
+                temperatureF = facts.optIntOrNull("temperature_f"),
+                weatherHighF = facts.optIntOrNull("weather_high_f"),
+                weatherLowF = facts.optIntOrNull("weather_low_f"),
+                weatherCondition = facts.optStringOrNull("weather_condition"),
+                sleepMinutes = facts.optIntOrNull("sleep_minutes"),
+                partnerDaysSince = facts.optIntOrNull("partner_days_since"),
+                friendDaysSince = facts.optIntOrNull("friend_days_since"),
                 fetchedAtEpochMillis = fetchedAtEpochMillis,
-                attentionState = attention.optString("state").takeIf { it.isNotEmpty() },
-                attentionSymbol = attention.optString("symbol").takeIf { it.isNotEmpty() },
-                attentionLabel = attention.optString("label").takeIf { it.isNotEmpty() },
-                attentionHeadline = attention.optString("headline").takeIf { it.isNotEmpty() },
+                attentionState = attention.optStringOrNull("state"),
+                attentionSymbol = attention.optStringOrNull("symbol"),
+                attentionLabel = attention.optStringOrNull("label"),
+                attentionHeadline = attention.optStringOrNull("headline"),
                 reasons = parseReasons(attention.optJSONArray("reasons")),
             )
         }

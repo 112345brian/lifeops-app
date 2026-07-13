@@ -53,6 +53,80 @@
                 android:resource="@xml/briefing_widget_info" />
         </receiver>
 
+        <!-- Single-stat presets: separate pickable entries in the OS
+             widget tray, see BriefingWidgetReceiver.kt's docstring. -->
+        <receiver
+            android:name=".GymWidgetReceiver"
+            android:exported="true"
+            android:label="@string/widget_name_gym">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/gym_widget_info" />
+        </receiver>
+
+        <receiver
+            android:name=".MoneyWidgetReceiver"
+            android:exported="true"
+            android:label="@string/widget_name_money">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/money_widget_info" />
+        </receiver>
+
+        <receiver
+            android:name=".CourseworkWidgetReceiver"
+            android:exported="true"
+            android:label="@string/widget_name_coursework">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/coursework_widget_info" />
+        </receiver>
+
+        <receiver
+            android:name=".WeatherWidgetReceiver"
+            android:exported="true"
+            android:label="@string/widget_name_weather">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/weather_widget_info" />
+        </receiver>
+
+        <receiver
+            android:name=".SleepWidgetReceiver"
+            android:exported="true"
+            android:label="@string/widget_name_sleep">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/sleep_widget_info" />
+        </receiver>
+
+        <receiver
+            android:name=".SocialWidgetReceiver"
+            android:exported="true"
+            android:label="@string/widget_name_social">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/social_widget_info" />
+        </receiver>
+
         <!-- Receives the daily briefing via Firebase Cloud Messaging:
              reliable even when the app is stopped, unlike a manifest
              broadcast receiver for a third-party implicit broadcast. -->

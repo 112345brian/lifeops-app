@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Single-stat preset (sleep only): see gym_widget_info.xml's comment
+     for why minHeight/minResizeHeight are 56dp, not 150dp. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="110dp"
+    android:minHeight="56dp"
+    android:minResizeWidth="110dp"
+    android:minResizeHeight="56dp"
+    android:maxResizeWidth="250dp"
+    android:maxResizeHeight="276dp"
+    android:targetCellWidth="2"
+    android:targetCellHeight="1"
+    android:resizeMode="horizontal|vertical"
+    android:widgetCategory="home_screen"
+    android:updatePeriodMillis="1800000"
+    android:initialLayout="@layout/widget_loading"
+    android:previewLayout="@layout/widget_loading"
+    android:configure="com.lifeops.briefing.WidgetConfigActivity" />

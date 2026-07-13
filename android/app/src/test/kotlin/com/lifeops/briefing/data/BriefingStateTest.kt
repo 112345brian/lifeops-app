@@ -70,4 +70,81 @@ class BriefingStateTest {
 
         assertEquals(emptyList<AttentionReason>(), state.reasons)
     }
+
+    @Test
+    fun parsesWeatherFactsAndRoundTripsThroughJson() {
+        val raw = """{
+            "date":"2026-07-12",
+            "text":"Nice day.",
+            "facts":{
+                "temperature_f":73, "weather_high_f":85, "weather_low_f":67,
+                "weather_condition":"Cloudy"
+            }
+        }"""
+
+        val state = BriefingState.fromApiResponse(raw, 1L)
+
+        assertEquals(73, state.temperatureF)
+        assertEquals(85, state.weatherHighF)
+        assertEquals(67, state.weatherLowF)
+        assertEquals("Cloudy", state.weatherCondition)
+        assertEquals(state, BriefingState.fromJson(state.toJson()))
+    }
+
+    @Test
+    fun weatherFieldsAreNullWhenExplicitJsonNull() {
+        // Python sends explicit JSON null for every weather_* fact when the
+        // NWS API is unconfigured/unreachable -- must read back as null,
+        // not optInt's 0-default (which would render as a misleading "0°F").
+        val raw = """{
+            "date":"2026-07-12",
+            "text":"No weather today.",
+            "facts":{
+                "temperature_f":null, "weather_high_f":null, "weather_low_f":null,
+                "weather_condition":null
+            }
+        }"""
+
+        val state = BriefingState.fromApiResponse(raw, 1L)
+
+        assertEquals(null, state.temperatureF)
+        assertEquals(null, state.weatherHighF)
+        assertEquals(null, state.weatherLowF)
+        assertEquals(null, state.weatherCondition)
+    }
+
+    @Test
+    fun parsesSleepAndSocialFactsAndRoundTripsThroughJson() {
+        val raw = """{
+            "date":"2026-07-12",
+            "text":"Slept well.",
+            "facts":{
+                "sleep_minutes":402, "partner_days_since":4, "friend_days_since":2
+            }
+        }"""
+
+        val state = BriefingState.fromApiResponse(raw, 1L)
+
+        assertEquals(402, state.sleepMinutes)
+        assertEquals(4, state.partnerDaysSince)
+        assertEquals(2, state.friendDaysSince)
+        assertEquals(state, BriefingState.fromJson(state.toJson()))
+    }
+
+    @Test
+    fun sleepAndSocialFieldsAreNullWhenExplicitJsonNull() {
+        val raw = """{
+            "date":"2026-07-12",
+            "text":"No data today.",
+            "facts":{
+                "sleep_minutes":null, "partner_days_since":null, "friend_days_since":null
+            }
+        }"""
+
+        val state = BriefingState.fromApiResponse(raw, 1L)
+
+        assertEquals(null, state.sleepMinutes)
+        assertEquals(null, state.partnerDaysSince)
+        assertEquals(null, state.friendDaysSince)
+    }
 }

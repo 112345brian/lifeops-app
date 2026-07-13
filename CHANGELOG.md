@@ -4,6 +4,75 @@ Notable changes, newest first. Personal project, versioned simply (see
 `VERSION` / `lifeops.__version__`) — dates and the reasoning behind each
 change matter more here than semver strictness.
 
+## [1.11.0] — 2026-07-13
+
+### Added
+- **Single-stat widget presets.** Six more pickable entries in the Android
+  widget tray beyond the full "LifeOps Briefing" widget — Gym, Money,
+  Coursework, Weather, Sleep, and Social — each its own
+  `AppWidgetProviderInfo`/receiver defaulting to showing just that one
+  stat, but sharing the exact same `BriefingWidget`/`BriefingContent`
+  rendering code. A `WidgetPresets` registry is the single source of truth
+  mapping each receiver to its default `WidgetDisplayConfig`, consulted by
+  the widget itself, the configure screen, and the reference-counted
+  next-tasks work scheduling — adding a future preset means one new entry
+  there instead of four independently-drifting lists.
+- **Weather** (NOAA/NWS `api.weather.gov`, free, no API key). Current temp,
+  today's high/low, and condition, via a new `lifeops/weather.py` client
+  (grid-location cached to disk after first lookup). `WEATHER_LAT`/
+  `WEATHER_LON`/`WEATHER_USER_AGENT` in `.env`; blank = feature off. Its own
+  widget card (temp+hi/lo on the left, condition glyph+label on the right).
+- **Sleep** tile — last night's real duration from Health Connect watch
+  data (`gather.sleep_minutes_last_night`), not the unreliable phone-sensor
+  heuristic.
+- **Social** tile — days since partner/friends were actually seen, reusing
+  `social_input`'s existing tracking so it can never disagree with the
+  hangout-nagging engine about what counts as "seen."
+- **Live preview in the widget configure screen.** Toggling sections,
+  reordering, or dragging the scale slider now updates a rendered preview
+  in place, using real synced data when available (sample data otherwise).
+  Resolves the instance's actual placed size
+  (`GlanceAppWidgetManager.getAppWidgetSizes`, falling back to the
+  provider's declared minimums for a first-time placement) and gates
+  content through the widget's own `bucketFor`/`TILE_SECTIONS`/
+  `groupSectionsForRendering`/`TEXT_GATED_SECTIONS` — not a re-derived
+  approximation — so it can't silently show content a given size will
+  never actually render.
+- **Discretionary balance now nets out known upcoming spend.**
+  `gather.spend_input` sweeps calendar events (including ones on calendars
+  never mapped in `EVENT_CALS`, via `"type: friends"` / `"cost: 30"` note
+  overrides) and returns `net_fun_money` — raw balance minus every swept
+  event's cost — which the briefing/widget now shows instead of the raw
+  YNAB balance.
+
+### Fixed
+- Single-stat preset widgets couldn't actually be resized down to their
+  own declared minimum size — `BriefingContent`'s SMALL bucket used to
+  hard-stop right after the attention badge, discarding every tile.
+  Compact tile sections (gym/money/coursework/sleep) now render at SMALL
+  too; the four presets' XML minimums dropped from an artificial 150dp to
+  Android's real 2×1 floor (56dp).
+- The "as of ..." freshness line could get silently clipped off a resized
+  widget as its task count grew to fill the space — `maxTasksForHeight`
+  now reserves room for it (only when it'll actually render).
+- Weather's high/low used to grab "whichever daytime/nighttime period
+  comes first," which in the evening returned *tomorrow's* high mislabeled
+  as today's. Now matched against the real calendar date.
+- A malformed sleep-history record could throw uncaught and abort the
+  *entire* daily briefing, including already-gathered gym/money/weather
+  facts. Wrapped like every other external pull in `run_briefing`.
+- `spend_input`'s cross-calendar sweep was refetched independently by
+  `run_spend`, `run_briefing`, and `run_cashflow` every day — cached
+  per-process instead.
+- Two rounds of review (8-angle each) on this batch found and fixed: an
+  id-less event double-counting bug in the note-override sweep; an
+  unvalidated negative `cost:` override silently inflating the free-to-
+  spend figure; the widget preview grouping every tile section into one
+  row regardless of actual position (now uses the real contiguous-run
+  grouping); duplicated formatting logic between the preview and the real
+  widget (now shared); and `BriefingState`'s JSON parsing settling on one
+  consistent null-safe idiom instead of two.
+
 ## [1.10.0] — 2026-07-13
 
 ### Added

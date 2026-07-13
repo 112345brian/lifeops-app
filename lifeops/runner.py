@@ -837,10 +837,12 @@ def run_briefing(fs, yn, now):
     gym_last_7d = gym_ring["gym_last_7d"]
     trained_today = gym_ring["today_done"]
 
-    # money: discretionary balance + the nearest upcoming paid social events
+    # money: discretionary balance net of known upcoming event costs (what's
+    # actually free to assign, not the raw YNAB balance -- see
+    # gather.spend_input's docstring) + the nearest upcoming paid social events
     try:
         sp = gather.spend_input(fs, yn, now)
-        fun_money = round(sp.get("fun_money", 0))
+        fun_money = round(sp.get("net_fun_money", sp.get("fun_money", 0)))
         near = sorted(sp.get("events", []), key=lambda e: e.get("days_until", 99))[:2]
         # No dollar figure in the label -- a calendar event is assumed
         # already paid for; cost still feeds fun_money's margin math below,
@@ -850,13 +852,45 @@ def run_briefing(fs, yn, now):
     except Exception:
         fun_money, upcoming = None, []
 
+    # weather: current temp + today's high/low + condition at WEATHER_LAT/LON
+    # (NOAA/NWS, no API key). None everywhere if unconfigured or unreachable
+    # -- see weather.current()'s docstring.
+    from . import weather
+    w = weather.current(now) or {}
+
+    # sleep: last night's real duration (watch data only -- see
+    # sleep_minutes_last_night's docstring for why the phone-sensor
+    # heuristic isn't reused for a displayed number). Wrapped like every
+    # other external/history-derived pull above -- a malformed history
+    # record (e.g. a "sleep_dur" event missing "ts") must not abort the
+    # entire daily briefing.
+    try:
+        sleep_min = gather.sleep_minutes_last_night(now)
+    except Exception:
+        sleep_min = None
+
+    # social: days since partner/friends were last actually seen (not just
+    # scheduled) -- reuses social_input's own tracking rather than
+    # re-deriving it, so this can never disagree with the hangout-nagging
+    # engine about what counts as "seen."
+    try:
+        social = gather.social_input(fs, now)
+        partner_days_since = social.get("partner_days")
+        friend_days_since = social.get("friend_days")
+    except Exception:
+        partner_days_since, friend_days_since = None, None
+
     facts = {"date": today.isoformat(), "weekday": now.strftime("%A"),
              "coursework_at_risk": risks, "due_today": due_today,
              "overdue": overdue,
              "coursework_hours_next_7d": load_7d_h,
              "gym_last_7d": gym_last_7d, "gym_target": 4,
              "trained_today": trained_today, "gym_ring": gym_ring,
-             "discretionary_dollars": fun_money, "upcoming_paid_events": upcoming}
+             "discretionary_dollars": fun_money, "upcoming_paid_events": upcoming,
+             "temperature_f": w.get("temp_f"), "weather_high_f": w.get("high_f"),
+             "weather_low_f": w.get("low_f"), "weather_condition": w.get("condition"),
+             "sleep_minutes": sleep_min,
+             "partner_days_since": partner_days_since, "friend_days_since": friend_days_since}
     facts["attention"] = attention.compute(facts)
     try:
         text = llm.daily_briefing(facts)

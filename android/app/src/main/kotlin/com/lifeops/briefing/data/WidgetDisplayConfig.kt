@@ -13,7 +13,7 @@ import org.json.JSONObject
  * position. */
 enum class WidgetSection {
     SEVERITY_DOTS, GYM_RING, MONEY_TILE, COURSEWORK_TILE,
-    BRIEFING_PARAGRAPH, TODAY_EVENTS, UP_NEXT,
+    BRIEFING_PARAGRAPH, TODAY_EVENTS, UP_NEXT, WEATHER, SLEEP_TILE, SOCIAL,
 }
 
 /** Per-widget-instance display customization -- which sections show, in what
@@ -36,6 +36,9 @@ data class WidgetDisplayConfig(
         WidgetSection.GYM_RING,
         WidgetSection.MONEY_TILE,
         WidgetSection.COURSEWORK_TILE,
+        WidgetSection.SLEEP_TILE,
+        WidgetSection.WEATHER,
+        WidgetSection.SOCIAL,
         WidgetSection.TODAY_EVENTS,
         WidgetSection.UP_NEXT,
     ),
@@ -62,6 +65,16 @@ data class WidgetDisplayConfig(
         const val MAX_SCALE = 1.3f
 
         fun default() = WidgetDisplayConfig()
+
+        /** Starting config for a single-stat preset widget (its own pickable
+         * entry in the OS widget tray, e.g. "LifeOps Gym") -- everything
+         * except the one named section is hidden. sectionOrder is left at
+         * its default since order among hidden sections is irrelevant; the
+         * user can still reveal others later via the same configure screen
+         * the full widget uses. */
+        fun singleStat(section: WidgetSection): WidgetDisplayConfig = WidgetDisplayConfig(
+            hiddenSections = WidgetSection.entries.filter { it != section }.toSet(),
+        )
 
         /** Unknown/removed enum values (e.g. an older or newer app version's
          * section that this build doesn't recognize) are silently dropped

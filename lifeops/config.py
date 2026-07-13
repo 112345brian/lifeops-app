@@ -116,6 +116,16 @@ EVENT_CALS = dict(p.split(":") for p in os.environ.get("EVENT_CALS", "").split("
 DISCRETIONARY = [s.strip().lower() for s in os.environ.get(
     "DISCRETIONARY", "Shopping,Entertainment,Eating Out,Shows,Splurge").split(",") if s.strip()]
 
+# Weather (NOAA/NWS api.weather.gov -- free, no API key). Blank = feature
+# disabled (weather.current() returns None), same "blank = off" convention
+# as PANEL_URL/WEB_TOKEN above.
+WEATHER_LAT = os.environ.get("WEATHER_LAT", "")
+WEATHER_LON = os.environ.get("WEATHER_LON", "")
+# NWS requires a descriptive User-Agent identifying the app (their API
+# policy, not a formality) -- override in .env if you want your own contact
+# info in it.
+WEATHER_USER_AGENT = os.environ.get("WEATHER_USER_AGENT", "lifeops-app (personal use)")
+
 # Per-outing marginal cost by type
 COSTS = {}
 for _p in os.environ.get("OUTING_COSTS", "concert:40,party:35,date:50,friends:35").split(","):

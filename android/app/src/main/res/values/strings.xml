@@ -1,4 +1,10 @@
 <resources>
     <string name="app_name">LifeOps Briefing</string>
     <string name="widget_placeholder_text">LifeOps Briefing — not yet configured</string>
+    <string name="widget_name_gym">LifeOps Gym</string>
+    <string name="widget_name_money">LifeOps Money</string>
+    <string name="widget_name_coursework">LifeOps Coursework</string>
+    <string name="widget_name_weather">LifeOps Weather</string>
+    <string name="widget_name_sleep">LifeOps Sleep</string>
+    <string name="widget_name_social">LifeOps Social</string>
 </resources>

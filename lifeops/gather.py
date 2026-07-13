@@ -22,6 +22,38 @@ def _is_friend_hangout(title, notes):
         return True
     return any(re.search(rf"\b{re.escape(n.lower())}\b", text) for n in config.FRIEND_NAMES)
 
+_NOTE_OVERRIDE_RE = re.compile(r"(?im)^\s*(type|cost)\s*:\s*(.+?)\s*$")
+
+def _parse_note_overrides(notes):
+    """Sweeps an event/task's notes for "type: <name>" / "cost: <dollars>"
+    lines (case-insensitive, one per line, $ optional) -- lets a one-off
+    event declare its own spend classification without needing its calendar
+    pre-mapped in EVENT_CALS, e.g. a hangout with Chloe on your everyday
+    calendar noted "type: friends\\ncost: 30". An explicit cost always wins
+    over the type's projected default (config.COSTS); a type with no cost
+    still gets that default. A malformed cost line (non-numeric) is ignored
+    rather than raising, same spirit as this module's other best-effort
+    parsing."""
+    out = {}
+    if not notes:
+        return out
+    for key, val in _NOTE_OVERRIDE_RE.findall(notes):
+        key = key.lower()
+        if key == "type":
+            out["type"] = val.strip().lower()
+        elif key == "cost":
+            try:
+                parsed = float(val.strip().lstrip("$"))
+            except ValueError:
+                continue
+            # A negative cost (typo, or an attempt to log a credit) would
+            # silently INFLATE net_fun_money instead of reducing it --
+            # treat the same as a malformed value rather than let a stray
+            # "-" flip the sign of everything downstream.
+            if parsed >= 0:
+                out["cost"] = parsed
+    return out
+
 def _d(iso):  return (iso or "")[:10]
 def _hm(iso): return (iso or "")[11:16]
 def _h(iso):
@@ -54,6 +86,20 @@ def _sleep_ok(now):
     if total and (total < 5.5 or total > 11):
         return False
     return True
+
+def sleep_minutes_last_night(now):
+    """Real sleep duration in minutes for the last night (Health Connect
+    watch data only, via the same "sleep_dur" history events _sleep_ok
+    prefers) -- None if no real watch data landed in the trailing 18h
+    window. The phone-sensor sleep/wake heuristic _sleep_ok falls back to
+    has no reliable duration, only a rested/not-rested guess, so it's not
+    reused here -- a stat tile showing a heuristic-derived "duration" would
+    be misleading in a way a rested/not-rested badge isn't."""
+    win_start = (now - datetime.timedelta(hours=18)).isoformat(timespec="seconds")
+    durs = [e for e in history.events("sleep_dur") if e["ts"] >= win_start]
+    if not durs:
+        return None
+    return (durs[-1].get("meta") or {}).get("minutes", 0)
 
 def _gym_blocked_dates():
     """Dates manually marked 'no gym' via the web UI."""
@@ -362,10 +408,62 @@ def today_events_input(fs, now, n=5, schedule_items=None):
     events.sort(key=lambda i: i.get("startTime") or "")
     return [{"title": e.get("title") or "", "start": e.get("startTime")} for e in events[:n]]
 
+# Process-lifetime cache for spend_input's "every calendar" sweep -- runner.py's
+# _run() constructs one FlowSavvy() and passes it to every domain in the daily
+# tier (spend, briefing, cashflow all call spend_input with the SAME fs/now
+# within one process run, then the process exits), so a plain module-level
+# cache is naturally fresh next run without needing an explicit TTL. Without
+# this, that pass tripled every day once it was added (identical
+# "fetch every event on every calendar" call from 3 independent call sites).
+_ALL_EVENTS_CACHE = {}
+
+def _all_events_cached(fs):
+    if "events" not in _ALL_EVENTS_CACHE:
+        try:
+            _ALL_EVENTS_CACHE["events"] = fs.list_items(itemType="event").get("items", [])
+        except Exception:
+            _ALL_EVENTS_CACHE["events"] = []
+    return _ALL_EVENTS_CACHE["events"]
+
 def spend_input(fs, yn, now):
+    """events: every upcoming (next 21d) spend-relevant event/task, cost
+    either projected (config.COSTS[type]) or an explicit override swept from
+    notes (see _parse_note_overrides). fun_money: RAW current discretionary
+    balance -- unchanged meaning, since spend_engine.plan and run_cashflow's
+    projection both re-derive "balance vs. upcoming cost" themselves and
+    would double-subtract if this were already netted. net_fun_money: same
+    balance minus every swept event's cost -- "what's actually free to
+    assign right now" once known future spend is accounted for -- is what
+    the daily briefing/widget shows instead of the raw balance."""
     caltype = config.EVENT_CALS
     start = now.date().isoformat(); end = (now.date() + datetime.timedelta(days=21)).isoformat()
     events = []
+    seen_ids = set()
+
+    def _event_key(e, st):
+        # Prefer the real id; an event missing one (seen from some
+        # FlowSavvy responses) still needs a stable dedup key, or the
+        # broad sweep below re-adds it a second time and double-counts its
+        # cost -- (startDateTime, title) is stable across the two fetches
+        # for the same underlying event.
+        eid = e.get("id")
+        return eid if eid is not None else (st, e.get("title"))
+
+    def _spend_event(st, typ, notes, label, default_typ_cost=None):
+        """Builds one events[] entry: resolves the note overrides, the
+        final cost (explicit override > this type's projected default >
+        the ORIGINAL type's default, for when an override changes the type
+        but not the cost), and days_until -- shared by all three passes
+        below so they can't drift on how an event dict is shaped."""
+        overrides = _parse_note_overrides(notes)
+        typ_final = overrides.get("type", typ)
+        fallback_cost = config.COSTS.get(typ_final, default_typ_cost if default_typ_cost is not None
+                                          else config.COSTS.get(typ, 40))
+        cost = overrides.get("cost", fallback_cost)
+        du = (datetime.date.fromisoformat(_d(st)) - now.date()).days
+        return {"date": _d(st), "type": typ_final, "cost": cost,
+                "label": label or typ_final, "days_until": du}
+
     for cid, typ in caltype.items():
         try:
             evs = fs.list_items(itemType="event", calendarId=cid).get("items", [])
@@ -373,17 +471,33 @@ def spend_input(fs, yn, now):
             evs = []
         for e in evs:
             st = e.get("startDateTime")
-            if st and start <= _d(st) <= end:
-                du = (datetime.date.fromisoformat(_d(st)) - now.date()).days
-                events.append({"date": _d(st), "type": typ, "cost": config.COSTS.get(typ, 40),
-                               "label": e.get("title") or typ, "days_until": du})
+            if not st or not (start <= _d(st) <= end):
+                continue
+            events.append(_spend_event(st, typ, e.get("notes"), e.get("title"),
+                                        default_typ_cost=config.COSTS.get(typ, 40)))
+            seen_ids.add(_event_key(e, st))
+    # Sweep every OTHER calendar too, for events that declare their own
+    # type/cost via notes -- e.g. a hangout with a friend that lives on your
+    # everyday calendar, never mapped in EVENT_CALS, noted "type: friends" /
+    # "cost: 30". Unlike the EVENT_CALS pass above, a bare event with no
+    # "type:" note is skipped: without that, every appointment on every
+    # calendar would get swept in.
+    all_evs = _all_events_cached(fs)
+    for e in all_evs:
+        st = e.get("startDateTime")
+        if _event_key(e, st) in seen_ids:
+            continue
+        if not st or not (start <= _d(st) <= end):
+            continue
+        notes = e.get("notes")
+        if not _parse_note_overrides(notes).get("type"):
+            continue
+        events.append(_spend_event(st, None, notes, e.get("title")))
     for t in fs.list_items(itemType="task", completed=False).get("items", []):
         title = t.get("title") or ""; st = t.get("startDateTime") or t.get("dueDateTime")
         if title in (config.PARTNER_TASK, config.FRIENDS_TASK) and st and start <= _d(st) <= end:
             typ = "date" if title == config.PARTNER_TASK else "friends"
-            du = (datetime.date.fromisoformat(_d(st)) - now.date()).days
-            events.append({"date": _d(st), "type": typ, "cost": config.COSTS.get(typ, 40),
-                           "label": title, "days_until": du})
+            events.append(_spend_event(st, typ, t.get("notes"), title))
     disc = set(config.DISCRETIONARY)
     try:
         month = yn.month()
@@ -391,7 +505,8 @@ def spend_input(fs, yn, now):
         month = {"categories": []}
     fun = sum(c.get("balance", 0) for c in month.get("categories", [])
               if c["name"].lower() in disc) / 1000.0
-    return {"events": events, "fun_money": fun}
+    net_fun = fun - sum(e.get("cost", 0) or 0 for e in events)
+    return {"events": events, "fun_money": fun, "net_fun_money": net_fun}
 
 def social_input(fs, now):
     def ago(ts):

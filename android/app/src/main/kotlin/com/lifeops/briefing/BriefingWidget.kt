@@ -22,8 +22,10 @@ import androidx.glance.LocalSize
 import androidx.glance.action.ActionParameters
 import androidx.glance.action.clickable
 import androidx.glance.action.actionParametersOf
+import android.appwidget.AppWidgetManager
 import androidx.glance.appwidget.CheckBox
 import androidx.glance.appwidget.GlanceAppWidget
+import androidx.glance.appwidget.GlanceAppWidgetManager
 import androidx.glance.appwidget.SizeMode
 import androidx.glance.appwidget.action.actionRunCallback
 import androidx.glance.appwidget.cornerRadius
@@ -93,6 +95,23 @@ internal fun bucketFor(size: DpSize): WidgetSizeBucket = when {
  * by [NextTasksRefreshWorker]'s periodic pull and by [CompleteTaskAction]'s
  * immediate update after a checkbox tap.
  */
+/** Single GlanceAppWidget shared by every receiver -- the full "LifeOps
+ * Briefing" widget AND the single-stat presets (GymWidgetReceiver etc., see
+ * BriefingWidgetReceiver.kt) all construct a plain no-arg BriefingWidget().
+ * Before any WidgetConfigActivity save has persisted a DISPLAY_CONFIG_JSON
+ * for a given instance, [presetDefaultConfig] resolves the right starting
+ * layout by asking Android which AppWidgetProvider actually placed THIS
+ * specific [GlanceId] -- looked up fresh on every render rather than baked
+ * into the class at construction time. That used to be a constructor param
+ * threaded through each receiver's `BaseBriefingWidgetReceiver(defaultConfig)`
+ * call, which meant (a) the receiver-to-preset mapping was hand-duplicated
+ * in two files (here and WidgetPresets.defaultConfigFor, with nothing
+ * enforcing they matched), and (b) any OTHER code path that constructed a
+ * bare `BriefingWidget()` -- e.g. NextTasksRefreshWorker's background
+ * update() calls -- silently got the full-widget default instead of the
+ * instance's real preset during the window between a widget being placed
+ * and its configure screen being saved. Resolving per-render from the
+ * actual placed provider fixes both at once (confirmed 2026-07-13). */
 class BriefingWidget : GlanceAppWidget() {
 
     // Exact (not Responsive's 3 fixed snapshots) so LocalSize.current reports
@@ -103,6 +122,12 @@ class BriefingWidget : GlanceAppWidget() {
     override val sizeMode = SizeMode.Exact
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
+        // Only needed as a fallback when nothing's been persisted yet (or
+        // the persisted JSON is malformed) -- computed once up front rather
+        // than inside provideContent{}, since provideContent's block can
+        // recompose repeatedly and this does a cross-process AppWidgetManager
+        // lookup that shouldn't run on every recomposition.
+        val fallbackConfig = presetDefaultConfig(context, id)
         provideContent {
             val prefs = currentState<Preferences>()
             // One malformed persisted field (e.g. a task object missing its
@@ -123,9 +148,9 @@ class BriefingWidget : GlanceAppWidget() {
             }
             val configJson = prefs[WidgetKeys.DISPLAY_CONFIG_JSON]
             val config = try {
-                if (configJson != null) WidgetDisplayConfig.fromJson(configJson) else WidgetDisplayConfig.default()
+                if (configJson != null) WidgetDisplayConfig.fromJson(configJson) else fallbackConfig
             } catch (e: org.json.JSONException) {
-                WidgetDisplayConfig.default()
+                fallbackConfig
             }
 
             GlanceTheme {
@@ -135,18 +160,36 @@ class BriefingWidget : GlanceAppWidget() {
     }
 }
 
+/** Resolves which AppWidgetProvider (BriefingWidgetReceiver vs. one of the
+ * single-stat presets) actually placed this [id], then looks up its default
+ * config via [WidgetPresets] -- the same lookup WidgetConfigActivity does
+ * for the configure screen, so both stay in sync automatically. Falls back
+ * to the full default if the provider can't be resolved (e.g. a transient
+ * AppWidgetManager lookup failure) rather than throwing. */
+private suspend fun presetDefaultConfig(context: Context, id: GlanceId): WidgetDisplayConfig {
+    val providerClassName = try {
+        val appWidgetId = GlanceAppWidgetManager(context).getAppWidgetId(id)
+        AppWidgetManager.getInstance(context).getAppWidgetInfo(appWidgetId)?.provider?.className
+    } catch (e: Exception) {
+        null
+    }
+    return WidgetPresets.defaultConfigFor(providerClassName)
+}
+
 /** Every tile that shares a row with its neighbors when they're adjacent in
  * [WidgetDisplayConfig.sectionOrder] (see [groupSectionsForRendering]) -- lets
  * the default order (all three together) keep rendering as one instrument-
  * panel strip, while genuinely reordering one away from the others naturally
  * splits it onto its own row instead of requiring a separate "grouped vs.
  * independent" toggle. */
-private val TILE_SECTIONS = setOf(WidgetSection.GYM_RING, WidgetSection.MONEY_TILE, WidgetSection.COURSEWORK_TILE)
+internal val TILE_SECTIONS = setOf(
+    WidgetSection.GYM_RING, WidgetSection.MONEY_TILE, WidgetSection.COURSEWORK_TILE, WidgetSection.SLEEP_TILE,
+)
 
 /** Collapses a config's visible section order into render units: a
  * contiguous run of [TILE_SECTIONS] becomes one group (rendered as one
  * shared Row by [TileRow]); everything else renders alone. */
-private fun groupSectionsForRendering(visibleOrder: List<WidgetSection>): List<List<WidgetSection>> {
+internal fun groupSectionsForRendering(visibleOrder: List<WidgetSection>): List<List<WidgetSection>> {
     val groups = mutableListOf<MutableList<WidgetSection>>()
     for (section in visibleOrder) {
         val lastGroup = groups.lastOrNull()
@@ -200,16 +243,35 @@ internal fun BriefingContent(
         AttentionHeader(state, compact = bucket == WidgetSizeBucket.SMALL,
             showInlineDots = dotsInline, scale = config.scale)
 
-        if (bucket == WidgetSizeBucket.SMALL) {
-            return@Column
-        }
-
-        if (state.text == null) {
-            // Only the paragraph/tiles/freshness-line are gated behind a
-            // real briefing having arrived at least once -- today's real
-            // calendar events and upcoming tasks are independent of the
-            // LLM-generated text (see EventsSection's docstring) and must
-            // keep rendering below, not get swallowed by this placeholder.
+        // SMALL used to hard-stop right here, showing ONLY the badge --
+        // correct for the full 7-section widget shrunk down, wrong for a
+        // single-stat preset (e.g. "LifeOps Gym"), whose entire purpose is
+        // showing its one compact tile even at the smallest size Android
+        // allows. TILE_SECTIONS (gym/money/coursework/sleep) are already
+        // ~100dp-wide-or-less single-row tiles, so they're let through at
+        // SMALL below; the richer/wider sections (paragraph, events,
+        // up-next, weather, social) still require at least MEDIUM via
+        // their own bucket checks (confirmed 2026-07-13: a placed preset
+        // widget couldn't be resized down to its declared 2x1 minimum
+        // because this branch discarded its only content at that size).
+        // Not shown at SMALL -- no room for it, and it's about the
+        // paragraph specifically, which never renders below MEDIUM anyway.
+        if (bucket != WidgetSizeBucket.SMALL && state.text == null &&
+            WidgetSection.BRIEFING_PARAGRAPH in visibleOrder) {
+            // Only the paragraph/money/coursework-tiles/freshness-line are
+            // gated behind a real briefing having arrived at least once --
+            // today's real calendar events, upcoming tasks, AND the gym ring
+            // (pulled independently via NextTasksRefreshWorker, not part of
+            // this LLM-generated snapshot) are all independent of briefing
+            // text and must keep rendering below, not get swallowed by this
+            // placeholder. Gated on BRIEFING_PARAGRAPH being visible at all,
+            // not just on state.text -- a single-stat preset widget (e.g.
+            // "LifeOps Gym") never shows the paragraph section in the first
+            // place, so it has nothing to wait on and shouldn't show a
+            // placeholder about a briefing it never displays (confirmed
+            // 2026-07-13: this placeholder was swallowing the gym ring on a
+            // freshly-placed Gym-only widget for up to a day, since
+            // GYM_RING used to be unconditionally text-gated below).
             Text(
                 text = "No briefing yet — tap to configure",
                 style = TextStyle(color = GlanceTheme.colors.onSurfaceVariant),
@@ -218,7 +280,13 @@ internal fun BriefingContent(
 
         val renderableOrder = visibleOrder.filter { section ->
             !(section == WidgetSection.SEVERITY_DOTS && dotsInline) &&
-                !(state.text == null && section in TEXT_GATED_SECTIONS)
+                !(state.text == null && section in TEXT_GATED_SECTIONS) &&
+                // At SMALL, only the compact single-row tile sections
+                // render -- the wider/richer ones (paragraph/events/
+                // up-next/weather/social) all need at least MEDIUM room,
+                // same as they already required before SMALL could reach
+                // this loop at all.
+                (bucket != WidgetSizeBucket.SMALL || section in TILE_SECTIONS)
         }
         for (group in groupSectionsForRendering(renderableOrder)) {
             if (group.size > 1) {
@@ -227,7 +295,8 @@ internal fun BriefingContent(
             }
             when (val section = group.first()) {
                 WidgetSection.SEVERITY_DOTS -> StandaloneSeverityDots(state.reasons, config.scale)
-                WidgetSection.GYM_RING, WidgetSection.MONEY_TILE, WidgetSection.COURSEWORK_TILE ->
+                WidgetSection.GYM_RING, WidgetSection.MONEY_TILE, WidgetSection.COURSEWORK_TILE,
+                WidgetSection.SLEEP_TILE ->
                     TileRow(listOf(section), state, nextTasks.gymRing, config.scale)
                 WidgetSection.BRIEFING_PARAGRAPH -> {
                     val text = state.text
@@ -240,29 +309,52 @@ internal fun BriefingContent(
                 WidgetSection.UP_NEXT ->
                     if (bucket == WidgetSizeBucket.LARGE && nextTasks.tasks.isNotEmpty()) {
                         val heightDp = LocalSize.current.height.value.toInt()
-                        UpNextSection(nextTasks.tasks, effectiveMaxTasks(heightDp, config.maxTasksOverride))
+                        UpNextSection(nextTasks.tasks,
+                            effectiveMaxTasks(heightDp, config.maxTasksOverride, reserveForStaleIndicator = state.text != null))
+                    }
+                WidgetSection.WEATHER ->
+                    if (state.temperatureF != null) WeatherSection(state, config.scale)
+                WidgetSection.SOCIAL ->
+                    if (state.partnerDaysSince != null || state.friendDaysSince != null) {
+                        SocialSection(state, config.scale)
                     }
             }
         }
-        if (state.text != null) {
+        if (bucket != WidgetSizeBucket.SMALL && state.text != null) {
             StaleIndicator(state.fetchedAtEpochMillis)
         }
     }
 }
 
-/** Sections that only render once a real briefing has arrived at least
- * once -- matches the widget's pre-customization behavior, where these
- * were the ones nested inside the `else` branch of an `if (state.text ==
- * null)` check. TODAY_EVENTS/UP_NEXT are deliberately NOT here: they were
- * always independent of briefing text (see EventsSection's docstring). */
-private val TEXT_GATED_SECTIONS = setOf(
-    WidgetSection.BRIEFING_PARAGRAPH, WidgetSection.GYM_RING,
-    WidgetSection.MONEY_TILE, WidgetSection.COURSEWORK_TILE,
+/** Sections whose DATA only exists once a real briefing has arrived at
+ * least once -- money/coursework/weather/sleep/social figures are all
+ * fields on the same [BriefingState] JSON snapshot as [BriefingState.text],
+ * so they're never populated independently of it. TODAY_EVENTS/UP_NEXT/
+ * GYM_RING are deliberately NOT here: TODAY_EVENTS/UP_NEXT were always
+ * independent of briefing text (see EventsSection's docstring), and
+ * GYM_RING's primary source
+ * ([nextTasks.gymRing][com.lifeops.briefing.data.NextTasksState]) is pulled
+ * independently via NextTasksRefreshWorker -- gating it here used to
+ * swallow a freshly-placed widget's gym ring for up to a day whenever no
+ * briefing had landed yet, which is exactly the only content a single-stat
+ * "LifeOps Gym" preset widget has (confirmed 2026-07-13). */
+internal val TEXT_GATED_SECTIONS = setOf(
+    WidgetSection.BRIEFING_PARAGRAPH,
+    WidgetSection.MONEY_TILE, WidgetSection.COURSEWORK_TILE, WidgetSection.WEATHER,
+    WidgetSection.SLEEP_TILE, WidgetSection.SOCIAL,
 )
 
 private const val LARGE_BASE_HEIGHT_DP = 250
 private const val TASK_ROW_HEIGHT_DP = 34
 private const val MIN_TASKS_SHOWN = 3
+
+// Glance/RemoteViews has no scrolling Column -- content past the widget's
+// actual placed height just gets silently clipped, not scrolled. Reserved
+// so the freshness line ("as of 2m ago") always has room below the task
+// list instead of being the first thing clipped off as maxTasksForHeight
+// greedily fills every extra dp with more task rows (confirmed 2026-07-13:
+// resizing to fit more tasks pushed the freshness line off the bottom).
+private const val STALE_INDICATOR_RESERVED_DP = 20
 
 // The "Up next" container holds a header Text plus N NextTaskRows as direct
 // children (N+1 total) -- Glance's hard 10-direct-children-per-container
@@ -275,17 +367,24 @@ private const val MAX_TASKS_HARD_CEILING = 9
  * layout -- not a real measurement (Glance/RemoteViews has no layout-
  * measurement API), just enough to make a widget placed taller than 4x4
  * actually use the extra room instead of sitting on a fixed 3-task list
- * with dead space below it. */
-private fun maxTasksForHeight(heightDp: Int): Int {
-    val extraDp = (heightDp - LARGE_BASE_HEIGHT_DP).coerceAtLeast(0)
+ * with dead space below it. STALE_INDICATOR_RESERVED_DP is subtracted
+ * before dividing into rows so growth never spends 100% of the extra
+ * height on tasks alone -- but only when [reserveForStaleIndicator] is
+ * true; StaleIndicator itself never draws when state.text is null, so
+ * reserving room for it unconditionally would cost a task row's worth of
+ * height for a line that was never going to render (confirmed
+ * 2026-07-13). */
+private fun maxTasksForHeight(heightDp: Int, reserveForStaleIndicator: Boolean): Int {
+    val reserved = if (reserveForStaleIndicator) STALE_INDICATOR_RESERVED_DP else 0
+    val extraDp = (heightDp - LARGE_BASE_HEIGHT_DP - reserved).coerceAtLeast(0)
     return MIN_TASKS_SHOWN + extraDp / TASK_ROW_HEIGHT_DP
 }
 
 /** Combines the placed-size heuristic with the user's explicit override
  * (if any) -- clamp, don't replace: a user ceiling still can't exceed what
  * actually fits height-wise, nor Glance's hard container-child limit. */
-private fun effectiveMaxTasks(heightDp: Int, maxTasksOverride: Int?): Int {
-    return listOfNotNull(maxTasksForHeight(heightDp), maxTasksOverride, MAX_TASKS_HARD_CEILING).min()
+private fun effectiveMaxTasks(heightDp: Int, maxTasksOverride: Int?, reserveForStaleIndicator: Boolean): Int {
+    return listOfNotNull(maxTasksForHeight(heightDp, reserveForStaleIndicator), maxTasksOverride, MAX_TASKS_HARD_CEILING).min()
 }
 
 /** Shared with GymBar's on/off-target color and StaleIndicator's warning
@@ -360,11 +459,11 @@ private fun StandaloneSeverityDots(reasons: List<AttentionReason>, scale: Float)
  * four areas needs something" without reading any text -- the instrument-
  * panel glyph language the rest of the widget is moving toward, rather
  * than one linear headline trying to speak for every domain at once. */
-private val DOT_DOMAIN_ORDER = listOf("coursework", "system", "money", "gym")
+internal val DOT_DOMAIN_ORDER = listOf("coursework", "system", "money", "gym")
 private const val BASE_DOT_SIZE_DP = 7
-private val SEVERITY_RANK = mapOf("ok" to 0, "watch" to 1, "risk" to 2, "fucked" to 3)
+internal val SEVERITY_RANK = mapOf("ok" to 0, "watch" to 1, "risk" to 2, "fucked" to 3)
 
-private fun severityDotColor(severity: String): Color = when (severity) {
+internal fun severityDotColor(severity: String): Color = when (severity) {
     "fucked" -> Color(0xFFB3261E)
     "risk" -> Color(0xFFC25100)
     "watch" -> Color(0xFF8A5A00)
@@ -386,8 +485,10 @@ private fun renderDotBitmap(sizePx: Int, colorArgb: Int): Bitmap {
 // dp size) a plain filled circle needs no density lookup at all.
 private const val DOT_BITMAP_PX = 32
 
-@Composable
-private fun SeverityDots(reasons: List<AttentionReason>, scale: Float) {
+/** Worst (highest-ranked) severity per domain across [reasons] -- shared by
+ * SeverityDots here and WidgetConfigActivity's preview, so both agree on
+ * what "worst" means without duplicating the ranking walk. */
+internal fun worstSeverityByDomain(reasons: List<AttentionReason>): Map<String, String> {
     val worstByDomain = mutableMapOf<String, String>()
     for (r in reasons) {
         val rank = SEVERITY_RANK[r.severity] ?: continue
@@ -396,6 +497,12 @@ private fun SeverityDots(reasons: List<AttentionReason>, scale: Float) {
             worstByDomain[r.domain] = r.severity
         }
     }
+    return worstByDomain
+}
+
+@Composable
+private fun SeverityDots(reasons: List<AttentionReason>, scale: Float) {
+    val worstByDomain = worstSeverityByDomain(reasons)
     val dotSizeDp = (BASE_DOT_SIZE_DP * scale).dp
     Row {
         DOT_DOMAIN_ORDER.forEachIndexed { index, domain ->
@@ -453,16 +560,20 @@ private const val BASE_TILE_VALUE_SP = 18f
 /** Icon+monospace-number card -- glyph replaces the label, number is the
  * one thing that needs to read at a glance, matching the gym ring's
  * icon-first visual language instead of a plain "$340" text run. Rounded
- * corners match MoneyTile's shape so the two read as one family of tile. */
+ * corners match MoneyTile's shape so the two read as one family of tile.
+ * Emoji and value sit side by side (not stacked) so the tile reads as one
+ * line, matching MoneyTile's single-line height in the shared TileRow. */
 @Composable
 private fun StatTile(emoji: String, value: String, scale: Float, modifier: GlanceModifier = GlanceModifier) {
-    Column(
+    Row(
         modifier = modifier
             .cornerRadius(10.dp)
             .background(GlanceTheme.colors.surfaceVariant)
             .padding(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(text = emoji, style = TextStyle(fontSize = (BASE_TILE_EMOJI_SP * scale).sp))
+        Spacer(modifier = GlanceModifier.width(4.dp))
         Text(
             text = value,
             style = TextStyle(fontWeight = FontWeight.Bold, fontSize = (BASE_TILE_VALUE_SP * scale).sp,
@@ -497,12 +608,14 @@ private fun MoneyTile(dollars: Int, severity: String?, scale: Float, modifier: G
             .padding(6.dp),
     ) {
         Text(
-            text = "$${dollars}",
+            text = formatMoney(dollars),
             style = TextStyle(fontWeight = FontWeight.Bold, fontSize = (BASE_MONEY_FONT_SP * scale).sp,
                 color = GlanceTheme.colors.onSurface),
         )
     }
 }
+
+internal fun formatMoney(dollars: Int): String = "$$dollars"
 
 /** Renders a contiguous run of gym-ring/money/coursework as one shared row
  * (see [groupSectionsForRendering]) -- also used for a single tile shown
@@ -516,9 +629,13 @@ private fun TileRow(sections: List<WidgetSection>, state: BriefingState, gymRing
         (gymRing != null || (state.gymLast7d != null && state.gymTarget != null))
     val hasMoney = WidgetSection.MONEY_TILE in sections && state.discretionaryDollars != null
     val hasCoursework = WidgetSection.COURSEWORK_TILE in sections && state.courseworkHoursNext7d != null
-    if (!hasGym && !hasMoney && !hasCoursework) return
+    val hasSleep = WidgetSection.SLEEP_TILE in sections && state.sleepMinutes != null
+    if (!hasGym && !hasMoney && !hasCoursework && !hasSleep) return
 
-    Row(modifier = GlanceModifier.fillMaxWidth().padding(top = 4.dp)) {
+    Row(
+        modifier = GlanceModifier.fillMaxWidth().padding(top = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         var addedFirst = false
         for (section in sections) {
             val rendered = when (section) {
@@ -547,9 +664,151 @@ private fun TileRow(sections: List<WidgetSection>, state: BriefingState, gymRing
                         modifier = GlanceModifier.width((STAT_TILE_WIDTH_DP * scale).dp))
                     true
                 } else false
+                WidgetSection.SLEEP_TILE -> if (state.sleepMinutes != null) {
+                    if (addedFirst) Spacer(modifier = GlanceModifier.width(6.dp))
+                    StatTile("😴", formatSleepDuration(state.sleepMinutes), scale,
+                        modifier = GlanceModifier.width((STAT_TILE_WIDTH_DP * scale).dp))
+                    true
+                } else false
                 else -> false
             }
             if (rendered) addedFirst = true
+        }
+    }
+}
+
+/** "6h42m" / "6h" -- matches the compact, no-decimal style every other
+ * stat tile uses (e.g. courseworkHoursNext7d's "6.5h"), sized to fit the
+ * same ~100dp stat tile width. */
+internal fun formatSleepDuration(minutes: Int): String {
+    val h = minutes / 60
+    val m = minutes % 60
+    return if (m == 0) "${h}h" else "${h}h${m}m"
+}
+
+private const val BASE_SOCIAL_ICON_SP = 20f
+private const val BASE_SOCIAL_VALUE_SP = 16f
+
+/** "Xd since partner" / "Yd since friends" side by side -- two independent
+ * figures (social_input tracks them separately, same as PARTNER_TASK vs.
+ * FRIENDS_TASK elsewhere in the app), so unlike the other stats this isn't
+ * a single StatTile-shaped emoji+number; it's a small two-up row. Renders
+ * standalone (not part of [TILE_SECTIONS]) for the same reason WeatherSection
+ * does -- two paired numbers read better as their own row than squeezed
+ * into the ~100dp gym/money/coursework/sleep tile width. Either figure can
+ * be missing independently (e.g. no FRIEND_NAMES configured) without
+ * hiding the other. */
+@Composable
+private fun SocialSection(state: BriefingState, scale: Float) {
+    Row(modifier = GlanceModifier.fillMaxWidth().padding(top = 4.dp)) {
+        state.partnerDaysSince?.let {
+            SocialStat("💜", "${it}d", scale, modifier = GlanceModifier.defaultWeight())
+        }
+        if (state.partnerDaysSince != null && state.friendDaysSince != null) {
+            Spacer(modifier = GlanceModifier.width(6.dp))
+        }
+        state.friendDaysSince?.let {
+            SocialStat("👥", "${it}d", scale, modifier = GlanceModifier.defaultWeight())
+        }
+    }
+}
+
+@Composable
+private fun SocialStat(emoji: String, value: String, scale: Float, modifier: GlanceModifier = GlanceModifier) {
+    Row(
+        modifier = modifier
+            .cornerRadius(10.dp)
+            .background(GlanceTheme.colors.surfaceVariant)
+            .padding(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(text = emoji, style = TextStyle(fontSize = (BASE_SOCIAL_ICON_SP * scale).sp))
+        Spacer(modifier = GlanceModifier.width(4.dp))
+        Text(
+            text = value,
+            style = TextStyle(fontWeight = FontWeight.Bold, fontSize = (BASE_SOCIAL_VALUE_SP * scale).sp,
+                color = GlanceTheme.colors.onSurface),
+        )
+    }
+}
+
+private val WEATHER_BG = Color(0xFF3B4A78)
+private const val BASE_WEATHER_TEMP_SP = 40f
+private const val BASE_WEATHER_UNIT_SP = 16f
+private const val BASE_WEATHER_HILO_SP = 14f
+private const val BASE_WEATHER_ICON_SP = 34f
+private const val BASE_WEATHER_CONDITION_SP = 15f
+
+/** Maps NWS's free-text shortForecast (e.g. "Partly Cloudy", "Chance
+ * Showers", "Sunny") to one glyph via keyword match -- NWS also serves an
+ * icon image per period, but this app has no image-download/caching
+ * infrastructure and every other stat tile (gym/money/coursework) is
+ * already emoji-based, so this keeps weather visually consistent with them
+ * rather than introducing the only network-image dependency in the widget. */
+internal fun weatherEmoji(condition: String?): String {
+    val c = (condition ?: "").lowercase()
+    return when {
+        "thunder" in c -> "⛈️"
+        "snow" in c || "flurr" in c || "sleet" in c -> "❄️"
+        "rain" in c || "shower" in c || "drizzle" in c -> "🌧️"
+        "fog" in c || "haze" in c || "mist" in c -> "🌫️"
+        "wind" in c -> "💨"
+        "cloud" in c || "overcast" in c -> "☁️"
+        "clear" in c || "sunny" in c -> "☀️"
+        else -> "🌤️"
+    }
+}
+
+/** Current conditions card: big current temp + unit + today's high/low on
+ * the left, condition glyph + label on the right -- own dark-blue card
+ * (distinct from the neutral GlanceTheme surface every other section uses)
+ * since weather is meant to read as its own weather-app-style glanceable
+ * unit, matching the reference design. Renders as a full-width standalone
+ * row (NOT part of [TILE_SECTIONS]'s shared gym/money/coursework strip --
+ * this card is wider than the ~100dp stat-tile width and reads better on
+ * its own row, especially as the single-stat "LifeOps Weather" preset's
+ * only content). */
+@Composable
+private fun WeatherSection(state: BriefingState, scale: Float) {
+    val temp = state.temperatureF ?: return
+    Row(
+        modifier = GlanceModifier
+            .fillMaxWidth()
+            .padding(top = 4.dp)
+            .cornerRadius(12.dp)
+            .background(ColorProvider(WEATHER_BG))
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(verticalAlignment = Alignment.Top) {
+            Text(
+                text = "$temp",
+                style = TextStyle(fontWeight = FontWeight.Bold, fontSize = (BASE_WEATHER_TEMP_SP * scale).sp,
+                    color = ColorProvider(Color.White)),
+            )
+            // "°F↑85°" / "↓67°" -- a tight 2-line group immediately beside
+            // the number, matching the original reference design exactly.
+            // Was 3 separate stacked lines (°F, ↑, ↓); that read as more
+            // disconnected from the number than intended (2026-07-13).
+            Column {
+                Text(
+                    text = "°F" + (state.weatherHighF?.let { "↑$it°" } ?: ""),
+                    style = TextStyle(fontSize = (BASE_WEATHER_UNIT_SP * scale).sp, color = ColorProvider(Color.White)),
+                )
+                state.weatherLowF?.let {
+                    Text(text = "↓$it°", style = TextStyle(fontSize = (BASE_WEATHER_HILO_SP * scale).sp,
+                        color = ColorProvider(Color.White)))
+                }
+            }
+        }
+        Spacer(modifier = GlanceModifier.defaultWeight())
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(text = weatherEmoji(state.weatherCondition),
+                style = TextStyle(fontSize = (BASE_WEATHER_ICON_SP * scale).sp))
+            state.weatherCondition?.let {
+                Text(text = it, style = TextStyle(fontSize = (BASE_WEATHER_CONDITION_SP * scale).sp,
+                    color = ColorProvider(Color.White)))
+            }
         }
     }
 }
@@ -657,9 +916,16 @@ private fun GymBar(completed: Int, target: Int, scale: Float) {
     }
 }
 
-private const val BASE_GYM_RING_SIZE_DP = 44
-private const val BASE_GYM_RING_STROKE_DP = 4
-private const val BASE_GYM_RING_EMOJI_SP = 20f
+// 48dp matches Material's large-icon / minimum-touch-target size (the ring
+// sits inside BriefingContent's clickable OpenPanelAction area, so this also
+// gives it its own reasonably-sized tap target). Stroke is ~10% of the
+// diameter -- in line with how fitness-ring widgets (Google Fit, Apple
+// Fitness) weight their rings so the fill is legible at a glance instead of
+// reading as a thin hairline. Emoji size is scaled up with it to keep the
+// same visual proportion the previous 44dp/20sp pairing had.
+private const val BASE_GYM_RING_SIZE_DP = 48
+private const val BASE_GYM_RING_STROKE_DP = 5
+private const val BASE_GYM_RING_EMOJI_SP = 22f
 private val GYM_RING_RED = Color(0xFFB3261E)
 
 /** Draws the ring as a bitmap via plain android.graphics.Canvas/Paint --

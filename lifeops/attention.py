@@ -58,12 +58,16 @@ def compute(facts, system=None):
         reasons.append(_reason("coursework", "watch", title,
                                "Finish today's due work before lower-priority tasks."))
 
+    # discretionary_dollars is net of known upcoming event costs (see
+    # gather.spend_input's docstring) -- "after what's already spoken for,"
+    # not the raw account balance, hence the copy below says so rather than
+    # reading like the bank balance itself is gone.
     money = facts.get("discretionary_dollars")
     if money is not None and money < 0:
-        reasons.append(_reason("money", "risk", "Discretionary balance is negative",
+        reasons.append(_reason("money", "risk", "Discretionary balance is negative after upcoming plans",
                                "Pause optional spending and review the cash-flow plan."))
     elif money is not None and money < 100:
-        reasons.append(_reason("money", "watch", "Discretionary buffer is low",
+        reasons.append(_reason("money", "watch", "Discretionary buffer is low after upcoming plans",
                                "Check upcoming spending before committing."))
 
     gym = facts.get("gym_last_7d")

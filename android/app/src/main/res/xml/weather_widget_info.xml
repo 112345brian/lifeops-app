@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Single-stat preset (weather only): see gym_widget_info.xml's comment
+     for why minHeight/minResizeHeight are held at 150dp. Wider default than
+     the other single-stat presets (targetCellWidth 3, not 2): the
+     WeatherSection card is a wide temp+hi/lo-on-the-left,
+     icon+condition-on-the-right layout, not a narrow icon+number tile. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="180dp"
+    android:minHeight="150dp"
+    android:minResizeWidth="180dp"
+    android:minResizeHeight="150dp"
+    android:maxResizeWidth="320dp"
+    android:maxResizeHeight="250dp"
+    android:targetCellWidth="3"
+    android:targetCellHeight="2"
+    android:resizeMode="horizontal|vertical"
+    android:widgetCategory="home_screen"
+    android:updatePeriodMillis="1800000"
+    android:initialLayout="@layout/widget_loading"
+    android:previewLayout="@layout/widget_loading"
+    android:configure="com.lifeops.briefing.WidgetConfigActivity" />
