@@ -15,7 +15,9 @@ import androidx.glance.appwidget.CheckBox
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.action.actionRunCallback
 import androidx.glance.appwidget.provideContent
+import androidx.glance.background
 import androidx.glance.currentState
+import androidx.glance.layout.Box
 import androidx.glance.layout.Column
 import androidx.glance.layout.Row
 import androidx.glance.layout.Spacer
@@ -81,7 +83,7 @@ class BriefingWidget : GlanceAppWidget() {
 }
 
 @Composable
-private fun BriefingContent(state: BriefingState, nextTasks: NextTasksState) {
+internal fun BriefingContent(state: BriefingState, nextTasks: NextTasksState) {
     Column(
         modifier = GlanceModifier
             .fillMaxSize()
@@ -129,16 +131,16 @@ private fun BriefingContent(state: BriefingState, nextTasks: NextTasksState) {
                 }
             }
 
-            // Stat row -- only the facts that are present.
+            // Gym gets a compact proportional bar (a real meter, not just a
+            // fraction as text) since it's the one stat with a clear target
+            // to fill toward -- money/coursework are single numbers with no
+            // fixed "full" to bar against, so they stay plain text.
+            if (state.gymLast7d != null && state.gymTarget != null) {
+                GymBar(state.gymLast7d, state.gymTarget)
+            }
+
+            // Remaining stat row -- only the facts that are present.
             val stats = buildList {
-                if (state.gymLast7d != null && state.gymTarget != null) {
-                    // "(7d)" makes the rolling window explicit -- this used
-                    // to read "Gym 2/4" with no window indicated at all,
-                    // which read as a calendar-week count even after the
-                    // underlying number became a rolling trailing-7-day one
-                    // (2026-07-12).
-                    add("Gym ${state.gymLast7d}/${state.gymTarget} (7d)")
-                }
                 if (state.discretionaryDollars != null) {
                     add("$${state.discretionaryDollars}")
                 }
@@ -161,10 +163,25 @@ private fun BriefingContent(state: BriefingState, nextTasks: NextTasksState) {
             }
 
             // "As of" info line -- when this snapshot was received, if known.
+            // A stale snapshot is worse than a missing one (it looks current
+            // but isn't), so anything past STALE_THRESHOLD_MINUTES gets a
+            // warning glyph ahead of the age, not just the age itself.
             state.fetchedAtEpochMillis?.let {
+                val ageMinutes = (System.currentTimeMillis() - it) / 60_000L
+                val label = if (ageMinutes >= STALE_THRESHOLD_MINUTES) {
+                    "⚠ stale, as of ${relativeTime(it)}"
+                } else {
+                    "as of ${relativeTime(it)}"
+                }
                 Text(
-                    text = "as of ${relativeTime(it)}",
-                    style = TextStyle(color = GlanceTheme.colors.onSurfaceVariant),
+                    text = label,
+                    style = TextStyle(
+                        color = if (ageMinutes >= STALE_THRESHOLD_MINUTES) {
+                            ColorProvider(Color(0xFFA8641F))
+                        } else {
+                            GlanceTheme.colors.onSurfaceVariant
+                        },
+                    ),
                 )
             }
         }
@@ -200,6 +217,38 @@ private fun BriefingContent(state: BriefingState, nextTasks: NextTasksState) {
             for (task in nextTasks.tasks) {
                 NextTaskRow(task)
             }
+        }
+    }
+}
+
+private const val STALE_THRESHOLD_MINUTES = 120L
+private const val GYM_BAR_WIDTH_DP = 60
+
+/** Compact proportional meter: filled portion in teal once at/above target,
+ * amber while short of it -- same two colors the stat text already used, now
+ * a shape instead of just a fraction. Glance's RowScope only exposes an
+ * equal (1x) weight modifier, not an arbitrary numeric one, so the fill
+ * ratio is expressed as two explicit dp widths instead of weights. */
+@Composable
+private fun GymBar(completed: Int, target: Int) {
+    val ratio = if (target > 0) (completed.toFloat() / target.toFloat()).coerceIn(0f, 1f) else 0f
+    val filledDp = (GYM_BAR_WIDTH_DP * ratio).toInt()
+    val barColor = if (completed >= target) Color(0xFF276B5E) else Color(0xFFA8641F)
+
+    Row(modifier = GlanceModifier.padding(top = 4.dp)) {
+        Text(
+            text = "Gym ${completed}/${target} (7d)",
+            style = TextStyle(color = GlanceTheme.colors.onSurfaceVariant),
+        )
+    }
+    Row(modifier = GlanceModifier.height(6.dp).padding(top = 2.dp)) {
+        if (filledDp > 0) {
+            Box(modifier = GlanceModifier.width(filledDp.dp).height(6.dp)
+                .background(ColorProvider(barColor))) {}
+        }
+        if (filledDp < GYM_BAR_WIDTH_DP) {
+            Box(modifier = GlanceModifier.width((GYM_BAR_WIDTH_DP - filledDp).dp).height(6.dp)
+                .background(GlanceTheme.colors.surfaceVariant)) {}
         }
     }
 }
