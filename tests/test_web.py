@@ -144,6 +144,30 @@ def test_api_domain_run_triggers_named_domain(sandbox):
     assert sandbox == ["gym"]
 
 
+def test_api_register_fcm_token_persists_valid_token(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "WEB_TOKEN", "")
+    monkeypatch.setattr(history, "ROOT", str(tmp_path))
+    (tmp_path / "logs").mkdir(exist_ok=True)
+    token = "d" * 20 + ":APA91b" + "x" * 100
+
+    response = TestClient(web.app).post("/api/register-fcm-token", json={"fcm_token": token})
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert web.fcm._device_token() == token
+
+
+def test_api_register_fcm_token_rejects_malformed_token(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "WEB_TOKEN", "")
+    monkeypatch.setattr(history, "ROOT", str(tmp_path))
+    (tmp_path / "logs").mkdir(exist_ok=True)
+
+    response = TestClient(web.app).post("/api/register-fcm-token", json={"fcm_token": "short"})
+
+    assert response.status_code == 400
+    assert web.fcm._device_token() == ""
+
+
 def test_current_attention_treats_missing_last_run_as_no_system_data(monkeypatch):
     """A fresh install (or any moment logs/last_run.json is missing/
     unreadable) makes _last_run() return None. _current_attention must pass

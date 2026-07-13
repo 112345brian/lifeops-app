@@ -12,7 +12,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, File
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup, escape
-from . import config, history, gather, actions, lock
+from . import config, history, gather, actions, lock, fcm
 from .flowsavvy import FlowSavvy
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -680,26 +680,21 @@ def api_domain_run(name: str):
     _run_domain(name)
     return JSONResponse({"ok": True, "domain": name})
 
-FCM_TOKEN_FILE = os.path.join(ROOT, "logs", "fcm_token.json")
-
 @app.post("/api/register-fcm-token")
 async def api_register_fcm_token(request: Request):
     """The widget calls this once per token (install, or whenever Firebase
-    rotates it) so run_briefing knows where to push. Single-user app -- one
-    token on file, last write wins."""
+    rotates it) so run_briefing knows where to push. Direct, Tailscale-gated
+    path; runner.py's ntfy `token:<value>` signal handler is the relay
+    fallback for when the phone isn't on the tailnet at registration time.
+    Single-user app -- one token on file, last write wins."""
     try:
         body = await request.json()
     except Exception:
         raise HTTPException(400, "malformed JSON body")
     if not isinstance(body, dict):
         raise HTTPException(400, "expected a JSON object")
-    token = body.get("fcm_token")
-    # FCM registration tokens are long opaque strings (typically 140-200+
-    # chars); a generous sanity bound catches obvious garbage without
-    # hardcoding Firebase's exact format.
-    if not isinstance(token, str) or not (10 <= len(token) <= 4096):
+    if not fcm.register_token(body.get("fcm_token")):
         raise HTTPException(400, "fcm_token required (string, 10-4096 chars)")
-    _write_json(FCM_TOKEN_FILE, {"token": token})
     return JSONResponse({"ok": True})
 
 @app.post("/history/undo")

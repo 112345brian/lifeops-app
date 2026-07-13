@@ -7,7 +7,7 @@ Run:  python -m lifeops.runner          # all wired domains
       python -m lifeops.runner gym      # one domain
 """
 import sys, os, re, io, json, datetime, contextlib, requests
-from . import config, ntfy, notify, gather, lock, history, adherence, actions, attention
+from . import config, ntfy, notify, gather, lock, history, adherence, actions, attention, fcm
 from .flowsavvy import FlowSavvy
 from .ynab import YNAB
 from .engines import gym_engine, ynab_engine
@@ -214,6 +214,17 @@ def ingest(fs, now):
                 if msg_id:
                     handled_msg_ids.append(msg_id)
                     handled_msg_id_set.add(msg_id)
+        elif body.startswith("token:"):
+            # Relay fallback for FCM token (re-)registration when the phone
+            # isn't on the tailnet at install/token-rotation time -- see
+            # RegisterTokenWorker.kt. Extract from raw_body, not the
+            # lowercased body: FCM tokens are case-sensitive and commonly
+            # contain their own literal colon (classic Instance ID format,
+            # e.g. "dXXXX:APA91b..."), so this only ever splits on the
+            # FIRST colon, same as the complete: handler above.
+            new_token = raw_body.split(":", 1)[1].strip()
+            if not fcm.register_token(new_token):
+                print("[ingest] token signal had a malformed/missing token, skipping")
         st["ntfy_ts"] = max(st["ntfy_ts"], m.get("time", 0))
     st["handled_ntfy_msg_ids"] = handled_msg_ids[-1000:]
     frm = _utc_iso(14)
@@ -234,6 +245,21 @@ def ingest(fs, now):
     st["logged_ids"] = logged_ids[-1000:]
     os.makedirs(os.path.dirname(sp), exist_ok=True)
     _save_json_atomic(sp, st)
+
+def push_next_tasks(fs, now, args):
+    """Pushes a fresh next-tasks + today's-events snapshot via FCM -- the
+    Tailscale-independent counterpart to the widget's periodic direct pull
+    of /api/next-tasks (NextTasksRefreshWorker.kt), which stays in place
+    unchanged as a self-heal fallback for the rare case a push is dropped.
+    Skipped on the signal tier (~2 min, phone-tap catchup only): tick
+    (~10 min) is plenty fresh for a task list, and signal firing this too
+    would be 5x the FCM sends for no real freshness gain."""
+    if args == ["signal"]:
+        return
+    schedule_items = gather._upcoming_schedule(fs, now)
+    tasks = gather.next_tasks_input(fs, now, 3, schedule_items=schedule_items)
+    events = gather.today_events_input(fs, now, schedule_items=schedule_items)
+    notify.push_next_tasks(tasks, events)
 
 def _alert_once(key, text, priority="default", tags=None, actions=None, click_anchor=""):
     """Send an alert at most once per calendar day per key. The tick runs every
@@ -1262,6 +1288,12 @@ def _run():
         print(f"[panel_health] ERROR: {e}")
 
     args = sys.argv[1:] or ["tick"]
+
+    try:                              # keep the widget fresh without Tailscale
+        details["push_next_tasks"] = _capture(push_next_tasks, fs, now, args)
+    except Exception as e:
+        errors["push_next_tasks"] = str(e); details["push_next_tasks"] = f"ERROR: {e}"
+        print(f"[push_next_tasks] ERROR: {e}")
     try:
         enabled = json.load(open(os.path.join(history.ROOT, "logs", "domains.json"), encoding="utf-8"))
     except Exception:

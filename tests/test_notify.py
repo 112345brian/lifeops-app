@@ -25,3 +25,13 @@ def test_push_briefing_routes_to_fcm(monkeypatch):
     notify.push_briefing("2026-07-12", "text", {"gym": 2})
 
     assert calls == [("2026-07-12", "text", {"gym": 2})]
+
+
+def test_push_next_tasks_routes_to_fcm(monkeypatch):
+    calls = []
+    monkeypatch.setattr(notify.fcm, "send_next_tasks",
+                        lambda tasks, events: calls.append((tasks, events)))
+
+    notify.push_next_tasks([{"id": "1"}], [{"title": "BBQ"}])
+
+    assert calls == [([{"id": "1"}], [{"title": "BBQ"}])]

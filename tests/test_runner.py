@@ -116,3 +116,58 @@ def test_ingest_handled_msg_ids_keeps_most_recent_not_arbitrary(tmp_path, monkey
     # The oldest id (old-0) must be the one evicted, and the new id must
     # survive at the end -- not an arbitrary member of the old set.
     assert saved["handled_ntfy_msg_ids"] == old_ids[1:] + ["new-msg"]
+
+
+def test_ingest_token_signal_registers_fcm_token(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
+    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "logs" / "history.jsonl"))
+    (tmp_path / "logs").mkdir(exist_ok=True)
+
+    token = "d" * 20 + ":APA91b" + "x" * 100
+    fake_message = {"id": "msg-1", "time": 100, "message": f"token:{token}"}
+    monkeypatch.setattr(runner.ntfy, "poll", lambda since: [fake_message])
+
+    runner.ingest(_CompleteFakeFlowSavvy(), datetime.datetime(2026, 7, 13, 9, 0))
+
+    assert runner.fcm._device_token() == token
+
+
+def test_ingest_token_signal_with_malformed_token_does_not_raise(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
+    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "logs" / "history.jsonl"))
+    (tmp_path / "logs").mkdir(exist_ok=True)
+
+    fake_message = {"id": "msg-1", "time": 100, "message": "token:too-short"}
+    monkeypatch.setattr(runner.ntfy, "poll", lambda since: [fake_message])
+
+    runner.ingest(_CompleteFakeFlowSavvy(), datetime.datetime(2026, 7, 13, 9, 0))  # must not raise
+
+    assert runner.fcm._device_token() == ""
+
+
+class _NextTasksFakeFlowSavvy:
+    def get_schedule(self, start, end):
+        return {"scheduleItems": [
+            {"itemType": "task", "itemId": "t1", "title": "Reading",
+             "startTime": "2099-01-01T09:00:00", "completed": False},
+        ]}
+
+
+def test_push_next_tasks_skipped_on_signal_tier(monkeypatch):
+    calls = []
+    monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events: calls.append((tasks, events)))
+
+    runner.push_next_tasks(_NextTasksFakeFlowSavvy(), datetime.datetime(2026, 7, 13, 9, 0), ["signal"])
+
+    assert calls == []
+
+
+def test_push_next_tasks_fires_on_tick_tier(monkeypatch):
+    calls = []
+    monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events: calls.append((tasks, events)))
+
+    runner.push_next_tasks(_NextTasksFakeFlowSavvy(), datetime.datetime(2026, 7, 13, 9, 0), ["tick"])
+
+    assert len(calls) == 1
+    tasks, events = calls[0]
+    assert [t["id"] for t in tasks] == ["t1"]
