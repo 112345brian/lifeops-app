@@ -18,7 +18,19 @@ class WidgetDisplayConfigTest {
     fun defaultRoundTripsThroughJson() {
         val config = WidgetDisplayConfig.default()
 
-        assertEquals(WidgetSection.entries.toList(), config.sectionOrder)
+        // Must match the widget's pre-customization hardcoded layout exactly
+        // (paragraph before the tiles, dots pinned first) -- NOT raw
+        // WidgetSection.entries declaration order, which would silently
+        // reshuffle every never-configured widget's default layout.
+        assertEquals(
+            listOf(
+                WidgetSection.SEVERITY_DOTS, WidgetSection.BRIEFING_PARAGRAPH,
+                WidgetSection.GYM_RING, WidgetSection.MONEY_TILE, WidgetSection.COURSEWORK_TILE,
+                WidgetSection.TODAY_EVENTS, WidgetSection.UP_NEXT,
+            ),
+            config.sectionOrder,
+        )
+        assertEquals(WidgetSection.entries.toSet(), config.sectionOrder.toSet())
         assertEquals(emptySet<WidgetSection>(), config.hiddenSections)
         assertEquals(1.0f, config.scale)
         assertEquals(null, config.maxTasksOverride)
@@ -84,5 +96,19 @@ class WidgetDisplayConfigTest {
         val config = WidgetDisplayConfig.fromJson("""{"sectionOrder": [], "hiddenSections": [], "scale": 1.0}""")
 
         assertEquals(null, config.maxTasksOverride)
+    }
+
+    @Test
+    fun scaleIsClampedToTheConfigScreensSliderRange() {
+        // A corrupted or hand-edited persisted blob must not flow an
+        // out-of-range scale unclamped into every font/icon size
+        // calculation in BriefingWidget.kt.
+        val tooLarge = WidgetDisplayConfig.fromJson(
+            """{"sectionOrder": [], "hiddenSections": [], "scale": 50.0}""")
+        val tooSmall = WidgetDisplayConfig.fromJson(
+            """{"sectionOrder": [], "hiddenSections": [], "scale": 0.01}""")
+
+        assertEquals(WidgetDisplayConfig.MAX_SCALE, tooLarge.scale)
+        assertEquals(WidgetDisplayConfig.MIN_SCALE, tooSmall.scale)
     }
 }

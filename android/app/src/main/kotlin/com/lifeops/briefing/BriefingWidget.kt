@@ -182,11 +182,15 @@ internal fun BriefingContent(
     config: WidgetDisplayConfig = WidgetDisplayConfig.default(),
 ) {
     val bucket = bucketFor(LocalSize.current)
+    // Hide-filtered first, THEN check what's first -- a hidden section ahead
+    // of SEVERITY_DOTS in the raw sectionOrder must not defeat the
+    // inline-with-badge rule just because it still occupies an earlier
+    // index in the unfiltered list.
+    val visibleOrder = config.sectionOrder.filter { it !in config.hiddenSections }
     // Severity dots render inline on the badge's own row ONLY when left in
-    // their default (first) position in sectionOrder -- moved anywhere else,
-    // they detach into their own standalone row at that position instead.
-    val dotsInline = config.sectionOrder.firstOrNull() == WidgetSection.SEVERITY_DOTS &&
-        WidgetSection.SEVERITY_DOTS !in config.hiddenSections
+    // their default (first, among VISIBLE sections) position -- moved
+    // anywhere else, they detach into their own standalone row instead.
+    val dotsInline = visibleOrder.firstOrNull() == WidgetSection.SEVERITY_DOTS
     Column(
         modifier = GlanceModifier
             .fillMaxSize()
@@ -201,17 +205,22 @@ internal fun BriefingContent(
         }
 
         if (state.text == null) {
+            // Only the paragraph/tiles/freshness-line are gated behind a
+            // real briefing having arrived at least once -- today's real
+            // calendar events and upcoming tasks are independent of the
+            // LLM-generated text (see EventsSection's docstring) and must
+            // keep rendering below, not get swallowed by this placeholder.
             Text(
                 text = "No briefing yet — tap to configure",
                 style = TextStyle(color = GlanceTheme.colors.onSurfaceVariant),
             )
-            return@Column
         }
 
-        val visibleOrder = config.sectionOrder.filter { section ->
-            section !in config.hiddenSections && !(section == WidgetSection.SEVERITY_DOTS && dotsInline)
+        val renderableOrder = visibleOrder.filter { section ->
+            !(section == WidgetSection.SEVERITY_DOTS && dotsInline) &&
+                !(state.text == null && section in TEXT_GATED_SECTIONS)
         }
-        for (group in groupSectionsForRendering(visibleOrder)) {
+        for (group in groupSectionsForRendering(renderableOrder)) {
             if (group.size > 1) {
                 TileRow(group, state, nextTasks.gymRing, config.scale)
                 continue
@@ -220,8 +229,10 @@ internal fun BriefingContent(
                 WidgetSection.SEVERITY_DOTS -> StandaloneSeverityDots(state.reasons, config.scale)
                 WidgetSection.GYM_RING, WidgetSection.MONEY_TILE, WidgetSection.COURSEWORK_TILE ->
                     TileRow(listOf(section), state, nextTasks.gymRing, config.scale)
-                WidgetSection.BRIEFING_PARAGRAPH ->
-                    if (bucket == WidgetSizeBucket.LARGE) BriefingParagraph(state.text, config.scale)
+                WidgetSection.BRIEFING_PARAGRAPH -> {
+                    val text = state.text
+                    if (bucket == WidgetSizeBucket.LARGE && text != null) BriefingParagraph(text, config.scale)
+                }
                 WidgetSection.TODAY_EVENTS ->
                     if (bucket == WidgetSizeBucket.LARGE && nextTasks.events.isNotEmpty()) {
                         EventsSection(nextTasks.events)
@@ -233,9 +244,21 @@ internal fun BriefingContent(
                     }
             }
         }
-        StaleIndicator(state.fetchedAtEpochMillis)
+        if (state.text != null) {
+            StaleIndicator(state.fetchedAtEpochMillis)
+        }
     }
 }
+
+/** Sections that only render once a real briefing has arrived at least
+ * once -- matches the widget's pre-customization behavior, where these
+ * were the ones nested inside the `else` branch of an `if (state.text ==
+ * null)` check. TODAY_EVENTS/UP_NEXT are deliberately NOT here: they were
+ * always independent of briefing text (see EventsSection's docstring). */
+private val TEXT_GATED_SECTIONS = setOf(
+    WidgetSection.BRIEFING_PARAGRAPH, WidgetSection.GYM_RING,
+    WidgetSection.MONEY_TILE, WidgetSection.COURSEWORK_TILE,
+)
 
 private const val LARGE_BASE_HEIGHT_DP = 250
 private const val TASK_ROW_HEIGHT_DP = 34
@@ -507,7 +530,7 @@ private fun TileRow(sections: List<WidgetSection>, state: BriefingState, gymRing
                     }
                     state.gymLast7d != null && state.gymTarget != null -> {
                         if (addedFirst) Spacer(modifier = GlanceModifier.width(6.dp))
-                        GymBar(state.gymLast7d, state.gymTarget)
+                        GymBar(state.gymLast7d, state.gymTarget, scale)
                         true
                     }
                     else -> false
@@ -597,7 +620,7 @@ private fun StaleIndicator(fetchedAtEpochMillis: Long?) {
 }
 
 private const val STALE_THRESHOLD_MINUTES = 120L
-private const val GYM_BAR_WIDTH_DP = 60
+private const val BASE_GYM_BAR_WIDTH_DP = 60
 private const val STAT_TILE_WIDTH_DP = 100
 
 /** Compact proportional meter: filled portion in teal once at/above target,
@@ -606,9 +629,10 @@ private const val STAT_TILE_WIDTH_DP = 100
  * equal (1x) weight modifier, not an arbitrary numeric one, so the fill
  * ratio is expressed as two explicit dp widths instead of weights. */
 @Composable
-private fun GymBar(completed: Int, target: Int) {
+private fun GymBar(completed: Int, target: Int, scale: Float) {
+    val barWidthDp = BASE_GYM_BAR_WIDTH_DP * scale
     val ratio = if (target > 0) (completed.toFloat() / target.toFloat()).coerceIn(0f, 1f) else 0f
-    val filledDp = (GYM_BAR_WIDTH_DP * ratio).toInt()
+    val filledDp = (barWidthDp * ratio).toInt()
     val barColor = if (completed >= target) COLOR_OK else COLOR_WARN
 
     // Wrapped in a Column so this whole fallback counts as ONE child of
@@ -625,8 +649,8 @@ private fun GymBar(completed: Int, target: Int) {
                 Box(modifier = GlanceModifier.width(filledDp.dp).height(6.dp)
                     .background(ColorProvider(barColor))) {}
             }
-            if (filledDp < GYM_BAR_WIDTH_DP) {
-                Box(modifier = GlanceModifier.width((GYM_BAR_WIDTH_DP - filledDp).dp).height(6.dp)
+            if (filledDp < barWidthDp.toInt()) {
+                Box(modifier = GlanceModifier.width((barWidthDp.toInt() - filledDp).dp).height(6.dp)
                     .background(GlanceTheme.colors.surfaceVariant)) {}
             }
         }

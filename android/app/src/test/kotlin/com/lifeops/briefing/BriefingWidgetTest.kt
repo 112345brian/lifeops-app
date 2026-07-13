@@ -200,6 +200,65 @@ class BriefingWidgetTest {
     }
 
     @Test
+    fun eventsAndTasksStillShow_evenWhenNoBriefingTextHasEverArrived() = runGlanceAppWidgetUnitTest {
+        // 2026-07-13: a fresh install (or any moment before the first
+        // briefing push lands) must not swallow real calendar events/tasks
+        // that have already arrived via the separate next-tasks channel --
+        // EventsSection/UpNextSection are deliberately independent of
+        // briefing text, matching the pre-customization behavior.
+        setAppWidgetSize(DpSize(250.dp, 250.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = BriefingState(date = "2026-07-13", text = null),
+                    nextTasks = NextTasksState(
+                        tasks = listOf(NextTask("1", "Only task", null)),
+                        events = listOf(com.lifeops.briefing.data.TodayEvent("Papa's BBQ", null)),
+                    ),
+                )
+            }
+        }
+
+        onNode(hasText("No briefing yet", true)).assertExists()
+        onNode(hasText("Only task", true)).assertExists()
+        onNode(hasText("Papa's BBQ", true)).assertExists()
+    }
+
+    @Test
+    fun severityDots_stayInline_whenAHiddenSectionSitsAheadOfThemInRawOrder() = runGlanceAppWidgetUnitTest {
+        // 2026-07-13: dotsInline must be computed from the HIDE-FILTERED
+        // visible order, not the raw persisted sectionOrder -- a hidden
+        // section ahead of SEVERITY_DOTS must not defeat the
+        // inline-with-badge rule just because it still occupies an earlier
+        // index in the unfiltered list.
+        setAppWidgetSize(DpSize(120.dp, 90.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(
+                        attentionState = "risk", attentionSymbol = "◆", attentionLabel = "RISK",
+                        reasons = listOf(AttentionReason("coursework", "risk")),
+                    ),
+                    nextTasks = NextTasksState.empty(),
+                    config = WidgetDisplayConfig.default().copy(
+                        sectionOrder = listOf(WidgetSection.GYM_RING, WidgetSection.SEVERITY_DOTS) +
+                            WidgetSection.entries.filter {
+                                it != WidgetSection.GYM_RING && it != WidgetSection.SEVERITY_DOTS
+                            },
+                        hiddenSections = setOf(WidgetSection.GYM_RING),
+                    ),
+                )
+            }
+        }
+
+        // Dots must still exist -- whether inline or standalone, they must
+        // not be lost -- but since GYM_RING (the only thing ahead of them)
+        // is hidden, they should render even at the SMALL bucket (i.e.
+        // inline with the badge, which is the only path reachable at SMALL).
+        onNode(hasContentDescription("coursework: risk")).assertExists()
+    }
+
+    @Test
     fun hiddenSection_doesNotRenderEvenAtLargeBucket() = runGlanceAppWidgetUnitTest {
         setAppWidgetSize(DpSize(250.dp, 250.dp))
         provideComposable {

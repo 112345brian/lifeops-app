@@ -24,7 +24,21 @@ enum class WidgetSection {
  * Preferences DataStore as BriefingState/NextTasksState -- so it's cleaned
  * up automatically when a widget instance is removed, same as those. */
 data class WidgetDisplayConfig(
-    val sectionOrder: List<WidgetSection> = WidgetSection.entries.toList(),
+    // Matches the widget's pre-customization hardcoded layout exactly
+    // (paragraph before the tiles, dots pinned first) -- NOT raw
+    // WidgetSection.entries order, which would silently reshuffle every
+    // never-configured widget instance's default layout (confirmed via
+    // code review: entries declaration order puts the tiles before the
+    // paragraph, reversing the original default).
+    val sectionOrder: List<WidgetSection> = listOf(
+        WidgetSection.SEVERITY_DOTS,
+        WidgetSection.BRIEFING_PARAGRAPH,
+        WidgetSection.GYM_RING,
+        WidgetSection.MONEY_TILE,
+        WidgetSection.COURSEWORK_TILE,
+        WidgetSection.TODAY_EVENTS,
+        WidgetSection.UP_NEXT,
+    ),
     val hiddenSections: Set<WidgetSection> = emptySet(),
     val scale: Float = 1.0f,
     val maxTasksOverride: Int? = null,
@@ -41,6 +55,12 @@ data class WidgetDisplayConfig(
     }.toString()
 
     companion object {
+        // Matches WidgetConfigActivity's Slider range -- a corrupted or
+        // hand-edited persisted value must not flow unclamped into every
+        // font/icon size calculation in BriefingWidget.kt.
+        const val MIN_SCALE = 0.85f
+        const val MAX_SCALE = 1.3f
+
         fun default() = WidgetDisplayConfig()
 
         /** Unknown/removed enum values (e.g. an older or newer app version's
@@ -70,7 +90,7 @@ data class WidgetDisplayConfig(
                 // vanishing silently.
                 sectionOrder = order + WidgetSection.entries.filter { it !in order },
                 hiddenSections = parseSections(o.optJSONArray("hiddenSections")).toSet(),
-                scale = o.optDouble("scale", 1.0).toFloat(),
+                scale = o.optDouble("scale", 1.0).toFloat().coerceIn(MIN_SCALE, MAX_SCALE),
                 maxTasksOverride = if (o.isNull("maxTasksOverride") || !o.has("maxTasksOverride")) {
                     null
                 } else {

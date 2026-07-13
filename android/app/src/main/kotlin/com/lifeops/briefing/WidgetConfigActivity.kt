@@ -185,7 +185,8 @@ private fun WidgetConfigScreen(
 
         Spacer(modifier = Modifier.height(8.dp))
         Text(text = "Font & icon size: ${"%.2f".format(scale)}x")
-        Slider(value = scale, onValueChange = { scale = it }, valueRange = 0.85f..1.3f)
+        Slider(value = scale, onValueChange = { scale = it },
+            valueRange = WidgetDisplayConfig.MIN_SCALE..WidgetDisplayConfig.MAX_SCALE)
 
         Spacer(modifier = Modifier.height(8.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
