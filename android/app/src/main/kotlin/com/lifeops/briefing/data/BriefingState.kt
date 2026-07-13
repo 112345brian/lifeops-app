@@ -8,20 +8,28 @@ import org.json.JSONObject
 data class BriefingState(
     val date: String?,
     val text: String?,
-    val gymThisWeek: Int? = null,
+    val gymLast7d: Int? = null,
     val gymTarget: Int? = null,
     val discretionaryDollars: Int? = null,
     val courseworkHoursNext7d: Double? = null,
     val fetchedAtEpochMillis: Long? = null,
+    val attentionState: String? = null,
+    val attentionSymbol: String? = null,
+    val attentionLabel: String? = null,
+    val attentionHeadline: String? = null,
 ) {
     fun toJson(): String = JSONObject().apply {
         put("date", date)
         put("text", text)
-        put("gymThisWeek", gymThisWeek)
+        put("gymLast7d", gymLast7d)
         put("gymTarget", gymTarget)
         put("discretionaryDollars", discretionaryDollars)
         put("courseworkHoursNext7d", courseworkHoursNext7d)
         put("fetchedAtEpochMillis", fetchedAtEpochMillis)
+        put("attentionState", attentionState)
+        put("attentionSymbol", attentionSymbol)
+        put("attentionLabel", attentionLabel)
+        put("attentionHeadline", attentionHeadline)
     }.toString()
 
     companion object {
@@ -32,13 +40,17 @@ data class BriefingState(
             return BriefingState(
                 date = o.optString("date").takeIf { it.isNotEmpty() },
                 text = o.optString("text").takeIf { it.isNotEmpty() },
-                gymThisWeek = o.optInt("gymThisWeek", -1).takeIf { it >= 0 },
+                gymLast7d = o.optInt("gymLast7d", -1).takeIf { it >= 0 },
                 gymTarget = o.optInt("gymTarget", -1).takeIf { it >= 0 },
                 discretionaryDollars = o.optInt("discretionaryDollars", Int.MIN_VALUE)
                     .takeIf { it != Int.MIN_VALUE },
                 courseworkHoursNext7d = o.optDouble("courseworkHoursNext7d", Double.NaN)
                     .takeIf { !it.isNaN() },
                 fetchedAtEpochMillis = o.optLong("fetchedAtEpochMillis", -1L).takeIf { it >= 0 },
+                attentionState = o.optString("attentionState").takeIf { it.isNotEmpty() },
+                attentionSymbol = o.optString("attentionSymbol").takeIf { it.isNotEmpty() },
+                attentionLabel = o.optString("attentionLabel").takeIf { it.isNotEmpty() },
+                attentionHeadline = o.optString("attentionHeadline").takeIf { it.isNotEmpty() },
             )
         }
 
@@ -48,16 +60,21 @@ data class BriefingState(
         fun fromApiResponse(raw: String, fetchedAtEpochMillis: Long): BriefingState {
             val o = JSONObject(raw)
             val facts = o.optJSONObject("facts") ?: JSONObject()
+            val attention = facts.optJSONObject("attention") ?: JSONObject()
             return BriefingState(
                 date = o.optString("date").takeIf { it.isNotEmpty() },
                 text = o.optString("text").takeIf { it.isNotEmpty() },
-                gymThisWeek = if (facts.has("gym_this_week")) facts.optInt("gym_this_week") else null,
+                gymLast7d = if (facts.has("gym_last_7d")) facts.optInt("gym_last_7d") else null,
                 gymTarget = if (facts.has("gym_target")) facts.optInt("gym_target") else null,
                 discretionaryDollars = if (facts.has("discretionary_dollars"))
                     facts.optInt("discretionary_dollars") else null,
                 courseworkHoursNext7d = if (facts.has("coursework_hours_next_7d"))
                     facts.optDouble("coursework_hours_next_7d") else null,
                 fetchedAtEpochMillis = fetchedAtEpochMillis,
+                attentionState = attention.optString("state").takeIf { it.isNotEmpty() },
+                attentionSymbol = attention.optString("symbol").takeIf { it.isNotEmpty() },
+                attentionLabel = attention.optString("label").takeIf { it.isNotEmpty() },
+                attentionHeadline = attention.optString("headline").takeIf { it.isNotEmpty() },
             )
         }
     }

@@ -177,7 +177,19 @@ def homework_input(fs, now):
             h = (datetime.datetime.fromisoformat(due) - now).total_seconds() / 3600
         except ValueError:
             continue
-        if h < -24:
+        # No short lower bound: an incomplete coursework item doesn't stop
+        # being owed just because its due date passed -- Canvas readings
+        # routinely sit overdue-but-pending for a week+ while still needing
+        # to get done, and dropping them at 24h made them invisible to both
+        # the hours-next-7d total and the at-risk check, not just the
+        # briefing text (confirmed 2026-07-12: 9-days-overdue readings
+        # silently excluded from a "0.5h due this week" figure).
+        # A real upper bound still applies (~1 semester): LIST_COURSE isn't
+        # necessarily cleared out between terms, and an item abandoned
+        # months ago (a dropped assignment, a past semester's leftover)
+        # would otherwise inflate "hours due this week"/at-risk forever with
+        # no cleanup mechanism to ever age it out.
+        if h < -24 * 120:
             continue
         dur = t.get("durationMinutes") or 0; prog = t.get("progressMinutes") or 0
         out.append({"title": t.get("title") or "", "due_in_h": h, "due_in_days": h / 24,
@@ -205,19 +217,87 @@ def deadline_input(fs, now):
                     "remaining_min": max(0, dur - prog), "listId": t.get("listId")})
     return out
 
-def next_tasks_input(fs, now, n=3):
-    """The next n incomplete tasks by start time, across every list -- feeds
-    the widget's "what's next" section. Unlike deadline_input (due-date
+def _upcoming_schedule(fs, now):
+    """Shared fetch for next_tasks_input/today_events_input -- both read from
+    the same get_schedule window (it fully contains "today"), so calling
+    this once and passing the result to both avoids a redundant FlowSavvy
+    round-trip on every single /api/next-tasks request (which itself fires
+    every 15 min per widget instance, plus once per widget placement).
+
+    21 days, not 7: a light week with nothing auto-scheduled/fixed-time in
+    the next 7 days would otherwise make next_tasks_input wrongly report
+    "nothing next" even though a real next task exists just past that
+    boundary (matches spend_input's existing 21-day window elsewhere in
+    this file, for consistency).
+
+    Deliberately does NOT swallow exceptions here -- a genuine FlowSavvy
+    fetch failure must be distinguishable from "genuinely nothing
+    scheduled." Swallowing to an empty list made a transient outage
+    indistinguishable from real emptiness and silently overwrote good
+    previously-fetched state with "nothing to show." Callers (web.py's
+    /api/next-tasks) should catch this and fail the request rather than
+    return a false-empty 200."""
+    start = now.date().isoformat()
+    end = (now.date() + datetime.timedelta(days=21)).isoformat()
+    return fs.get_schedule(start, end).get("scheduleItems", [])
+
+def next_tasks_input(fs, now, n=3, schedule_items=None):
+    """The next n incomplete tasks by REAL start time, across every list --
+    feeds the widget's "what's next" section. Unlike deadline_input (due-date
     based, for risk surfacing), this is start-time based: whatever FlowSavvy
-    has queued up next, regardless of list or due date."""
+    has queued up next, regardless of list or due date.
+
+    Uses get_schedule (the actual computed placement), not list_items'
+    startDateTime field -- that field is null for every auto-scheduled task
+    (i.e. most coursework, which FlowSavvy places into time blocks itself)
+    and only ever populated for fixed-time tasks like "Gym". Reading
+    startDateTime alone meant a fixed-time task always won "next up" even
+    when an auto-scheduled reading was genuinely scheduled sooner (confirmed
+    2026-07-12: "Gym" at 6pm showed as next while several unread M07
+    readings were auto-scheduled for that same morning).
+
+    Pass a pre-fetched `schedule_items` (from _upcoming_schedule) to avoid
+    re-fetching when the caller also needs today_events_input's data."""
+    if schedule_items is None:
+        schedule_items = _upcoming_schedule(fs, now)
     tasks = []
-    for t in fs.list_items(itemType="task", completed=False).get("items", []):
-        st = t.get("startDateTime")
-        if not st:
+    for i in schedule_items:
+        if i.get("itemType") != "task" or i.get("allDay"):
             continue
-        tasks.append({"id": t["id"], "title": t.get("title") or "", "start": st})
+        if i.get("completed") or i.get("thisPartCompleted"):
+            continue
+        st = i.get("startTime")
+        if not st or st < now.isoformat(timespec="seconds"):
+            continue
+        tasks.append({"id": i.get("itemId"), "title": i.get("title") or "", "start": st})
     tasks.sort(key=lambda t: t["start"])
     return tasks[:n]
+
+def today_events_input(fs, now, n=5, schedule_items=None):
+    """Today's real (timed, non-all-day) calendar events, across EVERY
+    calendar -- feeds the widget's "today" line shown above the next-tasks
+    list. Deliberately time-based and calendar-agnostic (via get_schedule,
+    the same endpoint the calendar grid itself renders from) rather than
+    scoped to EVENT_CALS/spend_input's tracked types, so something like a
+    family BBQ shows up here even before/regardless of whether it's ever
+    added to the paid-events tracking.
+
+    Capped at n: the widget renders this list in a non-scrolling Glance
+    Column, the same layout primitive that silently clipped ALL content
+    once before (the width/height Spacer bug) -- an uncapped list on a
+    busy-calendar day would reintroduce that exact "content silently
+    vanishes past a point" failure class via overflow instead.
+
+    Pass a pre-fetched `schedule_items` (from _upcoming_schedule, a superset
+    that includes today) to avoid a redundant FlowSavvy round-trip when the
+    caller also needs next_tasks_input's data."""
+    if schedule_items is None:
+        schedule_items = _upcoming_schedule(fs, now)
+    today = now.date().isoformat()
+    events = [i for i in schedule_items if i.get("itemType") == "event" and not i.get("allDay")
+              and (i.get("startTime") or "").startswith(today)]
+    events.sort(key=lambda i: i.get("startTime") or "")
+    return [{"title": e.get("title") or "", "start": e.get("startTime")} for e in events[:n]]
 
 def spend_input(fs, yn, now):
     caltype = config.EVENT_CALS

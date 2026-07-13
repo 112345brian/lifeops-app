@@ -41,6 +41,7 @@ import kotlinx.coroutines.withContext
 class SettingsActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        actionBar?.hide()
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {

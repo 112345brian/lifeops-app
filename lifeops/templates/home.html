@@ -1,6 +1,25 @@
 {% extends "base.html" %}
 {% block content %}
 
+<div class="card section" id="attention" style="border-left:5px solid var(--{{ 'md-error' if attention.state in ['risk', 'fucked'] else 'md-primary' }});">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;">
+    <div>
+      <div class="card-title">Attention</div>
+      <div style="font-size:22px;font-weight:800;">{{ attention.symbol }} {{ attention.label }}</div>
+    </div>
+    <div style="font-size:14px;max-width:34rem;">{{ attention.headline }}</div>
+  </div>
+  {% if attention.reasons %}
+  <div class="divider"></div>
+  {% for reason in attention.reasons %}
+  <div class="hist-row" style="align-items:flex-start;">
+    <span class="badge {{ 'badge-off' if reason.severity in ['risk', 'fucked'] else 'badge-on' }}">{{ reason.domain }}</span>
+    <span><b>{{ reason.title }}</b><br><span class="muted">{{ reason.recommended_action }}</span></span>
+  </div>
+  {% endfor %}
+  {% endif %}
+</div>
+
 {% if briefing %}
 <!-- ── Today's briefing (run_briefing) ── -->
 <div class="card section" id="briefing">
@@ -10,7 +29,7 @@
   <div class="gym-note" style="margin-top:.5rem;">
     {% if briefing.facts.due_today %}<b>Due today:</b> {{ briefing.facts.due_today|join(', ') }}. {% endif %}
     <b>Next 7d coursework:</b> ~{{ briefing.facts.coursework_hours_next_7d }}h ·
-    <b>Gym:</b> {{ briefing.facts.gym_this_week }}/{{ briefing.facts.gym_target }} this week{% if briefing.facts.discretionary_dollars is not none %} ·
+    <b>Gym:</b> {{ briefing.facts.gym_last_7d }}/{{ briefing.facts.gym_target }} (7d){% if briefing.facts.discretionary_dollars is not none %} ·
     <b>Discretionary:</b> ${{ briefing.facts.discretionary_dollars }}{% endif %}
   </div>
   {% endif %}

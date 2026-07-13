@@ -26,7 +26,7 @@ def test_token_query_redirects_to_clean_url_and_sets_cookie(monkeypatch):
     monkeypatch.setattr(config, "WEB_TOKEN", "secret")
     client = TestClient(web.app)
 
-    response = client.get("/?token=secret", follow_redirects=False)
+    response = client.get("/?token=secret", headers={"accept": "text/html"}, follow_redirects=False)
 
     assert response.status_code == 303
     assert response.headers["location"] == "http://testserver/"
@@ -37,6 +37,15 @@ def test_token_query_redirects_to_clean_url_and_sets_cookie(monkeypatch):
     # plumbing -- Lax still blocks the cross-site POST/embed cases Strict
     # exists to guard against.
     assert "SameSite=lax" in response.headers["set-cookie"]
+
+
+def test_api_token_query_returns_json_without_browser_redirect(monkeypatch):
+    monkeypatch.setattr(config, "WEB_TOKEN", "secret")
+
+    response = TestClient(web.app).get("/api/status?token=secret", follow_redirects=False)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/json")
 
 
 @pytest.mark.parametrize("path", ["/", "/gym", "/schedule", "/history", "/settings"])

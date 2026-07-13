@@ -1,8 +1,22 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.gms.google-services")
 }
+
+// ntfy.signalTopic in local.properties (gitignored, machine-local, same file
+// that already holds sdk.dir) -- baked in at build time as a BuildConfig
+// field so CompleteTaskAction can POST a completion signal straight to
+// ntfy.sh without needing the Tailscale-gated panel URL/token at all. Not a
+// secret (ntfy.py: "No auth (public topics)") but also not something that
+// belongs in a tracked source file, hence local.properties over hardcoding.
+val localProperties = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+val ntfySignalTopic: String = localProperties.getProperty("ntfy.signalTopic", "")
 
 android {
     namespace = "com.lifeops.briefing"
@@ -14,6 +28,11 @@ android {
         targetSdk = 37
         versionCode = 1
         versionName = "0.1.0"
+        buildConfigField("String", "NTFY_SIGNAL_TOPIC", "\"$ntfySignalTopic\"")
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     buildTypes {
@@ -45,6 +64,9 @@ kotlin {
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20250517")
+
     implementation("androidx.core:core-ktx:1.19.0")
 
     // Jetpack Glance, for building the home-screen widget UI.

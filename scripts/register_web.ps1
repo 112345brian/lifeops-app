@@ -2,6 +2,8 @@
 # PRIVATELY over Tailscale (HTTPS, your tailnet only — never the public internet).
 # Run once from the project root.
 
+$ErrorActionPreference = "Stop"
+
 # pythonw.exe = no console window
 $pyw = (Get-Command python).Source -replace 'python\.exe$', 'pythonw.exe'
 if (-not (Test-Path $pyw)) { $pyw = (Get-Command python).Source }
@@ -15,11 +17,24 @@ $me   = "$env:USERDOMAIN\$env:USERNAME"
 $action  = New-ScheduledTaskAction -Execute $pyw -Argument "-m lifeops.web" -WorkingDirectory $proj
 # Scope the logon trigger + principal to the current user — an unscoped -AtLogOn
 # ("any user") requires admin to register; per-user does not.
-$trigger   = New-ScheduledTaskTrigger -AtLogOn -User $me
+$logonTrigger = New-ScheduledTaskTrigger -AtLogOn -User $me
+# Backstop: RestartCount only covers 3 restarts within 1-minute intervals --
+# once exhausted, an AtLogOn-only task stays dead until the NEXT logon/reboot
+# (could be days on a machine left signed in). This periodic trigger re-fires
+# every 10 min indefinitely; MultipleInstances=IgnoreNew makes it a safe no-op
+# whenever the panel is already running, and a real relaunch whenever it's
+# dead -- unbounded self-healing instead of "3 tries then wait for a reboot."
+$backstopTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) `
+                 -RepetitionInterval (New-TimeSpan -Minutes 10) `
+                 -RepetitionDuration (New-TimeSpan -Days 3650)
 $principal = New-ScheduledTaskPrincipal -UserId $me -LogonType Interactive -RunLevel Limited
+# ExecutionTimeLimit 0 = no time limit (long-running). RestartCount/Interval
+# relaunch it if it dies silently instead of leaving Task Scheduler reporting
+# a stale "Running" state forever.
 $settings  = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew `
-             -Hidden -ExecutionTimeLimit (New-TimeSpan -Seconds 0)   # no time limit (long-running)
-Register-ScheduledTask -TaskName "LifeOps-web" -Action $action -Trigger $trigger `
+             -Hidden -ExecutionTimeLimit (New-TimeSpan -Seconds 0) `
+             -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+Register-ScheduledTask -TaskName "LifeOps-web" -Action $action -Trigger $logonTrigger, $backstopTrigger `
   -Principal $principal -Settings $settings `
   -Description "LifeOps control panel (uvicorn 127.0.0.1:8765)" -Force
 Start-ScheduledTask -TaskName "LifeOps-web"

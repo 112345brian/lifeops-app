@@ -28,6 +28,26 @@ def _with_retry(fn):
             last = e
             if attempt < _RETRIES:
                 time.sleep(_BACKOFF * (2 ** attempt))
+        except requests.exceptions.HTTPError as e:
+            # A 429 is safe to retry even for POST/PUT (unlike other
+            # non-2xx responses): the server is saying it REJECTED the
+            # request before doing anything, not that it processed it
+            # ambiguously -- the concern the ConnectionError-only policy
+            # above exists for doesn't apply here. Every gather.py/runner.py
+            # call site currently swallows a persistent failure to an empty
+            # result with no distinction from genuine emptiness, so retrying
+            # transient rate-limiting here (rather than at every call site)
+            # is the cheapest place to reduce how often that happens.
+            if e.response is not None and e.response.status_code == 429 and attempt < _RETRIES:
+                last = e
+                retry_after = e.response.headers.get("Retry-After")
+                try:
+                    delay = float(retry_after) if retry_after else _BACKOFF * (2 ** attempt)
+                except ValueError:
+                    delay = _BACKOFF * (2 ** attempt)
+                time.sleep(delay)
+                continue
+            raise
     raise last
 
 class FlowSavvy:

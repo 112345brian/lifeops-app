@@ -1,5 +1,6 @@
 """ntfy client — read phone signals, send alerts. No auth (public topics)."""
 import time, requests
+from urllib.parse import quote
 from . import config
 
 def poll(since=0):
@@ -51,8 +52,28 @@ def panel_url(path=""):
     joined straight onto the base (a page route like "gym", optionally with
     a "#section" anchor like "settings#accounts") since the panel is split
     across pages, not a single scrollable one. Returns None (omit Click
-    entirely) if PANEL_URL isn't configured."""
+    entirely) if PANEL_URL isn't configured.
+
+    Deliberately NEVER includes WEB_TOKEN: this URL travels inside an ntfy
+    "Click" header, which ntfy.sh relays over a PUBLIC, unauthenticated
+    topic (see this module's docstring). A prior version put the token here
+    so notification taps wouldn't 401 -- that leaked the real shared secret
+    to anyone who knows/guesses the alerts topic, fully defeating WEB_TOKEN
+    as a gate (caught 2026-07-12, never shipped past same-day). A
+    notification tap will 401 if there's no cookie yet; open the panel via
+    the widget instead (OpenPanelAction.kt), which reads WEB_TOKEN from
+    on-device EncryptedSharedPreferences and never sends it over ntfy."""
     if not config.PANEL_URL:
         return None
     base = config.PANEL_URL.rstrip("/")
-    return f"{base}/{path}" if path else base
+    page, _, frag = path.partition("#")
+    # Every current call site passes a static route literal ("gym",
+    # "settings#accounts"), so this is defensive rather than fixing a live
+    # bug -- but quoting is what makes it safe to ever build `path` from
+    # dynamic text (a task title, an event label) without a `&`/`#`/`%`
+    # silently truncating or corrupting the URL.
+    page, frag = quote(page, safe="/"), quote(frag)
+    url = f"{base}/{page}" if page else base
+    if frag:
+        url += f"#{frag}"
+    return url

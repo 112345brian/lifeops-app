@@ -3,6 +3,7 @@ package com.lifeops.briefing
 import android.content.Context
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.Color
 import androidx.datastore.preferences.core.Preferences
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
@@ -20,14 +21,20 @@ import androidx.glance.layout.Row
 import androidx.glance.layout.Spacer
 import androidx.glance.layout.fillMaxSize
 import androidx.glance.layout.fillMaxWidth
+import androidx.glance.layout.height
 import androidx.glance.layout.padding
 import androidx.glance.layout.width
 import androidx.glance.text.FontWeight
 import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
+import androidx.glance.unit.ColorProvider
 import com.lifeops.briefing.data.BriefingState
 import com.lifeops.briefing.data.NextTask
 import com.lifeops.briefing.data.NextTasksState
+import com.lifeops.briefing.data.TodayEvent
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeParseException
 
 /**
  * The Glance widget itself: describes what to render for each widget instance.
@@ -49,10 +56,22 @@ class BriefingWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         provideContent {
             val prefs = currentState<Preferences>()
+            // One malformed persisted field (e.g. a task object missing its
+            // required "id") must not blank the ENTIRE widget -- fall back
+            // to empty for just that piece rather than letting a JSONException
+            // escape provideContent and take down title/text/stats/events too.
             val briefingJson = prefs[WidgetKeys.BRIEFING_JSON]
-            val briefing = if (briefingJson != null) BriefingState.fromJson(briefingJson) else BriefingState.empty()
+            val briefing = try {
+                if (briefingJson != null) BriefingState.fromJson(briefingJson) else BriefingState.empty()
+            } catch (e: org.json.JSONException) {
+                BriefingState.empty()
+            }
             val nextTasksJson = prefs[WidgetKeys.NEXT_TASKS_JSON]
-            val nextTasks = if (nextTasksJson != null) NextTasksState.fromJson(nextTasksJson) else NextTasksState.empty()
+            val nextTasks = try {
+                if (nextTasksJson != null) NextTasksState.fromJson(nextTasksJson) else NextTasksState.empty()
+            } catch (e: org.json.JSONException) {
+                NextTasksState.empty()
+            }
 
             GlanceTheme {
                 BriefingContent(briefing, nextTasks)
@@ -69,16 +88,23 @@ private fun BriefingContent(state: BriefingState, nextTasks: NextTasksState) {
             .padding(12.dp)
             .clickable(actionRunCallback<OpenPanelAction>()),
     ) {
-        Text(
-            text = "LifeOps Briefing",
-            style = TextStyle(
-                fontWeight = FontWeight.Bold,
-                color = GlanceTheme.colors.onSurface,
-            ),
-        )
-
-        Spacer(modifier = GlanceModifier.width(4.dp))
-
+        if (state.attentionState != null) {
+            val statusColor = when (state.attentionState) {
+                "fucked" -> Color(0xFFB3261E)
+                "risk" -> Color(0xFFC25100)
+                "watch" -> Color(0xFF8A5A00)
+                else -> Color(0xFF276B5E)
+            }
+            Text(
+                text = "${state.attentionSymbol ?: "●"} ${state.attentionLabel ?: state.attentionState.uppercase()}",
+                style = TextStyle(fontWeight = FontWeight.Bold, color = ColorProvider(statusColor)),
+            )
+            state.attentionHeadline?.let {
+                Text(text = it, style = TextStyle(fontWeight = FontWeight.Bold,
+                    color = GlanceTheme.colors.onSurface))
+            }
+            Spacer(modifier = GlanceModifier.height(6.dp))
+        }
         if (state.text == null) {
             Text(
                 text = "No briefing yet — tap to configure",
@@ -105,8 +131,13 @@ private fun BriefingContent(state: BriefingState, nextTasks: NextTasksState) {
 
             // Stat row -- only the facts that are present.
             val stats = buildList {
-                if (state.gymThisWeek != null && state.gymTarget != null) {
-                    add("Gym ${state.gymThisWeek}/${state.gymTarget}")
+                if (state.gymLast7d != null && state.gymTarget != null) {
+                    // "(7d)" makes the rolling window explicit -- this used
+                    // to read "Gym 2/4" with no window indicated at all,
+                    // which read as a calendar-week count even after the
+                    // underlying number became a rolling trailing-7-day one
+                    // (2026-07-12).
+                    add("Gym ${state.gymLast7d}/${state.gymTarget} (7d)")
                 }
                 if (state.discretionaryDollars != null) {
                     add("$${state.discretionaryDollars}")
@@ -138,8 +169,27 @@ private fun BriefingContent(state: BriefingState, nextTasks: NextTasksState) {
             }
         }
 
+        // Today's real calendar events -- shown above "Up next" and
+        // independent of the LLM-generated briefing text, since a $0 family
+        // event or anything not framed as "at risk" would otherwise never
+        // surface (confirmed 2026-07-12: a same-day BBQ went unmentioned
+        // because it wasn't a risk/deadline). This is the deterministic
+        // "don't forget you have an obligation" line, not advisory.
+        if (nextTasks.events.isNotEmpty()) {
+            Spacer(modifier = GlanceModifier.height(8.dp))
+            for (event in nextTasks.events) {
+                Text(
+                    text = formatEventLine(event),
+                    style = TextStyle(
+                        fontWeight = FontWeight.Bold,
+                        color = GlanceTheme.colors.onSurface,
+                    ),
+                )
+            }
+        }
+
         if (nextTasks.tasks.isNotEmpty()) {
-            Spacer(modifier = GlanceModifier.width(8.dp))
+            Spacer(modifier = GlanceModifier.height(8.dp))
             Text(
                 text = "Up next",
                 style = TextStyle(
@@ -194,6 +244,22 @@ private fun parseMarkupLine(line: String): List<Pair<String, Boolean>> {
         result.add(line to false)
     }
     return result
+}
+
+private val EVENT_TIME_FORMAT = DateTimeFormatter.ofPattern("h:mm a")
+
+/** "Jane BBQ at Papa's @ 6:00 PM", or just the title if [event]'s start
+ * couldn't be parsed (malformed/missing -- show the obligation anyway
+ * rather than dropping it). */
+private fun formatEventLine(event: TodayEvent): String {
+    val time = event.start?.let {
+        try {
+            LocalDateTime.parse(it).format(EVENT_TIME_FORMAT)
+        } catch (e: DateTimeParseException) {
+            null
+        }
+    }
+    return if (time != null) "${event.title} @ $time" else event.title
 }
 
 /** Coarse "Xm/Xh/Xd ago" label from an epoch-millis timestamp to now. */

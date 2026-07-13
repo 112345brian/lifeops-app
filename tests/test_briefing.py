@@ -52,9 +52,9 @@ def test_briefing_builds_facts_alerts_and_persists(sandbox):
     assert "M08 Paper" in f["due_today"]              # due in 12h → today
     assert "M09 Reading" not in f["due_today"]        # due in 100h → not today
     assert f["coursework_at_risk"]                    # load_engine flagged the heavy+soon paper
-    assert f["gym_this_week"] == 2                    # two gym days this week
+    assert f["gym_last_7d"] == 2                       # two gym days in the trailing 7
     assert f["discretionary_dollars"] == 42
-    assert f["upcoming_paid_events"] == ["Concert in 3d (~$40)"]
+    assert f["upcoming_paid_events"] == ["Concert in 3d"]
 
 
 def test_briefing_skips_without_api_key(sandbox, monkeypatch):

@@ -1,0 +1,271 @@
+<title>lifeops widget</title>
+<style>
+:root{
+  --ink:#1c1a22;
+  --paper:#f6f2ea;
+  --card:#ffffff;
+  --card-shade:#efeae0;
+  --line:rgba(28,26,34,0.12);
+  --line-strong:rgba(28,26,34,0.22);
+  --muted:#6f6a63;
+  --accent:#5b4a8f;
+  --accent-soft:#e9e4f5;
+  --teal:#276b5e;
+  --teal-soft:#deeee9;
+  --amber:#a8641f;
+  --amber-soft:#f5e6d3;
+  --red:#a13d33;
+  --red-soft:#f3e0dc;
+  --shadow: 0 1px 2px rgba(28,26,34,0.06);
+  --font-display: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
+  --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --ink:#f1ede4;
+    --paper:#141318;
+    --card:#1e1c24;
+    --card-shade:#26232d;
+    --line:rgba(241,237,228,0.12);
+    --line-strong:rgba(241,237,228,0.22);
+    --muted:#a39d92;
+    --accent:#b3a2e6;
+    --accent-soft:#2c2740;
+    --teal:#7fd0bb;
+    --teal-soft:#1c332e;
+    --amber:#e3a866;
+    --amber-soft:#3a2c18;
+    --red:#e08b7d;
+    --red-soft:#3a231f;
+    --shadow: 0 1px 2px rgba(0,0,0,0.4);
+  }
+}
+:root[data-theme="dark"]{
+  --ink:#f1ede4; --paper:#141318; --card:#1e1c24; --card-shade:#26232d;
+  --line:rgba(241,237,228,0.12); --line-strong:rgba(241,237,228,0.22); --muted:#a39d92;
+  --accent:#b3a2e6; --accent-soft:#2c2740; --teal:#7fd0bb; --teal-soft:#1c332e;
+  --amber:#e3a866; --amber-soft:#3a2c18; --red:#e08b7d; --red-soft:#3a231f;
+  --shadow: 0 1px 2px rgba(0,0,0,0.4);
+}
+:root[data-theme="light"]{
+  --ink:#1c1a22; --paper:#f6f2ea; --card:#ffffff; --card-shade:#efeae0;
+  --line:rgba(28,26,34,0.12); --line-strong:rgba(28,26,34,0.22); --muted:#6f6a63;
+  --accent:#5b4a8f; --accent-soft:#e9e4f5; --teal:#276b5e; --teal-soft:#deeee9;
+  --amber:#a8641f; --amber-soft:#f5e6d3; --red:#a13d33; --red-soft:#f3e0dc;
+  --shadow: 0 1px 2px rgba(28,26,34,0.06);
+}
+*{box-sizing:border-box;}
+body,.root{color:var(--ink); font-family:var(--font-body);}
+.wrap{padding:1.5rem 0; display:flex; flex-direction:column; gap:2.5rem;}
+.eyebrow{font-size:12px; text-transform:uppercase; letter-spacing:0.08em; color:var(--muted); margin:0 0 4px;}
+h2.section-title{font-family:var(--font-display); font-weight:400; font-size:20px; margin:0; text-wrap:balance;}
+.section-note{font-size:13.5px; color:var(--muted); margin:6px 0 0; max-width:62ch; line-height:1.6;}
+
+.stage{display:flex; gap:2.25rem; flex-wrap:wrap; align-items:flex-start; justify-content:center;}
+
+/* ---- phone frame ---- */
+.phone{
+  width:272px; border-radius:34px; background:var(--paper);
+  border:1px solid var(--line-strong); padding:10px 10px 18px;
+  box-shadow: var(--shadow);
+}
+.phone-screen{
+  border-radius:26px; background:var(--paper); min-height:480px;
+  display:flex; flex-direction:column; position:relative; overflow:hidden;
+}
+.status-row{display:flex; justify-content:space-between; font-size:11px; color:var(--muted); padding:8px 14px 2px; font-family:var(--font-mono);}
+.clock-block{text-align:center; padding:10px 0 14px;}
+.clock-time{font-family:var(--font-display); font-size:44px; line-height:1; letter-spacing:-0.01em;}
+.clock-date{font-size:12px; color:var(--muted); margin-top:4px; text-transform:uppercase; letter-spacing:0.06em;}
+
+/* ---- widget card ---- */
+.widget-card{
+  margin:0 10px; background:var(--card); border:1px solid var(--line);
+  border-radius:18px; padding:13px 14px 12px; box-shadow:var(--shadow);
+  display:flex; flex-direction:column; gap:9px;
+}
+.widget-headline{font-size:14px; line-height:1.4; margin:0;}
+.widget-headline b{font-weight:600;}
+.widget-event{
+  display:flex; align-items:baseline; gap:6px; font-size:12.5px;
+  color:var(--accent); font-weight:600;
+}
+.widget-event .dot{width:5px; height:5px; border-radius:50%; background:var(--accent); flex:none;}
+
+.stat-strip{display:flex; gap:6px;}
+.stat-chip{
+  flex:1; background:var(--card-shade); border-radius:10px; padding:6px 7px;
+  display:flex; flex-direction:column; gap:2px; min-width:0;
+}
+.stat-chip .k{font-size:9.5px; text-transform:uppercase; letter-spacing:0.05em; color:var(--muted);}
+.stat-chip .v{font-family:var(--font-mono); font-size:13px; font-variant-numeric:tabular-nums; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.stat-chip.teal .v{color:var(--teal);}
+.stat-chip.amber .v{color:var(--amber);}
+
+.task-row{display:flex; align-items:center; gap:8px; font-size:13px; padding:2px 0;}
+.chk{width:16px; height:16px; border-radius:5px; border:1.5px solid var(--line-strong); flex:none;}
+.task-row.next .chk{border-color:var(--accent);}
+.task-row s{color:var(--muted);}
+.up-next-label{font-size:10.5px; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin-top:2px;}
+.asof{font-size:10.5px; color:var(--muted); text-align:right; margin-top:2px;}
+
+.frame-label{text-align:center; font-size:12px; color:var(--muted); margin-top:12px;}
+.frame-label b{color:var(--ink); font-weight:600;}
+
+/* ---- expanded briefing screen ---- */
+.briefing-screen{background:var(--card); flex:1; display:flex; flex-direction:column;}
+.briefing-topbar{
+  display:flex; align-items:center; justify-content:space-between;
+  padding:14px 16px 10px; border-bottom:1px solid var(--line);
+}
+.briefing-topbar .title{font-family:var(--font-display); font-size:17px;}
+.briefing-topbar .close{font-size:16px; color:var(--muted);}
+.briefing-body{padding:14px 16px 18px; display:flex; flex-direction:column; gap:16px; overflow-y:auto;}
+.briefing-lede{font-size:14.5px; line-height:1.55;}
+.briefing-lede b{font-weight:600; color:var(--accent);}
+
+.stat-grid{display:grid; grid-template-columns:1fr 1fr; gap:8px;}
+.stat-card{background:var(--card-shade); border-radius:12px; padding:10px 11px; display:flex; flex-direction:column; gap:3px;}
+.stat-card .k{font-size:10px; text-transform:uppercase; letter-spacing:0.05em; color:var(--muted);}
+.stat-card .v{font-family:var(--font-mono); font-size:17px; font-variant-numeric:tabular-nums;}
+.stat-card .sub{font-size:11px; color:var(--muted);}
+.stat-card.teal{background:var(--teal-soft);} .stat-card.teal .v{color:var(--teal);}
+.stat-card.amber{background:var(--amber-soft);} .stat-card.amber .v{color:var(--amber);}
+
+.block-title{font-size:11px; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin:0 0 8px;}
+.event-line{display:flex; gap:8px; align-items:baseline; font-size:13.5px; font-weight:600; padding:5px 0;}
+.event-line time{font-family:var(--font-mono); font-weight:400; color:var(--muted); font-size:12px;}
+
+.task-list{display:flex; flex-direction:column; gap:1px; border-top:1px solid var(--line);}
+.task-item{display:flex; align-items:center; gap:10px; padding:9px 2px; border-bottom:1px solid var(--line);}
+.task-item .chk{width:18px; height:18px; border-radius:6px; border:1.5px solid var(--line-strong);}
+.task-item .body{flex:1; min-width:0;}
+.task-item .t{font-size:13.5px;}
+.task-item .meta{font-size:11px; color:var(--muted); margin-top:1px;}
+.risk-pill{font-size:10px; padding:2px 7px; border-radius:99px; font-weight:600; flex:none;}
+.risk-pill.high{background:var(--red-soft); color:var(--red);}
+.risk-pill.med{background:var(--amber-soft); color:var(--amber);}
+
+.cashflow{display:flex; align-items:flex-end; gap:4px; height:44px; margin-top:6px;}
+.cashflow .bar{flex:1; background:var(--accent-soft); border-radius:3px 3px 0 0; position:relative;}
+.cashflow .bar.neg{background:var(--red-soft);}
+.cashflow-caption{display:flex; justify-content:space-between; font-size:10px; color:var(--muted); margin-top:4px; font-family:var(--font-mono);}
+
+.legend{display:flex; gap:14px; flex-wrap:wrap; font-size:12px; color:var(--muted); margin-top:.25rem;}
+.legend span{display:inline-flex; align-items:center; gap:6px;}
+.legend i{width:9px; height:9px; border-radius:3px; display:inline-block;}
+</style>
+
+<div class="root wrap">
+
+  <div>
+    <p class="eyebrow">Concept &middot; 01</p>
+    <h2 class="section-title">The lock-screen glance</h2>
+    <p class="section-note">One line telling you what actually matters right now &mdash; not a task count. Below it, three numbers you'd otherwise have to open three different apps to check, and the next thing you can check off without unlocking your phone.</p>
+  </div>
+
+  <div class="stage">
+    <div>
+      <div class="phone">
+        <div class="phone-screen">
+          <div class="status-row"><span>9:41</span><span>&#9679;&#9679;&#9679; 82%</span></div>
+          <div class="clock-block">
+            <div class="clock-time">2:14</div>
+            <div class="clock-date">Sunday, July 12</div>
+          </div>
+
+          <div class="widget-card">
+            <p class="widget-headline">Finish the <b>reading</b> before the BBQ &mdash; about 40 min left.</p>
+            <div class="widget-event"><span class="dot"></span>Papa's family BBQ @ 6:00 PM</div>
+
+            <div class="stat-strip">
+              <div class="stat-chip teal"><span class="k">Gym</span><span class="v">2 / 3</span></div>
+              <div class="stat-chip amber"><span class="k">Spare</span><span class="v">$340</span></div>
+              <div class="stat-chip"><span class="k">Coursework</span><span class="v">6.5h</span></div>
+            </div>
+
+            <div>
+              <p class="up-next-label">Up next</p>
+              <div class="task-row next"><span class="chk"></span> Finish ML reading, ch. 4</div>
+              <div class="task-row"><span class="chk" style="border-color:var(--line)"></span> <s>Reply to landlord</s></div>
+            </div>
+            <p class="asof">as of 12m ago</p>
+          </div>
+        </div>
+      </div>
+      <p class="frame-label">Home screen &middot; <b>4&times;2 widget</b></p>
+    </div>
+
+    <div>
+      <div class="phone" style="padding-bottom:10px;">
+        <div class="phone-screen briefing-screen" style="min-height:560px;">
+          <div class="briefing-topbar">
+            <span class="title">Today</span>
+            <span class="close">&times;</span>
+          </div>
+          <div class="briefing-body">
+            <p class="briefing-lede">Finish the <b>ML reading</b> before the BBQ &mdash; you've got roughly 40 minutes of slack if you leave the apartment by 5:15. Rent clears Tuesday, so don't count this week's spare cash toward it.</p>
+
+            <div>
+              <p class="block-title">Today</p>
+              <div class="event-line">Papa's family BBQ <time>6:00 PM</time></div>
+              <div class="event-line" style="font-weight:400;">Gym, if you go tonight <time>7:30 PM</time></div>
+            </div>
+
+            <div class="stat-grid">
+              <div class="stat-card teal"><span class="k">Gym this week</span><span class="v">2 / 3</span><span class="sub">1 more by Sunday</span></div>
+              <div class="stat-card amber"><span class="k">Spare this week</span><span class="v">$340</span><span class="sub">after bills, before fun</span></div>
+              <div class="stat-card"><span class="k">Coursework due</span><span class="v">6.5h</span><span class="sub">next 7 days</span></div>
+              <div class="stat-card"><span class="k">Next paycheck</span><span class="v">4d</span><span class="sub">Thu, Jul 16</span></div>
+            </div>
+
+            <div>
+              <p class="block-title">Cash flow, next 4 weeks</p>
+              <div class="cashflow">
+                <div class="bar" style="height:70%"></div>
+                <div class="bar" style="height:40%"></div>
+                <div class="bar neg" style="height:22%"></div>
+                <div class="bar" style="height:55%"></div>
+              </div>
+              <div class="cashflow-caption"><span>Jul 12</span><span>Jul 19</span><span>Jul 26</span><span>Aug 2</span></div>
+            </div>
+
+            <div>
+              <p class="block-title">Tasks</p>
+              <div class="task-list">
+                <div class="task-item">
+                  <span class="chk" style="border-color:var(--accent)"></span>
+                  <div class="body"><div class="t">Finish ML reading, ch. 4</div><div class="meta">due before BBQ &middot; ~40 min</div></div>
+                </div>
+                <div class="task-item">
+                  <span class="chk"></span>
+                  <div class="body"><div class="t">Problem set 3</div><div class="meta">due Wed &middot; 2h estimated</div></div>
+                  <span class="risk-pill med">at risk</span>
+                </div>
+                <div class="task-item">
+                  <span class="chk"></span>
+                  <div class="body"><div class="t">Renew car registration</div><div class="meta">due in 3 days</div></div>
+                  <span class="risk-pill high">overdue soon</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="frame-label">Tap the widget &rarr; <b>full briefing</b></p>
+    </div>
+  </div>
+
+  <div>
+    <p class="eyebrow">Concept &middot; 02</p>
+    <h2 class="section-title">What makes the widget change</h2>
+    <p class="section-note">Not a dumb hourly refresh &mdash; the headline updates when something on the ground actually changes.</p>
+    <div class="legend">
+      <span><i style="background:var(--accent)"></i>Hourly tick &mdash; re-render with current time-of-day framing</span>
+      <span><i style="background:var(--teal)"></i>Task checked off &mdash; instantly promote the next one</span>
+      <span><i style="background:var(--amber)"></i>New push from server &mdash; deadline risk, calendar change, or money shift</span>
+    </div>
+  </div>
+
+</div>
