@@ -338,8 +338,9 @@ def push_next_tasks(fs, now, args):
     schedule_items = gather._upcoming_schedule(fs, now)
     tasks = gather.next_tasks_input(fs, now, 3, schedule_items=schedule_items)
     events = gather.today_events_input(fs, now, schedule_items=schedule_items)
-    snapshot = {"tasks": tasks, "events": events}
-    _push_with_ack("next_tasks", snapshot, lambda version: notify.push_next_tasks(tasks, events, version))
+    gym_ring = gather.gym_ring_now(fs, now)
+    snapshot = {"tasks": tasks, "events": events, "gym_ring": gym_ring}
+    _push_with_ack("next_tasks", snapshot, lambda version: notify.push_next_tasks(tasks, events, gym_ring, version))
 
 def _alert_once(key, text, priority="default", tags=None, actions=None, click_anchor=""):
     """Send an alert at most once per calendar day per key. The tick runs every
@@ -832,11 +833,9 @@ def run_briefing(fs, yn, now):
     # with how the system actually judges "healthy" cadence and could look
     # arbitrarily bad/good purely based on which weekday it happened to be
     # (confirmed 2026-07-12).
-    trail_start = (today - datetime.timedelta(days=6)).isoformat()
-    trail_end = today.isoformat()
-    gym_dates = history.days_with("gym", trail_start, trail_end)
-    gym_last_7d = len(gym_dates - history.days_with("gym_skip", trail_start, trail_end))
-    trained_today = today.isoformat() in gym_dates
+    gym_ring = gather.gym_ring_now(fs, now)
+    gym_last_7d = gym_ring["gym_last_7d"]
+    trained_today = gym_ring["today_done"]
 
     # money: discretionary balance + the nearest upcoming paid social events
     try:
@@ -856,7 +855,7 @@ def run_briefing(fs, yn, now):
              "overdue": overdue,
              "coursework_hours_next_7d": load_7d_h,
              "gym_last_7d": gym_last_7d, "gym_target": 4,
-             "trained_today": trained_today,
+             "trained_today": trained_today, "gym_ring": gym_ring,
              "discretionary_dollars": fun_money, "upcoming_paid_events": upcoming}
     facts["attention"] = attention.compute(facts)
     try:

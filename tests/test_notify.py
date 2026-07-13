@@ -31,9 +31,9 @@ def test_push_briefing_routes_to_fcm(monkeypatch):
 def test_push_next_tasks_routes_to_fcm(monkeypatch):
     calls = []
     monkeypatch.setattr(notify.fcm, "send_next_tasks",
-                        lambda tasks, events, version: calls.append((tasks, events, version)) or True)
+                        lambda tasks, events, gym_ring, version: calls.append((tasks, events, gym_ring, version)) or True)
 
-    result = notify.push_next_tasks([{"id": "1"}], [{"title": "BBQ"}], "abc123")
+    result = notify.push_next_tasks([{"id": "1"}], [{"title": "BBQ"}], {"fill": 0.5, "color": "yellow"}, "abc123")
 
-    assert calls == [([{"id": "1"}], [{"title": "BBQ"}], "abc123")]
+    assert calls == [([{"id": "1"}], [{"title": "BBQ"}], {"fill": 0.5, "color": "yellow"}, "abc123")]
     assert result is True

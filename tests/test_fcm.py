@@ -50,7 +50,7 @@ def test_send_briefing_noop_without_registered_token(tmp_path, monkeypatch):
 def test_send_next_tasks_noop_without_registered_token(tmp_path, monkeypatch):
     monkeypatch.setattr(history, "ROOT", str(tmp_path))
 
-    assert fcm.send_next_tasks([{"id": "1"}], [{"title": "BBQ"}], "v1") is False
+    assert fcm.send_next_tasks([{"id": "1"}], [{"title": "BBQ"}], {"fill": 0.5, "color": "yellow"}, "v1") is False
 
 
 def test_send_briefing_and_next_tasks_use_distinct_message_types(tmp_path, monkeypatch):
@@ -63,11 +63,11 @@ def test_send_briefing_and_next_tasks_use_distinct_message_types(tmp_path, monke
                         lambda msg_type, payload, version: calls.append((msg_type, payload, version)))
 
     fcm.send_briefing("2026-07-13", "text", {"gym": 2}, "v1")
-    fcm.send_next_tasks([{"id": "1"}], [{"title": "BBQ"}], "v2")
+    fcm.send_next_tasks([{"id": "1"}], [{"title": "BBQ"}], {"fill": 0.5, "color": "yellow"}, "v2")
 
     assert calls == [
         ("briefing", {"date": "2026-07-13", "text": "text", "facts": {"gym": 2}}, "v1"),
-        ("next_tasks", {"tasks": [{"id": "1"}], "events": [{"title": "BBQ"}]}, "v2"),
+        ("next_tasks", {"tasks": [{"id": "1"}], "events": [{"title": "BBQ"}], "gym_ring": {"fill": 0.5, "color": "yellow"}}, "v2"),
     ]
 
 
@@ -86,7 +86,7 @@ def test_send_embeds_version_in_message_data_for_ack_round_trip(tmp_path, monkey
     sent = []
     monkeypatch.setattr(messaging, "send", lambda message, app: sent.append(message))
 
-    result = fcm.send_next_tasks([{"id": "1"}], [], "abc123")
+    result = fcm.send_next_tasks([{"id": "1"}], [], {"fill": 0.0, "color": "red"}, "abc123")
 
     assert result is True
     assert len(sent) == 1

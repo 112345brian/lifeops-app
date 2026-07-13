@@ -597,7 +597,8 @@ def _tasks_and_events(fs, now, n):
     return a false-empty result. Callers decide how to surface that."""
     schedule_items = gather._upcoming_schedule(fs, now)
     return {"tasks": gather.next_tasks_input(fs, now, n, schedule_items=schedule_items),
-            "events": gather.today_events_input(fs, now, schedule_items=schedule_items)}
+            "events": gather.today_events_input(fs, now, schedule_items=schedule_items),
+            "gym_ring": gather.gym_ring_now(fs, now)}
 
 @app.get("/api/next-tasks")
 def api_next_tasks(n: int = 3):

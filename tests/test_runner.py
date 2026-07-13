@@ -156,9 +156,10 @@ class _NextTasksFakeFlowSavvy:
 
 def test_push_next_tasks_skipped_on_signal_tier(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
+    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "logs" / "history.jsonl"))
     (tmp_path / "logs").mkdir(exist_ok=True)
     calls = []
-    monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, version: calls.append((tasks, events, version)) or True)
+    monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, gym_ring, version: calls.append((tasks, events, version)) or True)
 
     runner.push_next_tasks(_NextTasksFakeFlowSavvy(), datetime.datetime(2026, 7, 13, 9, 0), ["signal"])
 
@@ -167,9 +168,10 @@ def test_push_next_tasks_skipped_on_signal_tier(tmp_path, monkeypatch):
 
 def test_push_next_tasks_fires_on_tick_tier(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
+    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "logs" / "history.jsonl"))
     (tmp_path / "logs").mkdir(exist_ok=True)
     calls = []
-    monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, version: calls.append((tasks, events, version)) or True)
+    monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, gym_ring, version: calls.append((tasks, events, version)) or True)
 
     runner.push_next_tasks(_NextTasksFakeFlowSavvy(), datetime.datetime(2026, 7, 13, 9, 0), ["tick"])
 
@@ -184,9 +186,10 @@ def test_push_next_tasks_retries_unacked_push_even_if_unchanged(tmp_path, monkey
     identical content -- "unacked" is exactly the signal the last attempt
     may not have landed (see _push_with_ack)."""
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
+    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "logs" / "history.jsonl"))
     (tmp_path / "logs").mkdir(exist_ok=True)
     calls = []
-    monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, version: calls.append((tasks, events, version)) or True)
+    monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, gym_ring, version: calls.append((tasks, events, version)) or True)
     fs = _NextTasksFakeFlowSavvy()
     now = datetime.datetime(2026, 7, 13, 9, 0)
 
@@ -198,9 +201,10 @@ def test_push_next_tasks_retries_unacked_push_even_if_unchanged(tmp_path, monkey
 
 def test_push_next_tasks_skips_send_when_unchanged_and_acked(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
+    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "logs" / "history.jsonl"))
     (tmp_path / "logs").mkdir(exist_ok=True)
     calls = []
-    monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, version: calls.append((tasks, events, version)) or True)
+    monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, gym_ring, version: calls.append((tasks, events, version)) or True)
     fs = _NextTasksFakeFlowSavvy()
     now = datetime.datetime(2026, 7, 13, 9, 0)
 
@@ -213,9 +217,10 @@ def test_push_next_tasks_skips_send_when_unchanged_and_acked(tmp_path, monkeypat
 
 def test_push_next_tasks_sends_again_when_changed(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
+    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "logs" / "history.jsonl"))
     (tmp_path / "logs").mkdir(exist_ok=True)
     calls = []
-    monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, version: calls.append((tasks, events, version)) or True)
+    monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, gym_ring, version: calls.append((tasks, events, version)) or True)
     now = datetime.datetime(2026, 7, 13, 9, 0)
 
     runner.push_next_tasks(_NextTasksFakeFlowSavvy(), now, ["tick"])
@@ -237,7 +242,7 @@ def test_ingest_ack_signal_marks_push_acked(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "logs" / "history.jsonl"))
     (tmp_path / "logs").mkdir(exist_ok=True)
     calls = []
-    monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, version: calls.append(version) or True)
+    monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, gym_ring, version: calls.append(version) or True)
 
     runner.push_next_tasks(_NextTasksFakeFlowSavvy(), datetime.datetime(2026, 7, 13, 9, 0), ["tick"])
     version = calls[0]

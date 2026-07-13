@@ -109,11 +109,11 @@ def send_briefing(date, text, facts, version):
     delivery-reliability reasoning and return value."""
     return _send("briefing", {"date": date, "text": text, "facts": facts}, version)
 
-def send_next_tasks(tasks, events, version):
+def send_next_tasks(tasks, events, gym_ring, version):
     """Pushes a fresh next-tasks + today's-events snapshot -- the
     Tailscale-independent counterpart to NextTasksRefreshWorker's periodic
     direct pull, which stays in place as a self-heal fallback for the rare
     case a push gets dropped (FCM data-message delivery isn't guaranteed
     either, just far more often reachable than the tailnet). See _send's
     docstring for the return value."""
-    return _send("next_tasks", {"tasks": tasks, "events": events}, version)
+    return _send("next_tasks", {"tasks": tasks, "events": events, "gym_ring": gym_ring}, version)
