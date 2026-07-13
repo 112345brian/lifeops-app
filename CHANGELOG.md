@@ -4,6 +4,24 @@ Notable changes, newest first. Personal project, versioned simply (see
 `VERSION` / `lifeops.__version__`) — dates and the reasoning behind each
 change matter more here than semver strictness.
 
+## [1.7.0] — 2026-07-13
+
+### Added
+- **Gym ring widget indicator.** The single N/target ratio tried to answer
+  two questions at once -- "how healthy is recent adherence" and "do I
+  need to go today" -- and they don't move together. Split into two
+  decoupled channels: `fill` is the pure trailing-7-day adherence ratio
+  (only grows via real logged sessions, never inflated by completing
+  today's session), `color` is a same-day action signal (red = zero
+  sessions in 7d, yellow = still need to go today, green = today's
+  session done or nothing scheduled while at/above target).
+  `gather.gym_ring_now()` is now shared by the daily briefing, the
+  ~10-min `next_tasks` FCM push, and the direct task-completion API, so
+  a checkbox tap on the tailnet gets an instantly fresh ring. Rendered
+  on Android as a bitmap-drawn ring (Glance has no native arc primitive)
+  with the gym emoji layered on top, falling back to the old plain bar
+  if a ring hasn't loaded yet.
+
 ## [1.6.0] — 2026-07-13
 
 ### Added
