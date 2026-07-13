@@ -4,6 +4,25 @@ Notable changes, newest first. Personal project, versioned simply (see
 `VERSION` / `lifeops.__version__`) — dates and the reasoning behind each
 change matter more here than semver strictness.
 
+## [1.9.0] — 2026-07-13
+
+### Added
+- **Hardened optimistic task completion.** `PendingRemovals` already
+  masked an optimistically-completed task from fresh next-tasks snapshots
+  for a fixed 3-min TTL, but never actively restored it if completion
+  genuinely failed and no fresh snapshot happened to arrive -- it just
+  stopped masking, leaving the task hidden indefinitely. Pending records
+  now also store the tap time plus the task's title/start, enabling three
+  outcomes: a fresh snapshot missing the id clears the pending record
+  immediately (confirmed complete); a fresh snapshot that still has it,
+  once past a ~3-min grace window (margin over the ~2-min ntfy→ingest
+  cycle), also clears it and shows the task normally (confirmed failed,
+  without waiting the full timeout or flickering on every snapshot that
+  lands mid-flight); and `NextTasksRefreshWorker`'s existing 15-min
+  periodic cadence now also sweeps for entries past a 10-min hard timeout
+  and restores them from their stored title/start, independent of any
+  network call succeeding (stuck/offline).
+
 ## [1.8.0] — 2026-07-13
 
 ### Added
