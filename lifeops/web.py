@@ -98,6 +98,26 @@ EDITABLE     = ["PARTNER_NAME", "PARTNER_TASK", "PARTNER_SIGNAL", "FRIENDS_TASK"
                 "PROPOSE_AHEAD_DAYS", "PLAN_LEAD_DAYS",
                 "DISCRETIONARY", "OUTING_COSTS", "YNAB_COVER_ORDER", "YNAB_NO_ASSIGN",
                 "EVENT_CALS", "SOCIAL_CAL", "BLOCK_CAL"]
+# Human-readable label + one-line help per EDITABLE key, grouped for
+# display -- the settings page used to just print the raw .env variable
+# name, which meant reading source to know what e.g. YNAB_COVER_ORDER even
+# was. Value: (group, label, help).
+CONFIG_META = {
+    "PARTNER_NAME":       ("Partner", "Partner's name", "Shown in briefings and hangout tracking."),
+    "PARTNER_TASK":       ("Partner", "Partner-time task title", "FlowSavvy task title that counts as partner time."),
+    "PARTNER_SIGNAL":     ("Partner", "Partner-seen signal phrase", "ntfy signal body that marks partner time done."),
+    "FRIENDS_TASK":       ("Friends", "Friends task title", "FlowSavvy task title that counts as a friend hangout."),
+    "FRIEND_NAMES":       ("Friends", "Friend names", "Comma-separated names that also count as a hangout."),
+    "PROPOSE_AHEAD_DAYS": ("Scheduling", "Propose hangouts (days ahead)", "How far ahead to suggest a hangout slot."),
+    "PLAN_LEAD_DAYS":     ("Scheduling", "\"Plan it\" lead time (days)", "How early the planning nudge fires before a hangout."),
+    "DISCRETIONARY":      ("Money", "Discretionary categories", "YNAB category names counted as fun money."),
+    "OUTING_COSTS":       ("Money", "Per-outing cost estimates", "type:dollars pairs, e.g. concert:40,date:50."),
+    "YNAB_COVER_ORDER":   ("Money", "Overspend cover order", "Category drain order when something overspends."),
+    "YNAB_NO_ASSIGN":     ("Money", "Never auto-assign to", "Categories the categorizer must never touch."),
+    "EVENT_CALS":         ("Calendars", "Paid-event calendars", "calendarId:type pairs feeding the spend projection."),
+    "SOCIAL_CAL":         ("Calendars", "Partner's calendar ID", "Used to detect partner time from real events."),
+    "BLOCK_CAL":          ("Calendars", "Busy-block calendar ID", "Calendar the panel's \"block this day\" writes to."),
+}
 ACTION_COLOR = {"gym": "#4ade80", "gym_skip": "#6b7280", "chore_done": "#60a5fa",
                 "social": "#c084fc", "meal": "#fb923c", "ynab": "#fbbf24",
                 "homework": "#38bdf8", "digest": "#a78bfa", "sleep": "#818cf8",
@@ -146,6 +166,22 @@ def _env_value(key):
     except FileNotFoundError:
         pass
     return ""
+
+def _config_groups():
+    """EDITABLE keys bucketed by CONFIG_META's group, in first-seen order --
+    the settings page renders one form field per key (human label + help,
+    not the raw env var name) inside a handful of labeled groups instead of
+    a flat table of 14 anonymous rows."""
+    groups = {}
+    for key in EDITABLE:
+        group, label, help_text = CONFIG_META.get(key, ("Other", key, ""))
+        groups.setdefault(group, []).append(
+            {"key": key, "label": label, "help": help_text, "value": _env_value(key)})
+    # "fields", not "items" -- Jinja's `.` access tries getattr() before
+    # dict lookup, and dicts already have a real .items() METHOD, so
+    # `group.items` in the template would silently resolve to that bound
+    # method instead of this list (confirmed 2026-07-13).
+    return [{"name": name, "fields": fields} for name, fields in groups.items()]
 
 def _set_env(key, val):
     lines = []
@@ -542,7 +578,7 @@ def _build_context(fs=None, include_cycle=False):
         "domains":          domains,
         "cycle_tasks":      cycle_tasks,
         "cycle_error":      cycle_error,
-        "config_items":     [{"key": k, "value": _env_value(k)} for k in EDITABLE],
+        "config_groups":    _config_groups(),
         "history":          hist,
         "list_personal":    config.LIST_PERSONAL,
         "last_run_domains": ", ".join(lr["ran"]) if lr and lr["ran"] else "",
@@ -813,12 +849,25 @@ def run_domain(name: str = Form(...)):
     return RedirectResponse("/", 303)
 
 @app.post("/config")
-def set_config(key: str = Form(...), value: str = Form("")):
-    # newlines would inject extra lines into .env — flatten them
-    value = value.replace("\r", " ").replace("\n", " ").strip()
-    if key in EDITABLE:
-        _set_env(key, value)
-    return RedirectResponse("/settings", 303)
+async def set_config_bulk(request: Request):
+    """Saves every EDITABLE field from the settings form in one submit --
+    the page used to have a separate form + save button per row (14 of
+    them), which was both visually noisy and meant 14 individual clicks to
+    change more than one setting at once. Only keys already in EDITABLE are
+    ever written; anything else in the POST body is ignored (an unexpected
+    key can't smuggle in a new env var this way)."""
+    form = await request.form()
+    changed = False
+    for key in EDITABLE:
+        if key not in form:
+            continue
+        # newlines would inject extra lines into .env — flatten them
+        value = str(form[key]).replace("\r", " ").replace("\n", " ").strip()
+        if value != _env_value(key):
+            _set_env(key, value)
+            changed = True
+    msg = quote("Saved." if changed else "No changes.")
+    return RedirectResponse(f"/settings?msg={msg}#config", 303)
 
 def _log_gym_went(date):
     """Logs a gym session for `date`, e.g. from the calendar click-through or

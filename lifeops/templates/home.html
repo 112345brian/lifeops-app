@@ -60,6 +60,22 @@
 </div>
 {% endif %}
 
+{% if cashflow and cashflow.events %}
+<!-- ── Upcoming events (same data run_cashflow already swept -- gather.spend_input's
+     next-21-days event list; this is the plain "what's coming up" view of it,
+     the projection above is the money-impact view). ── -->
+<div class="card section" id="upcoming-events">
+  <div class="card-title">📅 Upcoming events</div>
+  {% for e in cashflow.events %}
+  <div class="hist-row" style="align-items:center;gap:.5rem;">
+    <span class="hist-ts" style="min-width:4.5rem;">{{ e.days_until }}d</span>
+    <span style="flex:1;">{{ e.label }}</span>
+    {% if e.cost %}<span class="hist-meta">${{ e.cost }}</span>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
 <!-- ── Stat pills ── -->
 <div class="stats-row">
   <div class="stat-pill">

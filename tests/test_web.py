@@ -24,6 +24,48 @@ def test_set_env_updates_runtime_env_file_atomically(tmp_path, monkeypatch):
     assert env.read_text(encoding="utf-8") == "PARTNER_NAME=New\nKEEP=value\n"
 
 
+def test_config_groups_covers_every_editable_key_with_a_label():
+    grouped_keys = {item["key"] for group in web._config_groups() for item in group["fields"]}
+
+    assert grouped_keys == set(web.EDITABLE)
+    for key in web.EDITABLE:
+        group, label, _help = web.CONFIG_META[key]
+        assert group and label  # every key has a real (non-key-name) label
+
+
+def test_config_bulk_save_writes_only_changed_editable_keys(tmp_path, monkeypatch):
+    env = tmp_path / ".env"
+    env.write_text("PARTNER_NAME=Old\nFRIENDS_TASK=Friends\n", encoding="utf-8")
+    monkeypatch.setattr(web, "ENV", str(env))
+    monkeypatch.setattr(config, "WEB_TOKEN", "")
+    client = TestClient(web.app)
+
+    response = client.post("/config", data={
+        "PARTNER_NAME": "New",
+        "FRIENDS_TASK": "Friends",  # unchanged -- shouldn't cause a rewrite
+        "NOT_EDITABLE": "should be ignored",
+    }, follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/settings?msg=Saved.#config"
+    written = env.read_text(encoding="utf-8")
+    assert "PARTNER_NAME=New" in written
+    assert "FRIENDS_TASK=Friends" in written
+    assert "NOT_EDITABLE" not in written
+
+
+def test_config_bulk_save_reports_no_changes_when_nothing_differs(tmp_path, monkeypatch):
+    env = tmp_path / ".env"
+    env.write_text("PARTNER_NAME=Same\n", encoding="utf-8")
+    monkeypatch.setattr(web, "ENV", str(env))
+    monkeypatch.setattr(config, "WEB_TOKEN", "")
+    client = TestClient(web.app)
+
+    response = client.post("/config", data={"PARTNER_NAME": "Same"}, follow_redirects=False)
+
+    assert response.headers["location"] == "/settings?msg=No%20changes.#config"
+
+
 def test_token_query_redirects_to_clean_url_and_sets_cookie(monkeypatch):
     monkeypatch.setattr(config, "WEB_TOKEN", "secret")
     client = TestClient(web.app)

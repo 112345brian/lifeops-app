@@ -48,30 +48,35 @@
 
 <!-- ── Config ── -->
 <div class="card section" id="config">
-  <div class="card-title">Config
-    <span class="muted" style="text-transform:none;font-weight:400;font-size:10px">
-      — restart app to apply
-    </span>
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:.9rem;">
+    <div class="card-title" style="margin-bottom:0;">Config</div>
+    <!-- Its own one-click action, deliberately NOT inside the form below --
+         restarting the server has nothing to do with saving a setting, and
+         a confirm() dialog is unwarranted friction for a service that
+         self-heals on its own restart schedule anyway (register_web.ps1). -->
+    <form method="post" action="/system/restart" class="f-inline">
+      <button class="btn btn-sm btn-danger">⟳ restart server</button>
+    </form>
   </div>
-  <form method="post" action="/system/restart" class="f-inline" style="margin-bottom:10px">
-    <button class="btn btn-sm btn-danger" onclick="return confirm('Restart the LifeOps server now?')">⟳ restart server</button>
-  </form>
-  <table>
-    <tbody>
-    {% for item in config_items %}
-    <tr>
-      <td class="cfg-key">{{ item.key }}</td>
-      <td>
-        <form method="post" action="/config" class="f-row">
-          <input type="hidden" name="key" value="{{ item.key }}">
-          <input name="value" value="{{ item.value }}" class="w-xl">
-          <button class="btn btn-xs">save</button>
-        </form>
-      </td>
-    </tr>
+
+  <form method="post" action="/config">
+    {% for group in config_groups %}
+    <div class="cfg-group">
+      <div class="cfg-group-title">{{ group.name }}</div>
+      {% for item in group.fields %}
+      <div class="cfg-field">
+        <label class="cfg-field-label" for="cfg-{{ item.key }}">{{ item.label }}</label>
+        <input id="cfg-{{ item.key }}" name="{{ item.key }}" value="{{ item.value }}" class="w-xl">
+        {% if item.help %}<div class="cfg-field-help">{{ item.help }}</div>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
     {% endfor %}
-    </tbody>
-  </table>
+    <div class="actions-row">
+      <button class="btn btn-primary">Save changes</button>
+      <span class="muted" style="font-size:11px;align-self:center;">— restart app to apply</span>
+    </div>
+  </form>
 </div>
 
 {% endblock %}

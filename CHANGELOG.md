@@ -4,6 +4,31 @@ Notable changes, newest first. Personal project, versioned simply (see
 `VERSION` / `lifeops.__version__`) — dates and the reasoning behind each
 change matter more here than semver strictness.
 
+## [1.12.0] — 2026-07-13
+
+### Added
+- **"Upcoming events" card on the panel home page.** Shows what's coming up
+  in the next few weeks (label, days-until, cost) — the exact event list
+  `run_cashflow` was already sweeping and persisting to `logs/cashflow.json`
+  for the discretionary projection, just never rendered anywhere on its own.
+
+### Changed
+- **Settings page config section redesigned.** The 14 raw `.env` variable
+  names, each with its own text field and its own "save" button, are now 5
+  logical groups (Partner, Friends, Scheduling, Money, Calendars) with
+  human-readable labels and a one-line explanation per field, saved all at
+  once via a single "Save changes" button (`/config` now takes a bulk POST
+  and only writes keys that actually changed). "Restart server" moved out
+  of the save form into its own standalone one-click button — it never
+  needed a confirm() dialog or to sit inside the same flow as editing a
+  setting.
+
+### Fixed
+- A classic Jinja gotcha while building the grouped config UI: a dict key
+  named `items` silently resolved to the dict's own `.items()` method
+  instead of the actual list (`group.items` → bound method, not the data) —
+  renamed to `fields`.
+
 ## [1.11.1] — 2026-07-13
 
 ### Fixed

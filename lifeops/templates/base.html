@@ -294,18 +294,23 @@ td { padding: .5rem; border-bottom: 1px solid var(--md-outline-variant); vertica
 tr:last-child td { border-bottom: none; }
 
 /* ── config ── */
-.cfg-key {
-  font-size: 12px;
-  font-family: monospace;
-  color: var(--md-primary);
-  white-space: nowrap;
-  padding-right: 1rem;
-  width: 1px;
+.cfg-group { margin-bottom: 1.1rem; }
+.cfg-group:last-of-type { margin-bottom: 0; }
+.cfg-group-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--md-on-surface-variant);
+  padding-bottom: .4rem;
+  margin-bottom: .6rem;
+  border-bottom: 1px solid var(--md-outline-variant);
 }
-#config td:last-child { width: 100%; }
-#config .f-row { display: flex; width: 100%; min-width: 0; }
-#config .f-row input.w-xl { flex: 1; min-width: 0; max-width: 300px; width: auto; }
-#config .f-row button { flex-shrink: 0; }
+.cfg-field { margin-bottom: .7rem; }
+.cfg-field:last-child { margin-bottom: 0; }
+.cfg-field-label { display: block; font-size: 13px; font-weight: 500; margin-bottom: .3rem; }
+.cfg-field input.w-xl { display: block; width: 100%; max-width: 420px; }
+.cfg-field-help { font-size: 11px; color: var(--md-on-surface-variant); margin-top: .25rem; }
 
 /* ── history ── */
 .hist-scroll { max-height: 420px; overflow-y: auto; }
