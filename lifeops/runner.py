@@ -154,7 +154,12 @@ def ingest(fs, now):
         st.update(json.load(open(sp, encoding="utf-8")))
     except Exception:
         pass
-    logged = set(st["logged_ids"])
+    # Same ordered-list + set pairing as handled_msg_ids below, and for the
+    # same reason: a plain set has no guaranteed order, so truncating one to
+    # "the last 1000" after converting back to a list doesn't reliably keep
+    # the most recently logged completions.
+    logged_ids = list(st["logged_ids"])
+    logged = set(logged_ids)
     # ntfy's own delivery guarantee isn't exactly-once (redelivery on
     # reconnect/retry is real), and the phone can also redeliver via a
     # re-tap if the app's optimistic local removal silently failed --
@@ -162,7 +167,13 @@ def ingest(fs, now):
     # doesn't re-fire fs.complete_task (relying on FlowSavvy's completion
     # endpoint being idempotent is a documented assumption elsewhere, not a
     # guarantee this code should also depend on with zero defense-in-depth).
-    handled_msg_ids = set(st["handled_ntfy_msg_ids"])
+    # Keep an ORDERED list (oldest-first) alongside a set for O(1) lookups --
+    # a plain set has no guaranteed iteration order, so slicing it after
+    # converting back to a list does not reliably keep the most-recently-
+    # handled ids once the 1000-entry cap is hit, silently defeating this
+    # dedup for a genuine redelivery of a recent message.
+    handled_msg_ids = list(st["handled_ntfy_msg_ids"])
+    handled_msg_id_set = set(handled_msg_ids)
     for m in ntfy.poll(since=st["ntfy_ts"]):
         raw_body = (m.get("message") or "").strip()
         body = raw_body.lower()
@@ -192,7 +203,7 @@ def ingest(fs, now):
             msg_id = m.get("id")
             if not tid:
                 print("[ingest] complete signal missing a task id, skipping")
-            elif msg_id and msg_id in handled_msg_ids:
+            elif msg_id and msg_id in handled_msg_id_set:
                 pass  # already processed this exact ntfy message once
             else:
                 try:
@@ -201,9 +212,10 @@ def ingest(fs, now):
                 except Exception as e:
                     print(f"[ingest] complete signal failed for {tid}: {e}")
                 if msg_id:
-                    handled_msg_ids.add(msg_id)
+                    handled_msg_ids.append(msg_id)
+                    handled_msg_id_set.add(msg_id)
         st["ntfy_ts"] = max(st["ntfy_ts"], m.get("time", 0))
-    st["handled_ntfy_msg_ids"] = list(handled_msg_ids)[-1000:]
+    st["handled_ntfy_msg_ids"] = handled_msg_ids[-1000:]
     frm = _utc_iso(14)
     try:
         comp = fs.list_items(itemType="task", completed=True, modifiedAfter=frm).get("items", [])
@@ -217,8 +229,9 @@ def ingest(fs, now):
         if act:
             history.append(act, ts=(t.get("lastModified") or "")[:19], source="flowsavvy",
                            meta={"id": t["id"]})
+        logged_ids.append(key)
         logged.add(key)
-    st["logged_ids"] = list(logged)[-1000:]
+    st["logged_ids"] = logged_ids[-1000:]
     os.makedirs(os.path.dirname(sp), exist_ok=True)
     _save_json_atomic(sp, st)
 

@@ -75,3 +75,44 @@ def test_canvas_failed_creation_still_marks_module_synced(tmp_path, monkeypatch)
 
     state = json.loads((tmp_path / "logs" / "canvas_state.json").read_text(encoding="utf-8"))
     assert state["synced_modules"] == [1]
+
+
+class _CompleteFakeFlowSavvy:
+    def __init__(self):
+        self.completed = []
+
+    def complete_task(self, task_id):
+        self.completed.append(task_id)
+
+    def recalculate(self):
+        pass
+
+    def list_items(self, **kwargs):
+        return {"items": []}
+
+
+def test_ingest_handled_msg_ids_keeps_most_recent_not_arbitrary(tmp_path, monkeypatch):
+    """handled_ntfy_msg_ids must evict the OLDEST id once past the 1000-entry
+    cap, not an arbitrary one -- a plain set has no guaranteed iteration
+    order, so truncating `list(a_set)[-1000:]` doesn't reliably keep the
+    most-recently-handled ids (see runner.py's comment on this)."""
+    monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
+    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "logs" / "history.jsonl"))
+    (tmp_path / "logs").mkdir(exist_ok=True)
+
+    old_ids = [f"old-{i}" for i in range(1000)]
+    state_path = tmp_path / "logs" / "ingest_state.json"
+    state_path.write_text(json.dumps({"ntfy_ts": 0, "logged_ids": [],
+                                      "handled_ntfy_msg_ids": old_ids}), encoding="utf-8")
+
+    fake_message = {"id": "new-msg", "time": 100, "message": "complete:t1"}
+    monkeypatch.setattr(runner.ntfy, "poll", lambda since: [fake_message])
+
+    fs = _CompleteFakeFlowSavvy()
+    runner.ingest(fs, datetime.datetime(2026, 7, 13, 9, 0))
+
+    assert fs.completed == ["t1"]
+    saved = json.loads(state_path.read_text(encoding="utf-8"))
+    # The oldest id (old-0) must be the one evicted, and the new id must
+    # survive at the end -- not an arbitrary member of the old set.
+    assert saved["handled_ntfy_msg_ids"] == old_ids[1:] + ["new-msg"]

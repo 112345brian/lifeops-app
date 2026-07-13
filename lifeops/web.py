@@ -393,12 +393,22 @@ def _today_briefing_raw():
 def _current_attention(briefing=None, lr=None):
     """Deterministic attention state for the given (or freshly-loaded)
     briefing facts + last-run health. Shared by _build_context (panel home)
-    and the mutation endpoints below, so a POST that changes gym/schedule
-    state can hand the caller a fresh read without a second round trip."""
+    and the mutation endpoints below, so a POST can hand the caller a fresh
+    read of system-health reasons (panel stale/erroring) without a second
+    round trip. NOTE: this is NOT fresh for domain facts like gym_last_7d --
+    those only get recomputed by the once-daily run_briefing tier, so a
+    gym/coursework/money-related reason can still reflect this morning's
+    numbers even right after a mutation that would change them.
+
+    `lr` must stay None (not {}) when there's genuinely no last-run data --
+    attention.compute distinguishes "no system data" (system=None) from
+    "system data present but everything empty" (system={}), so coercing
+    with `lr or {}` here previously turned a fresh install's missing
+    logs/last_run.json into a false 'risk: LifeOps data is stale' reading."""
     from . import attention
     briefing = _today_briefing() if briefing is None else briefing
     lr = _last_run() if lr is None else lr
-    return attention.compute((briefing or {}).get("facts") or {}, lr or {})
+    return attention.compute((briefing or {}).get("facts") or {}, lr)
 
 def _cashflow():
     """Panel-only forward discretionary-balance projection (run_cashflow writes
@@ -579,12 +589,22 @@ def api_briefing():
         return JSONResponse({"briefing": None}, status_code=404)
     return JSONResponse(b)
 
+def _tasks_and_events(fs, now, n):
+    """Shared next-tasks + today's-events fetch: one FlowSavvy schedule
+    round trip, reused by both /api/next-tasks and the completion endpoint.
+    Deliberately does NOT catch exceptions -- see gather._upcoming_schedule's
+    own docstring on why a genuine fetch failure must propagate rather than
+    return a false-empty result. Callers decide how to surface that."""
+    schedule_items = gather._upcoming_schedule(fs, now)
+    return {"tasks": gather.next_tasks_input(fs, now, n, schedule_items=schedule_items),
+            "events": gather.today_events_input(fs, now, schedule_items=schedule_items)}
+
 @app.get("/api/next-tasks")
 def api_next_tasks(n: int = 3):
     fs = FlowSavvy()
     now = datetime.datetime.now()
     try:
-        schedule_items = gather._upcoming_schedule(fs, now)
+        return JSONResponse(_tasks_and_events(fs, now, n))
     except Exception as e:
         # A real FlowSavvy fetch failure must fail this request, not
         # silently return {"tasks": [], "events": []} -- that used to be
@@ -594,8 +614,6 @@ def api_next_tasks(n: int = 3):
         # alone, retry later" (NextTasksRefreshWorker), so failing loudly
         # here is strictly safer than succeeding with a false empty result.
         raise HTTPException(502, f"FlowSavvy fetch failed: {e}")
-    return JSONResponse({"tasks": gather.next_tasks_input(fs, now, n, schedule_items=schedule_items),
-                        "events": gather.today_events_input(fs, now, schedule_items=schedule_items)})
 
 @app.post("/api/tasks/{task_id}/complete")
 def api_task_complete(task_id: str, n: int = 3):
@@ -609,10 +627,15 @@ def api_task_complete(task_id: str, n: int = 3):
     fs.complete_task(task_id)
     fs.recalculate()
     now = datetime.datetime.now()
-    schedule_items = gather._upcoming_schedule(fs, now)
-    return JSONResponse({"completed_id": task_id,
-                        "tasks": gather.next_tasks_input(fs, now, n, schedule_items=schedule_items),
-                        "events": gather.today_events_input(fs, now, schedule_items=schedule_items)})
+    try:
+        fresh = _tasks_and_events(fs, now, n)
+    except Exception as e:
+        # The completion itself already succeeded above -- only the
+        # post-completion state refresh failed. Still a 502 (matching
+        # /api/next-tasks): the client needs to know the returned
+        # tasks/events aren't trustworthy, even though the task IS done.
+        raise HTTPException(502, f"task completed, but refreshing state failed: {e}")
+    return JSONResponse({"completed_id": task_id, **fresh})
 
 @app.post("/api/gym/log")
 def api_gym_log():
@@ -620,8 +643,7 @@ def api_gym_log():
     calendar. Quick-action equivalent of the calendar click-through, scoped
     to "today" since that's the only case a one-tap action needs."""
     today = datetime.date.today().isoformat()
-    history.remove_day("gym_missed", today)  # see /gym/cycle-date's own note on this
-    history.append("gym", ts=f"{today}T12:00:00", source="ui")
+    _log_gym_went(today)
     _run_domain("gym")
     return JSONResponse({"ok": True, "attention": _current_attention()})
 
@@ -629,7 +651,7 @@ def api_gym_log():
 def api_gym_skip():
     """JSON equivalent of the /gym-nocount form action: logs today as a
     deliberate skip (not a missed session) and re-plans immediately."""
-    history.append("gym_skip", source="ui")
+    _log_gym_skip()
     _run_domain("gym")
     return JSONResponse({"ok": True, "attention": _current_attention()})
 
@@ -646,16 +668,14 @@ async def api_schedule_block_day(request: Request):
         datetime.date.fromisoformat(date)
     except ValueError:
         raise HTTPException(400, "date required (YYYY-MM-DD)")
-    with _exclusive():
-        warn = _block_day(date)
-    _run_domain("gym")
+    warn = _do_block_day(date)
     return JSONResponse({"ok": True, "warning": warn or None, "attention": _current_attention()})
 
 @app.post("/api/domains/{name}/run")
 def api_domain_run(name: str):
     """JSON equivalent of the /run form action -- triggers one domain
     out-of-cycle (e.g. after a manual schedule change)."""
-    if name not in ALL_DOMAINS:               # never pass arbitrary argv through
+    if not _validate_domain(name):
         raise HTTPException(404, f"unknown domain: {name[:24]}")
     _run_domain(name)
     return JSONResponse({"ok": True, "domain": name})
@@ -784,9 +804,14 @@ def domain_toggle(name: str = Form(...), on: int = Form(...)):
         _write_json(DOMAINS_FILE, d)
     return RedirectResponse("/", 303)
 
+def _validate_domain(name):
+    """True if `name` is a real, runnable domain -- never pass arbitrary
+    argv through to _run_domain. Shared by the form and JSON /run routes."""
+    return name in ALL_DOMAINS
+
 @app.post("/run")
 def run_domain(name: str = Form(...)):
-    if name not in ALL_DOMAINS:               # never pass arbitrary argv through
+    if not _validate_domain(name):
         return RedirectResponse(f"/?msg={quote('unknown domain: ' + name[:24])}", 303)
     _run_domain(name)
     return RedirectResponse("/", 303)
@@ -799,9 +824,23 @@ def set_config(key: str = Form(...), value: str = Form("")):
         _set_env(key, value)
     return RedirectResponse("/settings", 303)
 
+def _log_gym_went(date):
+    """Logs a gym session for `date`, e.g. from the calendar click-through or
+    the quick-action API. The calendar only shows gym/gym_skip, not the
+    nightly cleanup's separate "gym_missed" marker (runner.py) -- so a day
+    the cleanup already auto-logged missed still reads as neutral here.
+    Clear it before logging "went", or adherence.gym()'s rate() would
+    double-count this date as both done and missed."""
+    history.remove_day("gym_missed", date)
+    history.append("gym", ts=f"{date}T12:00:00", source="ui")
+
+def _log_gym_skip():
+    """Logs a deliberate same-day gym skip (not a missed session)."""
+    history.append("gym_skip", source="ui")
+
 @app.post("/gym-nocount")
 def gym_nocount():
-    history.append("gym_skip", source="ui")
+    _log_gym_skip()
     _run_domain("gym")     # re-plan immediately, consistent with the other gym controls
     return RedirectResponse("/gym", 303)
 
@@ -856,15 +895,23 @@ def _unblock_day(date):
     _save_gym_blocks([d for d in _gym_blocks() if d != date])
     return warn
 
+def _do_block_day(date):
+    """Core of blocking a day: runs _block_day under the exclusive lock and
+    re-plans gym. Caller must validate `date` first. Shared by the form and
+    JSON /schedule/block-day routes. Returns the warning string (possibly
+    empty)."""
+    with _exclusive():
+        warn = _block_day(date)
+    _run_domain("gym")
+    return warn
+
 @app.post("/schedule/block-day")
 def schedule_block_day(date: str = Form(...)):
     try:
         datetime.date.fromisoformat(date)
     except ValueError:
         return RedirectResponse(f"/schedule?msg={quote('invalid date')}", 303)
-    with _exclusive():
-        warn = _block_day(date)
-    _run_domain("gym")
+    warn = _do_block_day(date)
     return RedirectResponse(f"/schedule?msg={quote(warn)}" if warn else "/schedule", 303)
 
 @app.post("/schedule/unblock-day")
@@ -920,13 +967,7 @@ def gym_cycle_date(date: str = Form(...)):
     elif any(e["ts"][:10] == date for e in history.events("gym_skip")):
         history.remove_day("gym_skip", date)
     else:
-        # The calendar only shows gym/gym_skip, not the nightly cleanup's
-        # separate "gym_missed" marker (runner.py) -- so a day the cleanup
-        # already auto-logged missed still reads as neutral here. Clear it
-        # before logging "went", or adherence.gym()'s rate() would double-count
-        # this date as both done and missed.
-        history.remove_day("gym_missed", date)
-        history.append("gym", ts=f"{date}T12:00:00", source="ui")
+        _log_gym_went(date)
     _run_domain("gym")
     return RedirectResponse(f"/?msg={quote(warn)}#calendar" if warn else "/#calendar", 303)
 

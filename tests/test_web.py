@@ -144,6 +144,22 @@ def test_api_domain_run_triggers_named_domain(sandbox):
     assert sandbox == ["gym"]
 
 
+def test_current_attention_treats_missing_last_run_as_no_system_data(monkeypatch):
+    """A fresh install (or any moment logs/last_run.json is missing/
+    unreadable) makes _last_run() return None. _current_attention must pass
+    that through as None, not coerce it to {} -- attention.compute treats
+    system={} as 'system data present but everything empty' (age_mins
+    missing -> stale), which previously produced a false 'risk: LifeOps
+    data is stale' reading on a machine that has simply never run yet."""
+    monkeypatch.setattr(web, "_last_run", lambda: None)
+    monkeypatch.setattr(web, "_today_briefing", lambda: None)
+
+    result = web._current_attention()
+
+    assert result["state"] == "ok"
+    assert result["reasons"] == []
+
+
 def test_api_task_complete_returns_fresh_tasks_and_events(monkeypatch):
     monkeypatch.setattr(config, "WEB_TOKEN", "")
     monkeypatch.setattr(web, "_current_attention", lambda *a, **k: {"state": "ok"})
