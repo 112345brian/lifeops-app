@@ -153,7 +153,9 @@ class _NextTasksFakeFlowSavvy:
         ]}
 
 
-def test_push_next_tasks_skipped_on_signal_tier(monkeypatch):
+def test_push_next_tasks_skipped_on_signal_tier(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
+    (tmp_path / "logs").mkdir(exist_ok=True)
     calls = []
     monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events: calls.append((tasks, events)))
 
@@ -162,7 +164,9 @@ def test_push_next_tasks_skipped_on_signal_tier(monkeypatch):
     assert calls == []
 
 
-def test_push_next_tasks_fires_on_tick_tier(monkeypatch):
+def test_push_next_tasks_fires_on_tick_tier(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
+    (tmp_path / "logs").mkdir(exist_ok=True)
     calls = []
     monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events: calls.append((tasks, events)))
 
@@ -171,3 +175,38 @@ def test_push_next_tasks_fires_on_tick_tier(monkeypatch):
     assert len(calls) == 1
     tasks, events = calls[0]
     assert [t["id"] for t in tasks] == ["t1"]
+
+
+def test_push_next_tasks_skips_send_when_unchanged(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
+    (tmp_path / "logs").mkdir(exist_ok=True)
+    calls = []
+    monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events: calls.append((tasks, events)))
+    fs = _NextTasksFakeFlowSavvy()
+    now = datetime.datetime(2026, 7, 13, 9, 0)
+
+    runner.push_next_tasks(fs, now, ["tick"])   # first call: nothing persisted yet, must push
+    runner.push_next_tasks(fs, now, ["tick"])   # second call: identical snapshot, must skip
+
+    assert len(calls) == 1
+
+
+def test_push_next_tasks_sends_again_when_changed(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
+    (tmp_path / "logs").mkdir(exist_ok=True)
+    calls = []
+    monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events: calls.append((tasks, events)))
+    now = datetime.datetime(2026, 7, 13, 9, 0)
+
+    runner.push_next_tasks(_NextTasksFakeFlowSavvy(), now, ["tick"])
+
+    class _ChangedFakeFlowSavvy:
+        def get_schedule(self, start, end):
+            return {"scheduleItems": [
+                {"itemType": "task", "itemId": "t2", "title": "Different task",
+                 "startTime": "2099-01-01T09:00:00", "completed": False},
+            ]}
+
+    runner.push_next_tasks(_ChangedFakeFlowSavvy(), now, ["tick"])
+
+    assert len(calls) == 2

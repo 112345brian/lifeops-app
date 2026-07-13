@@ -253,13 +253,29 @@ def push_next_tasks(fs, now, args):
     unchanged as a self-heal fallback for the rare case a push is dropped.
     Skipped on the signal tier (~2 min, phone-tap catchup only): tick
     (~10 min) is plenty fresh for a task list, and signal firing this too
-    would be 5x the FCM sends for no real freshness gain."""
+    would be 5x the FCM sends for no real freshness gain.
+
+    Skips the actual send when nothing changed since the last push -- same
+    "don't do wasted round-trips on a fixed schedule" philosophy as spend/
+    canvas being excluded from the tick tier elsewhere in this file. A
+    changed result (a task's "next up" rotated off the list because its
+    start time passed, even with no underlying schedule edit) still counts
+    as a real change and still pushes."""
     if args == ["signal"]:
         return
     schedule_items = gather._upcoming_schedule(fs, now)
     tasks = gather.next_tasks_input(fs, now, 3, schedule_items=schedule_items)
     events = gather.today_events_input(fs, now, schedule_items=schedule_items)
+    snapshot = {"tasks": tasks, "events": events}
+    sp = os.path.join(history.ROOT, "logs", "next_tasks_push_state.json")
+    try:
+        last = json.load(open(sp, encoding="utf-8"))
+    except Exception:
+        last = None
+    if snapshot == last:
+        return
     notify.push_next_tasks(tasks, events)
+    _save_json_atomic(sp, snapshot)
 
 def _alert_once(key, text, priority="default", tags=None, actions=None, click_anchor=""):
     """Send an alert at most once per calendar day per key. The tick runs every

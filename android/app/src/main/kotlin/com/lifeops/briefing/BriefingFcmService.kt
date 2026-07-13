@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import androidx.glance.GlanceId
 import androidx.glance.appwidget.state.updateAppWidgetState
+import androidx.work.BackoffPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.workDataOf
@@ -13,6 +14,7 @@ import com.lifeops.briefing.data.BriefingState
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.concurrent.TimeUnit
 import org.json.JSONObject
 
 /**
@@ -33,6 +35,8 @@ import org.json.JSONObject
  * the Tailscale-independent counterpart to NextTasksRefreshWorker's periodic
  * direct pull (fcm.py's send_next_tasks docstring has the full reasoning).
  */
+private const val REGISTER_TOKEN_MIN_BACKOFF_MS = 30_000L
+
 class BriefingFcmService : FirebaseMessagingService() {
 
     override fun onMessageReceived(message: RemoteMessage) {
@@ -54,14 +58,17 @@ class BriefingFcmService : FirebaseMessagingService() {
     }
 
     /** Called once on first install/token refresh, and again whenever the
-     * token rotates. Best-effort: if the panel URL isn't configured yet, this
-     * silently no-ops -- SettingsActivity's Save also (re-)registers the
-     * current token, which covers the common case where Settings gets
-     * configured after this fires. Enqueued via WorkManager for the same
-     * guaranteed-execution reason as BriefingPersistWorker. */
+     * token rotates. registerToken tries the direct panel call and falls
+     * back to an ntfy signal, so this doesn't strictly need the panel URL
+     * configured yet to eventually succeed -- SettingsActivity's Save also
+     * (re-)registers the current token regardless, covering the common case
+     * where Settings gets configured after this fires. Enqueued via
+     * WorkManager, with retry-on-failure, for the same guaranteed-execution
+     * reason as BriefingPersistWorker. */
     override fun onNewToken(token: String) {
         val request = OneTimeWorkRequestBuilder<RegisterTokenWorker>()
             .setInputData(workDataOf(RegisterTokenWorker.KEY_TOKEN to token))
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, REGISTER_TOKEN_MIN_BACKOFF_MS, TimeUnit.MILLISECONDS)
             .build()
         WorkManager.getInstance(applicationContext).enqueue(request)
     }
@@ -85,24 +92,29 @@ internal suspend fun persistBriefingForInstance(context: Context, glanceId: Glan
  * signal (see runner.py's ingest()) when that fails for any reason, same
  * hybrid shape as CompleteTaskAction -- token registration shouldn't
  * silently no-op just because the phone isn't on the tailnet at install or
- * rotation time. */
-internal fun registerToken(context: android.content.Context, token: String) {
+ * rotation time. Returns true if EITHER path succeeded, so
+ * [RegisterTokenWorker] can tell WorkManager to retry (with backoff) when
+ * both fail -- e.g. the phone is fully offline, not just off-tailnet --
+ * instead of silently dropping the registration for good. */
+internal fun registerToken(context: android.content.Context, token: String): Boolean {
     val baseUrl = WidgetConfigStore.getBaseUrl(context)
     val authToken = WidgetConfigStore.getToken(context)
 
     if (baseUrl != null && authToken != null) {
         try {
             registerTokenDirect(baseUrl, authToken, token)
-            return
+            return true
         } catch (e: IOException) {
             Log.w("BriefingFcmService", "direct token registration failed, falling back to ntfy signal", e)
         }
     }
 
-    try {
+    return try {
         postTokenRegistrationSignal(token)
+        true
     } catch (e: IOException) {
         Log.e("BriefingFcmService", "error posting token registration signal", e)
+        false
     }
 }
 

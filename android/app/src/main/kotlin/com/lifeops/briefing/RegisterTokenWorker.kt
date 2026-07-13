@@ -20,8 +20,11 @@ class RegisterTokenWorker(
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val token = inputData.getString(KEY_TOKEN) ?: return@withContext Result.failure()
-        registerToken(applicationContext, token)
-        Result.success()
+        // registerToken already tries direct-then-ntfy-relay internally;
+        // both failing (e.g. phone fully offline, not just off-tailnet)
+        // must retry with WorkManager's backoff rather than reporting
+        // success and silently dropping the registration for good.
+        if (registerToken(applicationContext, token)) Result.success() else Result.retry()
     }
 
     companion object {
