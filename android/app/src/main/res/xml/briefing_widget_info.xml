@@ -12,4 +12,5 @@
     android:widgetCategory="home_screen"
     android:updatePeriodMillis="1800000"
     android:initialLayout="@layout/widget_loading"
-    android:previewLayout="@layout/widget_loading" />
+    android:previewLayout="@layout/widget_loading"
+    android:configure="com.lifeops.briefing.WidgetConfigActivity" />

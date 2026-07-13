@@ -27,6 +27,20 @@
             </intent-filter>
         </activity>
 
+        <!-- Per-widget-instance display customization, launched by the
+             App Widget host (a different process/UID, hence exported=true,
+             same reasoning as SettingsActivity above) whenever a widget is
+             added or the user chooses to reconfigure it. -->
+        <activity
+            android:name=".WidgetConfigActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:excludeFromRecents="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
+            </intent-filter>
+        </activity>
+
         <receiver
             android:name=".BriefingWidgetReceiver"
             android:exported="true"

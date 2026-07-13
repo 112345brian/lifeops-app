@@ -24,6 +24,11 @@ object WidgetKeys {
     // present), or hit the ~10-min hard timeout and get restored to the
     // visible list from the stored title/start. See PendingRemovals.kt.
     val PENDING_REMOVED_JSON = stringPreferencesKey("pending_removed_json")
+    // Written by WidgetConfigActivity (the per-instance widget-configure
+    // screen), read by BriefingWidget.provideGlance. WidgetDisplayConfig
+    // serialized as JSON, or absent if this instance has never been
+    // configured (falls back to WidgetDisplayConfig.default()).
+    val DISPLAY_CONFIG_JSON = stringPreferencesKey("display_config_json")
 
     // App-level SharedPreferences -- written by the settings screen.
     const val CONFIG_PREFS_NAME = "lifeops_widget_config"

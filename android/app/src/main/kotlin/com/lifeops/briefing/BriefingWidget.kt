@@ -51,6 +51,8 @@ import com.lifeops.briefing.data.GymRing
 import com.lifeops.briefing.data.NextTask
 import com.lifeops.briefing.data.NextTasksState
 import com.lifeops.briefing.data.TodayEvent
+import com.lifeops.briefing.data.WidgetDisplayConfig
+import com.lifeops.briefing.data.WidgetSection
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
@@ -78,11 +80,13 @@ internal fun bucketFor(size: DpSize): WidgetSizeBucket = when {
  * The Glance widget itself: describes what to render for each widget instance.
  *
  * Reads the persisted [BriefingState] (serialized JSON under
- * [WidgetKeys.BRIEFING_JSON]) and [NextTasksState] (under
- * [WidgetKeys.NEXT_TASKS_JSON]) and renders: markdown-ish bold/plain briefing
- * text, a small stat row, a "received" timestamp, and up to a few upcoming
- * tasks with real checkboxes. Tapping the body (outside a checkbox) opens the
- * control panel.
+ * [WidgetKeys.BRIEFING_JSON]), [NextTasksState] (under
+ * [WidgetKeys.NEXT_TASKS_JSON]), and this instance's [WidgetDisplayConfig]
+ * (under [WidgetKeys.DISPLAY_CONFIG_JSON], set via WidgetConfigActivity's
+ * per-instance widget-configure screen) and renders: markdown-ish bold/plain
+ * briefing text, a small stat row, a "received" timestamp, and up to a few
+ * upcoming tasks with real checkboxes. Tapping the body (outside a checkbox)
+ * opens the control panel.
  *
  * Briefing state is written by [BriefingReceiver] whenever ntfy delivers a
  * "briefing-data" push (push-only, no polling). Next-tasks state is written
@@ -117,31 +121,80 @@ class BriefingWidget : GlanceAppWidget() {
             } catch (e: org.json.JSONException) {
                 NextTasksState.empty()
             }
+            val configJson = prefs[WidgetKeys.DISPLAY_CONFIG_JSON]
+            val config = try {
+                if (configJson != null) WidgetDisplayConfig.fromJson(configJson) else WidgetDisplayConfig.default()
+            } catch (e: org.json.JSONException) {
+                WidgetDisplayConfig.default()
+            }
 
             GlanceTheme {
-                BriefingContent(briefing, nextTasks)
+                BriefingContent(briefing, nextTasks, config)
             }
         }
     }
 }
 
+/** Every tile that shares a row with its neighbors when they're adjacent in
+ * [WidgetDisplayConfig.sectionOrder] (see [groupSectionsForRendering]) -- lets
+ * the default order (all three together) keep rendering as one instrument-
+ * panel strip, while genuinely reordering one away from the others naturally
+ * splits it onto its own row instead of requiring a separate "grouped vs.
+ * independent" toggle. */
+private val TILE_SECTIONS = setOf(WidgetSection.GYM_RING, WidgetSection.MONEY_TILE, WidgetSection.COURSEWORK_TILE)
+
+/** Collapses a config's visible section order into render units: a
+ * contiguous run of [TILE_SECTIONS] becomes one group (rendered as one
+ * shared Row by [TileRow]); everything else renders alone. */
+private fun groupSectionsForRendering(visibleOrder: List<WidgetSection>): List<List<WidgetSection>> {
+    val groups = mutableListOf<MutableList<WidgetSection>>()
+    for (section in visibleOrder) {
+        val lastGroup = groups.lastOrNull()
+        if (section in TILE_SECTIONS && lastGroup != null && lastGroup.last() in TILE_SECTIONS) {
+            lastGroup.add(section)
+        } else {
+            groups.add(mutableListOf(section))
+        }
+    }
+    return groups
+}
+
 /** Renders progressively more content as the placed widget size grows --
- * SMALL shows only the status badge + one-line headline (the minimum "am I
- * OK, and what's my next move" signal), MEDIUM adds the gym meter/stats/
- * freshness line, LARGE (the 4x3 target size) adds the full briefing
- * paragraph, today's events, and the up-next task list. Every bucket still
- * gets the attention badge -- that's the one thing that must never get
- * squeezed out, no matter how small the widget is resized. */
+ * SMALL shows only the status badge (+ severity dots, if left in their
+ * default inline position) -- the minimum "am I OK, and what's my next
+ * move" signal -- MEDIUM adds the gym/money/coursework tiles + freshness
+ * line, LARGE (the 4x3 target size) adds the full briefing paragraph,
+ * today's events, and the up-next task list. Every bucket still gets the
+ * attention badge -- that's the one thing that must never get squeezed out,
+ * no matter how small the widget is resized.
+ *
+ * [config] (per-widget-instance, set via WidgetConfigActivity) controls
+ * which of the 7 [WidgetSection]s show, in what order, and at what
+ * font/icon scale -- see [WidgetDisplayConfig]'s docstring. Existing
+ * size-bucket gating (what fits at this placed size) and the config's
+ * user-visibility (what the user wants to see) combine with a plain AND:
+ * a section only ever renders if the bucket allows it here AND the user
+ * hasn't hidden it. */
 @Composable
-internal fun BriefingContent(state: BriefingState, nextTasks: NextTasksState) {
+internal fun BriefingContent(
+    state: BriefingState,
+    nextTasks: NextTasksState,
+    config: WidgetDisplayConfig = WidgetDisplayConfig.default(),
+) {
     val bucket = bucketFor(LocalSize.current)
+    // Severity dots render inline on the badge's own row ONLY when left in
+    // their default (first) position in sectionOrder -- moved anywhere else,
+    // they detach into their own standalone row at that position instead.
+    val dotsInline = config.sectionOrder.firstOrNull() == WidgetSection.SEVERITY_DOTS &&
+        WidgetSection.SEVERITY_DOTS !in config.hiddenSections
     Column(
         modifier = GlanceModifier
             .fillMaxSize()
             .padding(12.dp)
             .clickable(actionRunCallback<OpenPanelAction>()),
     ) {
-        AttentionHeader(state, compact = bucket == WidgetSizeBucket.SMALL)
+        AttentionHeader(state, compact = bucket == WidgetSizeBucket.SMALL,
+            showInlineDots = dotsInline, scale = config.scale)
 
         if (bucket == WidgetSizeBucket.SMALL) {
             return@Column
@@ -152,71 +205,48 @@ internal fun BriefingContent(state: BriefingState, nextTasks: NextTasksState) {
                 text = "No briefing yet — tap to configure",
                 style = TextStyle(color = GlanceTheme.colors.onSurfaceVariant),
             )
-        } else {
-            if (bucket == WidgetSizeBucket.LARGE) {
-                BriefingParagraph(state.text)
-            }
-
-            // Gym ring, money, and coursework all share one row now -- one
-            // instrument-panel strip instead of a ring on its own line
-            // followed by a separate stat-tile row underneath.
-            StatsRow(state, nextTasks.gymRing)
-            StaleIndicator(state.fetchedAtEpochMillis)
-        }
-
-        if (bucket != WidgetSizeBucket.LARGE) {
             return@Column
         }
 
-        // Today's real calendar events -- shown above "Up next" and
-        // independent of the LLM-generated briefing text, since a $0 family
-        // event or anything not framed as "at risk" would otherwise never
-        // surface (confirmed 2026-07-12: a same-day BBQ went unmentioned
-        // because it wasn't a risk/deadline). This is the deterministic
-        // "don't forget you have an obligation" line, not advisory.
-        if (nextTasks.events.isNotEmpty()) {
-            Column(modifier = GlanceModifier.padding(top = 8.dp)) {
-                for (event in nextTasks.events) {
-                    Text(
-                        text = formatEventLine(event),
-                        style = TextStyle(
-                            fontWeight = FontWeight.Bold,
-                            color = GlanceTheme.colors.onSurface,
-                        ),
-                    )
-                }
+        val visibleOrder = config.sectionOrder.filter { section ->
+            section !in config.hiddenSections && !(section == WidgetSection.SEVERITY_DOTS && dotsInline)
+        }
+        for (group in groupSectionsForRendering(visibleOrder)) {
+            if (group.size > 1) {
+                TileRow(group, state, nextTasks.gymRing, config.scale)
+                continue
+            }
+            when (val section = group.first()) {
+                WidgetSection.SEVERITY_DOTS -> StandaloneSeverityDots(state.reasons, config.scale)
+                WidgetSection.GYM_RING, WidgetSection.MONEY_TILE, WidgetSection.COURSEWORK_TILE ->
+                    TileRow(listOf(section), state, nextTasks.gymRing, config.scale)
+                WidgetSection.BRIEFING_PARAGRAPH ->
+                    if (bucket == WidgetSizeBucket.LARGE) BriefingParagraph(state.text, config.scale)
+                WidgetSection.TODAY_EVENTS ->
+                    if (bucket == WidgetSizeBucket.LARGE && nextTasks.events.isNotEmpty()) {
+                        EventsSection(nextTasks.events)
+                    }
+                WidgetSection.UP_NEXT ->
+                    if (bucket == WidgetSizeBucket.LARGE && nextTasks.tasks.isNotEmpty()) {
+                        val heightDp = LocalSize.current.height.value.toInt()
+                        UpNextSection(nextTasks.tasks, effectiveMaxTasks(heightDp, config.maxTasksOverride))
+                    }
             }
         }
-
-        if (nextTasks.tasks.isNotEmpty()) {
-            // A widget placed taller than the ~4x4 target has real extra
-            // room -- show more of the tasks the server already sent
-            // (up to 8, see gather.next_tasks_input's call sites) instead of
-            // always stopping at 3 and leaving the rest of the frame blank
-            // (2026-07-13). maxTasksForHeight is a rough per-row-height
-            // estimate, not a real measurement -- Glance/RemoteViews has no
-            // layout-measurement API to size this exactly.
-            val maxTasks = maxTasksForHeight(LocalSize.current.height.value.toInt())
-            val tasksToShow = nextTasks.tasks.take(maxTasks)
-            Column(modifier = GlanceModifier.padding(top = 8.dp)) {
-                Text(
-                    text = "Up next",
-                    style = TextStyle(
-                        fontWeight = FontWeight.Bold,
-                        color = GlanceTheme.colors.onSurface,
-                    ),
-                )
-                for (task in tasksToShow) {
-                    NextTaskRow(task)
-                }
-            }
-        }
+        StaleIndicator(state.fetchedAtEpochMillis)
     }
 }
 
 private const val LARGE_BASE_HEIGHT_DP = 250
 private const val TASK_ROW_HEIGHT_DP = 34
 private const val MIN_TASKS_SHOWN = 3
+
+// The "Up next" container holds a header Text plus N NextTaskRows as direct
+// children (N+1 total) -- Glance's hard 10-direct-children-per-container
+// limit (see the note above AttentionHeader) means an unclamped user
+// override could reproduce the exact silent-crash bug already fixed once
+// this session. 9 leaves room for the header.
+private const val MAX_TASKS_HARD_CEILING = 9
 
 /** Rough estimate of how many "Up next" rows fit past the base ~250dp LARGE
  * layout -- not a real measurement (Glance/RemoteViews has no layout-
@@ -228,12 +258,21 @@ private fun maxTasksForHeight(heightDp: Int): Int {
     return MIN_TASKS_SHOWN + extraDp / TASK_ROW_HEIGHT_DP
 }
 
+/** Combines the placed-size heuristic with the user's explicit override
+ * (if any) -- clamp, don't replace: a user ceiling still can't exceed what
+ * actually fits height-wise, nor Glance's hard container-child limit. */
+private fun effectiveMaxTasks(heightDp: Int, maxTasksOverride: Int?): Int {
+    return listOfNotNull(maxTasksForHeight(heightDp), maxTasksOverride, MAX_TASKS_HARD_CEILING).min()
+}
+
 /** Shared with GymBar's on/off-target color and StaleIndicator's warning
  * color -- all three signal "this is fine" vs. "this needs attention" with
  * the same two colors, so they're defined once here rather than as three
  * independently-typed hex literals that could silently drift apart. */
 private val COLOR_OK = Color(0xFF276B5E)
 private val COLOR_WARN = Color(0xFFA8641F)
+
+private const val BASE_BADGE_FONT_SP = 14f
 
 // Glance enforces a hard "no more than 10 direct children per
 // Column/Row container" limit when translating to RemoteViews on a real
@@ -245,10 +284,10 @@ private val COLOR_WARN = Color(0xFFA8641F)
 // doesn't wrap its own emissions in a Column/Row/Box flattens them into
 // direct children of whatever container calls it -- so every logical
 // section below gets its own wrapping Column specifically to keep
-// BriefingContent's outer Column under that limit as more sections
-// (severity dots, stat tiles, gym ring) get added over time.
+// BriefingContent's outer Column under that limit regardless of how many
+// sections are enabled, hidden, or reordered.
 @Composable
-private fun AttentionHeader(state: BriefingState, compact: Boolean) {
+private fun AttentionHeader(state: BriefingState, compact: Boolean, showInlineDots: Boolean, scale: Float) {
     if (state.attentionState == null) return
     val statusColor = when (state.attentionState) {
         "fucked" -> Color(0xFFB3261E)
@@ -265,16 +304,29 @@ private fun AttentionHeader(state: BriefingState, compact: Boolean) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = "${state.attentionSymbol ?: "●"} ${state.attentionLabel ?: state.attentionState.uppercase()}",
-                style = TextStyle(fontWeight = FontWeight.Bold, color = ColorProvider(statusColor)),
+                style = TextStyle(fontWeight = FontWeight.Bold, fontSize = (BASE_BADGE_FONT_SP * scale).sp,
+                    color = ColorProvider(statusColor)),
             )
-            if (state.reasons.isNotEmpty()) {
+            if (showInlineDots && state.reasons.isNotEmpty()) {
                 Spacer(modifier = GlanceModifier.width(8.dp))
-                SeverityDots(state.reasons)
+                SeverityDots(state.reasons, scale)
             }
         }
         if (!compact) {
             Spacer(modifier = GlanceModifier.height(6.dp))
         }
+    }
+}
+
+/** Severity dots rendered as their own standalone row -- used when the user
+ * has moved [WidgetSection.SEVERITY_DOTS] out of its default inline
+ * position (see [BriefingContent]'s docstring). Wrapped in a Column so it
+ * counts as one child of whatever container calls it. */
+@Composable
+private fun StandaloneSeverityDots(reasons: List<AttentionReason>, scale: Float) {
+    if (reasons.isEmpty()) return
+    Column(modifier = GlanceModifier.padding(top = 4.dp)) {
+        SeverityDots(reasons, scale)
     }
 }
 
@@ -286,7 +338,7 @@ private fun AttentionHeader(state: BriefingState, compact: Boolean) {
  * panel glyph language the rest of the widget is moving toward, rather
  * than one linear headline trying to speak for every domain at once. */
 private val DOT_DOMAIN_ORDER = listOf("coursework", "system", "money", "gym")
-private const val DOT_SIZE_DP = 7
+private const val BASE_DOT_SIZE_DP = 7
 private val SEVERITY_RANK = mapOf("ok" to 0, "watch" to 1, "risk" to 2, "fucked" to 3)
 
 private fun severityDotColor(severity: String): Color = when (severity) {
@@ -306,14 +358,13 @@ private fun renderDotBitmap(sizePx: Int, colorArgb: Int): Bitmap {
 }
 
 // A fixed source-bitmap resolution, not device density -- Image scales the
-// bitmap to the GlanceModifier.size(DOT_SIZE_DP.dp) box regardless of the
-// source's raw pixel dimensions, so (unlike the ring, whose stroke width
-// must scale with its dp size) a plain filled circle needs no density
-// lookup at all.
+// bitmap to the target dp box regardless of the source's raw pixel
+// dimensions, so (unlike the ring, whose stroke width must scale with its
+// dp size) a plain filled circle needs no density lookup at all.
 private const val DOT_BITMAP_PX = 32
 
 @Composable
-private fun SeverityDots(reasons: List<AttentionReason>) {
+private fun SeverityDots(reasons: List<AttentionReason>, scale: Float) {
     val worstByDomain = mutableMapOf<String, String>()
     for (r in reasons) {
         val rank = SEVERITY_RANK[r.severity] ?: continue
@@ -322,6 +373,7 @@ private fun SeverityDots(reasons: List<AttentionReason>) {
             worstByDomain[r.domain] = r.severity
         }
     }
+    val dotSizeDp = (BASE_DOT_SIZE_DP * scale).dp
     Row {
         DOT_DOMAIN_ORDER.forEachIndexed { index, domain ->
             if (index > 0) {
@@ -332,7 +384,7 @@ private fun SeverityDots(reasons: List<AttentionReason>) {
             Image(
                 provider = ImageProvider(bitmap),
                 contentDescription = "$domain: $severity",
-                modifier = GlanceModifier.size(DOT_SIZE_DP.dp),
+                modifier = GlanceModifier.size(dotSizeDp),
             )
         }
     }
@@ -343,8 +395,10 @@ private fun SeverityDots(reasons: List<AttentionReason>) {
  * shown at the LARGE bucket: it's the least essential content relative to
  * the deterministic status/stats above it, and the first thing that should
  * drop away as the widget shrinks. */
+private const val BASE_PARAGRAPH_FONT_SP = 15f
+
 @Composable
-private fun BriefingParagraph(text: String) {
+private fun BriefingParagraph(text: String, scale: Float) {
     Column {
         for (line in text.split("\n")) {
             if (line.isBlank()) {
@@ -359,7 +413,7 @@ private fun BriefingParagraph(text: String) {
                             text = segment,
                             style = TextStyle(
                                 fontWeight = if (isBold) FontWeight.Bold else FontWeight.Normal,
-                                fontSize = 15.sp,
+                                fontSize = (BASE_PARAGRAPH_FONT_SP * scale).sp,
                                 color = GlanceTheme.colors.onSurface,
                             ),
                         )
@@ -370,22 +424,25 @@ private fun BriefingParagraph(text: String) {
     }
 }
 
+private const val BASE_TILE_EMOJI_SP = 16f
+private const val BASE_TILE_VALUE_SP = 18f
+
 /** Icon+monospace-number card -- glyph replaces the label, number is the
  * one thing that needs to read at a glance, matching the gym ring's
  * icon-first visual language instead of a plain "$340" text run. Rounded
  * corners match MoneyTile's shape so the two read as one family of tile. */
 @Composable
-private fun StatTile(emoji: String, value: String, modifier: GlanceModifier = GlanceModifier) {
+private fun StatTile(emoji: String, value: String, scale: Float, modifier: GlanceModifier = GlanceModifier) {
     Column(
         modifier = modifier
             .cornerRadius(10.dp)
             .background(GlanceTheme.colors.surfaceVariant)
             .padding(6.dp),
     ) {
-        Text(text = emoji, style = TextStyle(fontSize = 16.sp))
+        Text(text = emoji, style = TextStyle(fontSize = (BASE_TILE_EMOJI_SP * scale).sp))
         Text(
             text = value,
-            style = TextStyle(fontWeight = FontWeight.Bold, fontSize = 18.sp,
+            style = TextStyle(fontWeight = FontWeight.Bold, fontSize = (BASE_TILE_VALUE_SP * scale).sp,
                 color = GlanceTheme.colors.onSurface),
         )
     }
@@ -394,6 +451,7 @@ private fun StatTile(emoji: String, value: String, modifier: GlanceModifier = Gl
 private val MONEY_TILE_OK_BG = Color(0x4D276B5E)
 private val MONEY_TILE_WATCH_BG = Color(0x4DA8641F)
 private val MONEY_TILE_RISK_BG = Color(0x4DB3261E)
+private const val BASE_MONEY_FONT_SP = 22f
 
 /** No glyph, no label -- just the dollar figure, big and bold, since it's
  * the one number where the amount itself IS the message. Background color
@@ -403,7 +461,7 @@ private val MONEY_TILE_RISK_BG = Color(0x4DB3261E)
  * than re-deriving the <0/<100 thresholds here, so the widget can never
  * disagree with the engine that owns severity. */
 @Composable
-private fun MoneyTile(dollars: Int, severity: String?, modifier: GlanceModifier = GlanceModifier) {
+private fun MoneyTile(dollars: Int, severity: String?, scale: Float, modifier: GlanceModifier = GlanceModifier) {
     val bg = when (severity) {
         "risk", "fucked" -> MONEY_TILE_RISK_BG
         "watch" -> MONEY_TILE_WATCH_BG
@@ -417,41 +475,96 @@ private fun MoneyTile(dollars: Int, severity: String?, modifier: GlanceModifier 
     ) {
         Text(
             text = "$${dollars}",
-            style = TextStyle(fontWeight = FontWeight.Bold, fontSize = 22.sp,
+            style = TextStyle(fontWeight = FontWeight.Bold, fontSize = (BASE_MONEY_FONT_SP * scale).sp,
                 color = GlanceTheme.colors.onSurface),
         )
     }
 }
 
-/** Gym ring, money, and coursework hours all in one row -- one instrument-
- * panel strip instead of a ring on its own line above a separate stat-tile
- * row underneath. */
+/** Renders a contiguous run of gym-ring/money/coursework as one shared row
+ * (see [groupSectionsForRendering]) -- also used for a single tile shown
+ * alone, when the user has reordered it away from the other two. Skips
+ * emitting the row entirely if nothing in [sections] has data to show
+ * (e.g. gym ring section present in order, but no gym data at all yet). */
 @Composable
-private fun StatsRow(state: BriefingState, gymRing: GymRing?) {
-    val hasGym = gymRing != null || (state.gymLast7d != null && state.gymTarget != null)
-    if (!hasGym && state.discretionaryDollars == null && state.courseworkHoursNext7d == null) return
+private fun TileRow(sections: List<WidgetSection>, state: BriefingState, gymRing: GymRing?, scale: Float) {
     val moneySeverity = state.reasons.firstOrNull { it.domain == "money" }?.severity
+    val hasGym = WidgetSection.GYM_RING in sections &&
+        (gymRing != null || (state.gymLast7d != null && state.gymTarget != null))
+    val hasMoney = WidgetSection.MONEY_TILE in sections && state.discretionaryDollars != null
+    val hasCoursework = WidgetSection.COURSEWORK_TILE in sections && state.courseworkHoursNext7d != null
+    if (!hasGym && !hasMoney && !hasCoursework) return
+
     Row(modifier = GlanceModifier.fillMaxWidth().padding(top = 4.dp)) {
         var addedFirst = false
-        if (gymRing != null) {
-            GymRingIndicator(gymRing)
-            addedFirst = true
-        } else if (state.gymLast7d != null && state.gymTarget != null) {
-            GymBar(state.gymLast7d, state.gymTarget)
-            addedFirst = true
-        }
-        if (state.discretionaryDollars != null) {
-            if (addedFirst) {
-                Spacer(modifier = GlanceModifier.width(6.dp))
+        for (section in sections) {
+            val rendered = when (section) {
+                WidgetSection.GYM_RING -> when {
+                    gymRing != null -> {
+                        if (addedFirst) Spacer(modifier = GlanceModifier.width(6.dp))
+                        GymRingIndicator(gymRing, scale)
+                        true
+                    }
+                    state.gymLast7d != null && state.gymTarget != null -> {
+                        if (addedFirst) Spacer(modifier = GlanceModifier.width(6.dp))
+                        GymBar(state.gymLast7d, state.gymTarget)
+                        true
+                    }
+                    else -> false
+                }
+                WidgetSection.MONEY_TILE -> if (state.discretionaryDollars != null) {
+                    if (addedFirst) Spacer(modifier = GlanceModifier.width(6.dp))
+                    MoneyTile(state.discretionaryDollars, moneySeverity, scale,
+                        modifier = GlanceModifier.width((STAT_TILE_WIDTH_DP * scale).dp))
+                    true
+                } else false
+                WidgetSection.COURSEWORK_TILE -> if (state.courseworkHoursNext7d != null) {
+                    if (addedFirst) Spacer(modifier = GlanceModifier.width(6.dp))
+                    StatTile("📚", "${state.courseworkHoursNext7d}h", scale,
+                        modifier = GlanceModifier.width((STAT_TILE_WIDTH_DP * scale).dp))
+                    true
+                } else false
+                else -> false
             }
-            MoneyTile(state.discretionaryDollars, moneySeverity, modifier = GlanceModifier.width(STAT_TILE_WIDTH_DP.dp))
-            addedFirst = true
+            if (rendered) addedFirst = true
         }
-        if (state.courseworkHoursNext7d != null) {
-            if (addedFirst) {
-                Spacer(modifier = GlanceModifier.width(6.dp))
-            }
-            StatTile("📚", "${state.courseworkHoursNext7d}h", modifier = GlanceModifier.width(STAT_TILE_WIDTH_DP.dp))
+    }
+}
+
+/** Today's real calendar events -- shown above "Up next" and independent of
+ * the LLM-generated briefing text, since a $0 family event or anything not
+ * framed as "at risk" would otherwise never surface (confirmed 2026-07-12:
+ * a same-day BBQ went unmentioned because it wasn't a risk/deadline). This
+ * is the deterministic "don't forget you have an obligation" line, not
+ * advisory. */
+@Composable
+private fun EventsSection(events: List<TodayEvent>) {
+    Column(modifier = GlanceModifier.padding(top = 8.dp)) {
+        for (event in events) {
+            Text(
+                text = formatEventLine(event),
+                style = TextStyle(
+                    fontWeight = FontWeight.Bold,
+                    color = GlanceTheme.colors.onSurface,
+                ),
+            )
+        }
+    }
+}
+
+@Composable
+private fun UpNextSection(tasks: List<NextTask>, maxTasks: Int) {
+    val tasksToShow = tasks.take(maxTasks)
+    Column(modifier = GlanceModifier.padding(top = 8.dp)) {
+        Text(
+            text = "Up next",
+            style = TextStyle(
+                fontWeight = FontWeight.Bold,
+                color = GlanceTheme.colors.onSurface,
+            ),
+        )
+        for (task in tasksToShow) {
+            NextTaskRow(task)
         }
     }
 }
@@ -459,7 +572,9 @@ private fun StatsRow(state: BriefingState, gymRing: GymRing?) {
 /** "as of" info line -- when this snapshot was received, if known. A stale
  * snapshot is worse than a missing one (it looks current but isn't), so
  * anything past STALE_THRESHOLD_MINUTES gets a warning glyph ahead of the
- * age, not just the age itself. */
+ * age, not just the age itself. Not a user-configurable [WidgetSection] --
+ * it's a freshness indicator, not content -- so it's pinned to render right
+ * after the section loop finishes, regardless of section order. */
 @Composable
 private fun StaleIndicator(fetchedAtEpochMillis: Long?) {
     val fetchedAt = fetchedAtEpochMillis ?: return
@@ -518,8 +633,9 @@ private fun GymBar(completed: Int, target: Int) {
     }
 }
 
-private const val GYM_RING_SIZE_DP = 44
-private const val GYM_RING_STROKE_DP = 4
+private const val BASE_GYM_RING_SIZE_DP = 44
+private const val BASE_GYM_RING_STROKE_DP = 4
+private const val BASE_GYM_RING_EMOJI_SP = 20f
 private val GYM_RING_RED = Color(0xFFB3261E)
 
 /** Draws the ring as a bitmap via plain android.graphics.Canvas/Paint --
@@ -552,11 +668,12 @@ private fun renderGymRingBitmap(sizePx: Int, strokeWidthPx: Float, fill: Float, 
  * decoupled -- see GymRing's docstring. Rendered as a bitmap ring (see
  * renderGymRingBitmap) with the gym emoji layered on top via a centered Box. */
 @Composable
-private fun GymRingIndicator(gymRing: GymRing) {
+private fun GymRingIndicator(gymRing: GymRing, scale: Float) {
     val context = LocalContext.current
     val density = context.resources.displayMetrics.density
-    val sizePx = (GYM_RING_SIZE_DP * density).roundToInt()
-    val strokePx = GYM_RING_STROKE_DP * density
+    val ringSizeDp = (BASE_GYM_RING_SIZE_DP * scale)
+    val sizePx = (ringSizeDp * density).roundToInt()
+    val strokePx = BASE_GYM_RING_STROKE_DP * scale * density
     val ringColor = when (gymRing.color) {
         "green" -> COLOR_OK
         "yellow" -> COLOR_WARN
@@ -570,7 +687,7 @@ private fun GymRingIndicator(gymRing: GymRing) {
         fillColor = ringColor.toArgb(),
     )
     Box(
-        modifier = GlanceModifier.size(GYM_RING_SIZE_DP.dp),
+        modifier = GlanceModifier.size(ringSizeDp.dp),
         contentAlignment = Alignment.Center,
     ) {
         Image(
@@ -578,7 +695,7 @@ private fun GymRingIndicator(gymRing: GymRing) {
             contentDescription = "Gym ${gymRing.gymLast7d}/${gymRing.gymTarget}, ${gymRing.color}",
             modifier = GlanceModifier.fillMaxSize(),
         )
-        Text(text = "🏋", style = TextStyle(fontSize = 20.sp))
+        Text(text = "🏋", style = TextStyle(fontSize = (BASE_GYM_RING_EMOJI_SP * scale).sp))
     }
 }
 

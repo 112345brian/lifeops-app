@@ -10,6 +10,8 @@ import com.lifeops.briefing.data.AttentionReason
 import com.lifeops.briefing.data.BriefingState
 import com.lifeops.briefing.data.NextTask
 import com.lifeops.briefing.data.NextTasksState
+import com.lifeops.briefing.data.WidgetDisplayConfig
+import com.lifeops.briefing.data.WidgetSection
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -195,5 +197,153 @@ class BriefingWidgetTest {
 
         onNode(hasText("Task 1", true)).assertExists()
         onNode(hasText("Task 8", true)).assertExists()
+    }
+
+    @Test
+    fun hiddenSection_doesNotRenderEvenAtLargeBucket() = runGlanceAppWidgetUnitTest {
+        setAppWidgetSize(DpSize(250.dp, 250.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(courseworkHoursNext7d = 6.5),
+                    nextTasks = NextTasksState.empty(),
+                    config = WidgetDisplayConfig.default().copy(hiddenSections = setOf(WidgetSection.COURSEWORK_TILE)),
+                )
+            }
+        }
+
+        onNode(hasText("6.5h", true)).assertDoesNotExist()
+        // Gym stays visible -- only coursework was hidden.
+        onNode(hasText("Gym 2/3 (7d)", true)).assertExists()
+    }
+
+    @Test
+    fun severityDots_renderInlineOnBadgeRow_whenLeftInDefaultPosition() = runGlanceAppWidgetUnitTest {
+        setAppWidgetSize(DpSize(120.dp, 90.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(
+                        attentionState = "risk", attentionSymbol = "◆", attentionLabel = "RISK",
+                        reasons = listOf(AttentionReason("coursework", "risk")),
+                    ),
+                    nextTasks = NextTasksState.empty(),
+                    // default sectionOrder has SEVERITY_DOTS first -> inline with badge, shown even at SMALL.
+                )
+            }
+        }
+
+        onNode(hasContentDescription("coursework: risk")).assertExists()
+    }
+
+    @Test
+    fun severityDots_becomeStandaloneRow_whenMovedOutOfDefaultPosition() = runGlanceAppWidgetUnitTest {
+        setAppWidgetSize(DpSize(250.dp, 250.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(
+                        attentionState = "risk", attentionSymbol = "◆", attentionLabel = "RISK",
+                        reasons = listOf(AttentionReason("coursework", "risk")),
+                    ),
+                    nextTasks = NextTasksState.empty(),
+                    config = WidgetDisplayConfig.default().copy(
+                        sectionOrder = WidgetSection.entries.filter { it != WidgetSection.SEVERITY_DOTS } +
+                            WidgetSection.SEVERITY_DOTS,
+                    ),
+                )
+            }
+        }
+
+        // Still renders somewhere (as its own row now, not inline) -- moved
+        // to LARGE bucket since a standalone (non-badge-attached) section
+        // only renders past the SMALL-bucket gate, same as every other
+        // section.
+        onNode(hasContentDescription("coursework: risk")).assertExists()
+    }
+
+    @Test
+    fun sectionOrder_reordersUpNextAboveBriefingText() = runGlanceAppWidgetUnitTest {
+        setAppWidgetSize(DpSize(250.dp, 250.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState,
+                    nextTasks = NextTasksState(tasks = listOf(NextTask("1", "Only task", null))),
+                    config = WidgetDisplayConfig.default().copy(
+                        sectionOrder = listOf(WidgetSection.UP_NEXT, WidgetSection.BRIEFING_PARAGRAPH) +
+                            WidgetSection.entries.filter {
+                                it != WidgetSection.UP_NEXT && it != WidgetSection.BRIEFING_PARAGRAPH
+                            },
+                    ),
+                )
+            }
+        }
+
+        // Both still render regardless of order -- this asserts the reorder
+        // doesn't silently drop either section (a real ordering assertion
+        // would need node-position comparison, which this testing API
+        // doesn't expose; presence-after-reorder is the meaningful check
+        // available here).
+        onNode(hasText("Only task", true)).assertExists()
+        onNode(hasText("All clear.", true)).assertExists()
+    }
+
+    @Test
+    fun maxTasksOverride_belowHeuristicWins() = runGlanceAppWidgetUnitTest {
+        setAppWidgetSize(DpSize(250.dp, 250.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState,
+                    nextTasks = NextTasksState(tasks = eightTasks),
+                    config = WidgetDisplayConfig.default().copy(maxTasksOverride = 1),
+                )
+            }
+        }
+
+        onNode(hasText("Task 1", true)).assertExists()
+        onNode(hasText("Task 2", true)).assertDoesNotExist()
+    }
+
+    @Test
+    fun maxTasksOverride_aboveHardCeilingGetsClamped() = runGlanceAppWidgetUnitTest {
+        // Even a widget tall enough for the height heuristic to allow more,
+        // and a user override asking for way more than that, must never
+        // exceed Glance's hard 10-direct-children-per-container limit (the
+        // "Up next" Column holds a header + N rows -- see MAX_TASKS_HARD_CEILING).
+        setAppWidgetSize(DpSize(250.dp, 2000.dp))
+        val fifteenTasks = (1..15).map { NextTask(id = "$it", title = "Task $it", start = null) }
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState,
+                    nextTasks = NextTasksState(tasks = fifteenTasks),
+                    config = WidgetDisplayConfig.default().copy(maxTasksOverride = 15),
+                )
+            }
+        }
+
+        onNode(hasText("Task 9", true)).assertExists()
+        onNode(hasText("Task 10", true)).assertDoesNotExist()
+    }
+
+    @Test
+    fun scaleAboveOne_stillRendersExpectedText() = runGlanceAppWidgetUnitTest {
+        // Font/icon scaling shouldn't affect text matching -- a smoke test
+        // that bumping scale doesn't silently break rendering.
+        setAppWidgetSize(DpSize(250.dp, 250.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(discretionaryDollars = 340),
+                    nextTasks = NextTasksState.empty(),
+                    config = WidgetDisplayConfig.default().copy(scale = 1.3f),
+                )
+            }
+        }
+
+        onNode(hasText("$340", true)).assertExists()
+        onNode(hasText("All clear.", true)).assertExists()
     }
 }
