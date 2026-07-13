@@ -8,6 +8,7 @@ import androidx.work.WorkerParameters
 import com.lifeops.briefing.data.NextTasksState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.IOException
 import org.json.JSONException
 
 /**
@@ -38,11 +39,24 @@ class NextTasksPersistWorker(
             // PendingRemovals filtering) from either path.
             persistNextTasksForInstance(applicationContext, glanceId, state)
         }
+        // Confirm receipt so the server knows this push actually landed
+        // (see runner.py's _push_with_ack) instead of just trusting its own
+        // send() call. Best-effort: a failed ack just means the server
+        // retries this same content next tick, which is exactly the
+        // correct fallback -- must not fail an otherwise-successful persist.
+        inputData.getString(KEY_VERSION)?.let { version ->
+            try {
+                postNtfySignal("ack:next_tasks:$version")
+            } catch (e: IOException) {
+                Log.w(TAG, "failed to post ack for next_tasks $version", e)
+            }
+        }
         Result.success()
     }
 
     companion object {
         const val KEY_PAYLOAD = "payload"
+        const val KEY_VERSION = "version"
         private const val TAG = "NextTasksPersistWorker"
     }
 }

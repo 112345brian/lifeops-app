@@ -41,14 +41,27 @@ class BriefingFcmService : FirebaseMessagingService() {
 
     override fun onMessageReceived(message: RemoteMessage) {
         val payload = message.data["payload"] ?: return
+        // "version" travels alongside the payload so the persist worker can
+        // echo it back as an ack once persisted -- see runner.py's
+        // _push_with_ack. Missing "version" (an old in-flight push sent
+        // before the server started tagging messages) just means no ack
+        // gets posted for it; the server's own state file would already
+        // have nothing to match it against either.
+        val version = message.data["version"]
         // Missing "type" defaults to "briefing" for compatibility with any
         // in-flight push sent before the server started tagging messages.
         val request = when (message.data["type"] ?: "briefing") {
             "next_tasks" -> OneTimeWorkRequestBuilder<NextTasksPersistWorker>()
-                .setInputData(workDataOf(NextTasksPersistWorker.KEY_PAYLOAD to payload))
+                .setInputData(workDataOf(
+                    NextTasksPersistWorker.KEY_PAYLOAD to payload,
+                    NextTasksPersistWorker.KEY_VERSION to version,
+                ))
                 .build()
             else -> OneTimeWorkRequestBuilder<BriefingPersistWorker>()
-                .setInputData(workDataOf(BriefingPersistWorker.KEY_PAYLOAD to payload))
+                .setInputData(workDataOf(
+                    BriefingPersistWorker.KEY_PAYLOAD to payload,
+                    BriefingPersistWorker.KEY_VERSION to version,
+                ))
                 .build()
         }
         // Enqueue, don't launch-and-hope: see BriefingPersistWorker's
@@ -110,7 +123,7 @@ internal fun registerToken(context: android.content.Context, token: String): Boo
     }
 
     return try {
-        postTokenRegistrationSignal(token)
+        postNtfySignal("token:$token")
         true
     } catch (e: IOException) {
         Log.e("BriefingFcmService", "error posting token registration signal", e)
@@ -142,13 +155,3 @@ private fun registerTokenDirect(baseUrl: String, authToken: String, token: Strin
     }
 }
 
-private fun postTokenRegistrationSignal(token: String) {
-    if (BuildConfig.NTFY_SIGNAL_TOPIC.isBlank()) {
-        throw IOException("ntfy signal topic is not configured in local.properties")
-    }
-    httpRequest(
-        url = "https://ntfy.sh/${BuildConfig.NTFY_SIGNAL_TOPIC}",
-        method = "POST",
-        body = "token:$token",
-    )
-}

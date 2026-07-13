@@ -54,7 +54,7 @@ class CompleteTaskAction : ActionCallback {
         }
 
         try {
-            postCompleteSignal(taskId)
+            postNtfySignal("complete:$taskId")
         } catch (e: IOException) {
             Log.e(TAG, "error posting complete signal for $taskId", e)
             return // network hiccup -- leave it checked-off-looking-unchanged; user can retap
@@ -68,17 +68,6 @@ class CompleteTaskAction : ActionCallback {
             url = "$baseUrl/api/tasks/$taskId/complete?token=$token",
             method = "POST",
             requireExactCode = HttpURLConnection.HTTP_OK,
-        )
-    }
-
-    private fun postCompleteSignal(taskId: String) {
-        if (BuildConfig.NTFY_SIGNAL_TOPIC.isBlank()) {
-            throw IOException("ntfy signal topic is not configured in local.properties")
-        }
-        httpRequest(
-            url = "https://ntfy.sh/${BuildConfig.NTFY_SIGNAL_TOPIC}",
-            method = "POST",
-            body = "complete:$taskId",
         )
     }
 

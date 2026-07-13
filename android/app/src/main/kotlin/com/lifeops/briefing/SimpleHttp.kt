@@ -38,3 +38,20 @@ internal fun httpRequest(
         connection.disconnect()
     }
 }
+
+/** Posts a signal to the public ntfy topic lifeops's runner.py polls for
+ * phone->server signals (see ntfy.py/runner.py's ingest()) -- the shared
+ * plumbing behind every ntfy-relay use (task completion, token
+ * registration, push-received acks), so the "topic not configured" guard
+ * and the actual POST live in exactly one place instead of being
+ * copy-pasted per signal type. */
+internal fun postNtfySignal(body: String) {
+    if (BuildConfig.NTFY_SIGNAL_TOPIC.isBlank()) {
+        throw IOException("ntfy signal topic is not configured in local.properties")
+    }
+    httpRequest(
+        url = "https://ntfy.sh/${BuildConfig.NTFY_SIGNAL_TOPIC}",
+        method = "POST",
+        body = body,
+    )
+}
