@@ -25,22 +25,24 @@ import java.util.concurrent.TimeUnit
 /**
  * Periodically pulls BOTH the "what's next" task list AND the current
  * briefing from the lifeops server, pushing each into every placed widget's
- * Glance state. The briefing itself is delivered push-only via FCM
- * (BriefingFcmService) for low-latency delivery, but push has no
- * self-healing: a push missed for any reason (server down at that exact
+ * Glance state. As of the server pushing next-tasks over FCM too (runner.py's
+ * push_next_tasks, on every tick), BOTH fields here are now self-heal
+ * fallbacks for their FCM push counterparts (BriefingFcmService), not the
+ * primary freshness path for either one -- and this is also the ONLY
+ * Tailscale-dependent part of the widget's ambient (non-panel) operation
+ * left; everything else (briefing, next-tasks, task completion, token
+ * registration) now has a Tailscale-independent push/relay path, with this
+ * pull only mattering when a push is missed (server down at that exact
  * moment, FCM token not registered yet, widget freshly placed/reinstalled,
- * phone off) means the briefing just never updates until the next lucky
- * push. This periodic pull (same /api/briefing endpoint push already uses)
- * closes that gap the same way next-tasks always has -- confirmed
+ * phone off). Originally next-tasks was pull-only and briefing was push-only,
+ * which silently drifted them out of sync with each other -- confirmed
  * 2026-07-12 as the root cause of "sometimes it just shows one old
- * sentence/nothing": next-tasks self-healed via this exact mechanism,
- * briefing didn't, and the two silently drifted out of sync with each
- * other.
+ * sentence/nothing" -- so both fields going through the same push+pull-
+ * fallback shape now is deliberate, not incidental.
  *
- * 15-minute staleness is fine for next-tasks (completing 3 tasks in under
- * 15 minutes isn't realistic) and acceptable as a *fallback* for briefing
- * too, since the push path still delivers near-instantly when it works --
- * this only matters when push has already failed.
+ * 15-minute staleness is fine as a fallback cadence for both fields, since
+ * the push path still delivers near-instantly (and Tailscale-independently)
+ * when it works -- this pull only matters once push has already failed.
  *
  * HTTP client choice: same reasoning as before -- one GET, no request body,
  * no need for a full HTTP client.
