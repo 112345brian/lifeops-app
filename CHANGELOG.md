@@ -49,6 +49,23 @@ change matter more here than semver strictness.
   `push_next_tasks()` ran before domain dispatch/`recalculate()` in
   `_run()`, so a pushed snapshot could miss a change the same tick's
   domains just made -- moved to run after.
+- `_push_with_ack` wrote `{"acked": true}` whenever a send was skipped
+  because there was nothing to send yet (no FCM token registered) --
+  correct in the moment, but it fabricated a permanent "acked" sentinel
+  for that content's hash. Once a token was later registered, the same
+  unchanged snapshot hashed to the same version and got skipped forever
+  by the unchanged-and-acked check, so a fresh install's first real
+  content never actually delivered even after configuration finished.
+  Fixed: write no state at all when nothing was sent, so an
+  unconfigured device just cheaply retries until a real send succeeds.
+- Four Android call sites (`NextTasksRefreshWorker`, `CompleteTaskAction`,
+  `BriefingFcmService`) appended raw, unencoded tokens and task IDs into
+  request URLs -- inconsistent with `OpenPanelAction`'s existing
+  `Uri.encode`, and a real bug since `WEB_TOKEN` is free-text editable
+  via the panel's own Settings page (`&`, `#`, `+`, `%`, spaces all
+  realistically reachable). Now routed through a shared
+  `authenticatedUrl()` helper that encodes the query token, plus
+  `Uri.encode()` on the task-id path segment.
 
 ## [1.5.0] — 2026-07-13
 
