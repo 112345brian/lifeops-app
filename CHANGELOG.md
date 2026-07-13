@@ -4,6 +4,34 @@ Notable changes, newest first. Personal project, versioned simply (see
 `VERSION` / `lifeops.__version__`) — dates and the reasoning behind each
 change matter more here than semver strictness.
 
+## [1.6.0] — 2026-07-13
+
+### Added
+- **FCM push delivery confirmation.** `messaging.send()` succeeding only
+  confirms Firebase accepted a message for delivery, not that the phone
+  ever received it -- data messages can be silently dropped (Doze, a
+  force-stopped app, etc.) with zero signal back to the server. Both push
+  types (briefing, next-tasks) now get a real receipt confirmation:
+  - Every push carries a short content-hash `version` in its FCM data.
+  - Android's persist workers echo it back as an `ack:<type>:<version>`
+    ntfy signal once the payload is successfully persisted.
+  - `runner.py`'s `ingest()` handles that signal; a push is skipped only
+    when the content is unchanged **and** the previous push was acked --
+    an unacked push keeps retrying every tick even with no content
+    change, since "unacked" is exactly the signal a prior attempt may
+    not have landed.
+
+### Fixed
+- `RegisterTokenWorker` always reported success to WorkManager even when
+  FCM token registration failed on both its direct-call and ntfy-relay
+  paths (e.g. the phone fully offline, not just off-tailnet) -- silently
+  dropping the registration for good instead of retrying. Now returns
+  `Result.retry()` with explicit backoff, matching the rest of the
+  codebase's WorkManager conventions.
+- `push_next_tasks()` sent a fresh FCM message every tick even when
+  nothing had changed since the last (now-acked) push; skips the send in
+  that case.
+
 ## [1.5.0] — 2026-07-13
 
 ### Added
