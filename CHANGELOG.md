@@ -4,6 +4,42 @@ Notable changes, newest first. Personal project, versioned simply (see
 `VERSION` / `lifeops.__version__`) — dates and the reasoning behind each
 change matter more here than semver strictness.
 
+## [1.15.0] — 2026-07-13
+
+### Changed
+- **Weather and Social single-stat widgets redesigned for a true 2x1
+  footprint.** Both previously defaulted wider (180dp/3 cols) or taller
+  (150dp/2 rows) than every other single-stat preset. Weather now renders a
+  `CompactWeatherTile` at 2x1 — temp+unit, hi/lo, icon, and a shrunk
+  condition label, all sized to fit without clipping — instead of the full
+  weather-app-style card, which still renders once the widget's resized
+  bigger. Social's partner/friends chips now stack vertically instead of
+  side by side for this preset, with tighter font sizes/padding, so both
+  fit the same 110dp x 56dp floor as Gym/Money/Coursework/Sleep.
+- **A single-stat preset's sole content now fills its actual placed space.**
+  Previously every compact tile (StatTile, CompactWeatherTile, the stacked
+  Social chips) sized itself to wrap its own content and left dead space
+  around it whenever the real widget was bigger than that content —
+  most visible as a tiny chip floating in a large empty box. When a
+  widget's badge is hidden and exactly one section is visible (the
+  single-stat case), that section now gets `fillMaxSize()` instead of
+  wrapping its own size.
+
+### Fixed
+- **The attention badge ("FUCKED"/"WATCH"/etc.) rendered unconditionally**,
+  ignoring the "Severity dots" toggle — a single-stat preset that hides
+  every section (including severity dots) still showed the badge, with no
+  dots to explain what it meant. Now gated behind the same toggle.
+- **Widget setup preview hid toggled-on sections** based on the widget's
+  transient placed size (Samsung's launcher drops new widgets at a small
+  default footprint) instead of the user's actual Sections toggles.
+- **Weather card's high/low arrows didn't align**, and the condition text
+  (in the setup preview) had an unwanted gap above it from a missing
+  explicit `lineHeight`. Both fixed; arrow alignment settled on
+  Alignment.Top after trying Bottom, closest available approximation of a
+  superscript unit given neither Compose nor Glance's TextStyle support
+  baselineShift.
+
 ## [1.14.0] — 2026-07-13
 
 ### Fixed

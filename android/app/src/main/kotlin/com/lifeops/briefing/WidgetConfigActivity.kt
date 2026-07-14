@@ -616,23 +616,36 @@ private fun PreviewWeatherCard(state: BriefingState, scale: Float) {
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.Top,
     ) {
-        Row(verticalAlignment = Alignment.Top) {
-            Text(text = "${state.temperatureF ?: "--"}", color = Color.White, fontWeight = FontWeight.Bold,
-                fontSize = (28 * scale).sp)
-            Text(text = "°F", color = Color.White, fontSize = (11 * scale).sp, lineHeight = (11 * scale).sp)
-            // High/low get their own column, arrows flush left against each
-            // other -- matches WeatherSection in BriefingWidget.kt: putting
-            // "°F" on the same line as "↑85°" pushed the up-arrow in by
-            // "°F"'s width while "↓67°" started at the column's own left
-            // edge, so the two arrows never lined up (confirmed 2026-07-13,
-            // live device screenshot). lineHeight is set explicitly to match
-            // fontSize on every line here -- Text() only overriding fontSize
-            // keeps the inherited (much taller) MaterialTheme default line
-            // height, which is what caused the original vertical gap.
-            Column {
+        // Two flat rows (temp+unit, then high/low side by side) -- matches
+        // WeatherSection in BriefingWidget.kt exactly. A Row with a
+        // multi-line Column nested beside the big number looked fine here
+        // (plain Compose) but broke on the real Glance-rendered widget, so
+        // this preview switched to the same two-simple-rows shape the real
+        // widget now uses rather than keep previewing a layout the actual
+        // widget doesn't render (confirmed 2026-07-13). lineHeight is set
+        // explicitly to match fontSize on every line -- Text() only
+        // overriding fontSize keeps the inherited (much taller) MaterialTheme
+        // default line height, which caused an earlier vertical gap bug.
+        Column {
+            // Top-aligned: matches WeatherSection -- the closest available
+            // approximation of a top-right superscript given neither
+            // Compose nor the real widget's Glance TextStyle support
+            // baselineShift (confirmed 2026-07-13, user's call).
+            Row(verticalAlignment = Alignment.Top) {
+                Text(text = "${state.temperatureF ?: "--"}", color = Color.White, fontWeight = FontWeight.Bold,
+                    fontSize = (28 * scale).sp)
+                Text(text = "°F", color = Color.White, fontSize = (11 * scale).sp, lineHeight = (11 * scale).sp)
+            }
+            // Both on the same font size, matching WeatherSection's fix --
+            // no reason for high/low to differ now that they're side by
+            // side on one row instead of two differently-sized lines.
+            Row {
                 state.weatherHighF?.let {
                     Text(text = "↑${it}°", color = Color.White,
-                        fontSize = (11 * scale).sp, lineHeight = (11 * scale).sp)
+                        fontSize = (10 * scale).sp, lineHeight = (10 * scale).sp)
+                }
+                if (state.weatherHighF != null && state.weatherLowF != null) {
+                    Spacer(modifier = Modifier.width((6 * scale).dp))
                 }
                 state.weatherLowF?.let {
                     Text(text = "↓${it}°", color = Color.White,

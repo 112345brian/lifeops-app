@@ -1,18 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Single-stat preset (weather only): see gym_widget_info.xml's comment
-     for why minHeight/minResizeHeight are held at 150dp. Wider default than
-     the other single-stat presets (targetCellWidth 3, not 2): the
-     WeatherSection card is a wide temp+hi/lo-on-the-left,
-     icon+condition-on-the-right layout, not a narrow icon+number tile. -->
+<!-- Single-stat preset (weather only). Back to the same true 2x1 footprint
+     as every other single-stat preset (matching social_widget_info.xml's
+     width too, so they line up when placed together). COMPACT_WEATHER_*
+     in BriefingWidget.kt already fits this width without clipping:the
+     one thing that still needed tuning was the condition text label
+     itself, nudged down a point (confirmed 2026-07-13: "it was literally
+     fine except for that"). maxResizeWidth/Height still let it grow into
+     the full card if the user drags it bigger. -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
-    android:minWidth="180dp"
-    android:minHeight="150dp"
-    android:minResizeWidth="180dp"
-    android:minResizeHeight="150dp"
+    android:minWidth="110dp"
+    android:minHeight="56dp"
+    android:minResizeWidth="110dp"
+    android:minResizeHeight="56dp"
     android:maxResizeWidth="320dp"
     android:maxResizeHeight="250dp"
-    android:targetCellWidth="3"
-    android:targetCellHeight="2"
+    android:targetCellWidth="2"
+    android:targetCellHeight="1"
     android:resizeMode="horizontal|vertical"
     android:widgetCategory="home_screen"
     android:updatePeriodMillis="1800000"

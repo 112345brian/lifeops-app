@@ -1,24 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Single-stat preset (social only): see gym_widget_info.xml's comment
-     for why minHeight/minResizeHeight are held at 150dp. Slightly wider
-     default than the narrow icon+number presets (targetCellWidth 3, not
-     2): SocialSection shows two side-by-side figures (partner + friends),
-     not one. minWidth matches weather_widget_info.xml's 180dp exactly, not
-     just targetCellWidth=3: Samsung's launcher doesn't honor
-     targetCellWidth/targetCellHeight, it recomputes the picker footprint
-     from minWidth/minHeight against its own grid cell size, so weather's
-     180dp and social's old 160dp rounded to different column counts (3 vs
-     2) despite both declaring the same targetCellWidth (confirmed
-     2026-07-13, live device: weather showed 3x3 in the picker, social 2x3). -->
+<!-- Single-stat preset (social only). SocialSection now stacks the
+     partner/friends chips vertically for this preset (see [stacked] in
+     BriefingWidget.kt), each chip using tighter font sizes/padding than the
+     default StatTile, so both fit within the same true 2x1 (110dp x 56dp)
+     footprint every other single-stat preset uses:matching weather's
+     footprint too, so the two line up when placed together (confirmed
+     2026-07-13: "ideally we would have the weather 2x1, then the
+     friends/social 2x1"). -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
-    android:minWidth="180dp"
-    android:minHeight="150dp"
-    android:minResizeWidth="180dp"
-    android:minResizeHeight="150dp"
+    android:minWidth="110dp"
+    android:minHeight="56dp"
+    android:minResizeWidth="110dp"
+    android:minResizeHeight="56dp"
     android:maxResizeWidth="280dp"
     android:maxResizeHeight="250dp"
-    android:targetCellWidth="3"
-    android:targetCellHeight="2"
+    android:targetCellWidth="2"
+    android:targetCellHeight="1"
     android:resizeMode="horizontal|vertical"
     android:widgetCategory="home_screen"
     android:updatePeriodMillis="1800000"
