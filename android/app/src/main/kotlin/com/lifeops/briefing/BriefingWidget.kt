@@ -192,10 +192,9 @@ internal val TILE_SECTIONS = setOf(
  * kept separate from TILE_SECTIONS itself since these don't render as a
  * StatTile-compatible group (groupSectionsForRendering must never batch
  * them into a shared TileRow). SOCIAL already renders as a StatTile-shaped
- * row (see SocialSection) so it fits SMALL as-is. WEATHER's full card
- * (temp+hi/lo+condition text) doesn't fit a single compact row, so it
- * renders as a plain StatTile (icon + temp only) at SMALL instead of the
- * full WeatherSection -- see the WEATHER branch below. Lets a
+ * row (see SocialSection) so it fits SMALL as-is. WEATHER's [WeatherCard]
+ * reads LocalSize itself and switches to its compact sizing below the same
+ * threshold, so it fits SMALL without a separate code path here. Lets a
  * single-preset Weather/Social widget actually shrink to Android's real
  * minimum footprint instead of being stuck at a 150dp MEDIUM floor
  * (confirmed 2026-07-13: user wanted these resizable down like every
@@ -346,38 +345,16 @@ internal fun BriefingContent(
                     }
                 WidgetSection.WEATHER ->
                     if (state.temperatureF != null) {
-                        if (bucket == WidgetSizeBucket.SMALL) {
-                            if (solo) {
-                                // fillMaxSize() directly on the card, not
-                                // just a fillMaxSize Box centering a
-                                // content-sized card inside it -- the blue
-                                // background only stretched to cover its
-                                // own compact content height, leaving plain
-                                // background above/below it instead of
-                                // actually filling the widget's real 2x1
-                                // area (confirmed 2026-07-13, live device:
-                                // "keep the blue shit as filled out to 2x1
-                                // as you can").
-                                CompactWeatherTile(state, config.scale, modifier = GlanceModifier.fillMaxSize())
-                            } else {
-                                CompactWeatherTile(state, config.scale, modifier = GlanceModifier.padding(top = 4.dp))
-                            }
-                        } else {
-                            // Same fillMaxSize() treatment as
-                            // CompactWeatherTile above, for whichever bucket
-                            // this real device's "2x1" placement actually
-                            // measures as -- bucketFor is height-only, and
-                            // this device's real per-cell height for a
-                            // declared 1-row widget may not match the SMALL
-                            // threshold assumed elsewhere, in which case
-                            // WeatherSection (not CompactWeatherTile) is
-                            // what's actually rendering, and it never got
-                            // this fix at all (confirmed 2026-07-13, live
-                            // device: fillMaxSize on CompactWeatherTile alone
-                            // produced zero visible change).
-                            WeatherSection(state, config.scale,
-                                modifier = if (solo) GlanceModifier.fillMaxSize() else GlanceModifier)
-                        }
+                        // fillMaxSize() when solo (this card IS the entire
+                        // widget) so the blue background actually fills the
+                        // real placed area instead of just wrapping its own
+                        // content height and leaving dead space around it
+                        // (confirmed 2026-07-13: "keep the blue shit as
+                        // filled out to 2x1 as you can"); a plain top margin
+                        // otherwise, when it's sharing the widget with a
+                        // badge/other sections above it.
+                        WeatherCard(state, config.scale,
+                            modifier = if (solo) GlanceModifier.fillMaxSize() else GlanceModifier.padding(top = 4.dp))
                     }
                 WidgetSection.SOCIAL ->
                     if (state.partnerDaysSince != null || state.friendDaysSince != null) {
@@ -807,7 +784,7 @@ internal fun formatSleepDuration(minutes: Int): String {
  * figures (social_input tracks them separately, same as PARTNER_TASK vs.
  * FRIENDS_TASK elsewhere in the app), so unlike the other stats this isn't
  * a single StatTile-shaped emoji+number; it's a small two-up row. Renders
- * standalone (not part of [TILE_SECTIONS]) for the same reason WeatherSection
+ * standalone (not part of [TILE_SECTIONS]) for the same reason [WeatherCard]
  * does -- two paired numbers read better as their own row than squeezed
  * into the ~100dp gym/money/coursework/sleep tile width. Either figure can
  * be missing independently (e.g. no FRIEND_NAMES configured) without
@@ -926,17 +903,41 @@ internal fun weatherEmoji(condition: String?): String {
  * row (NOT part of [TILE_SECTIONS]'s shared gym/money/coursework strip --
  * this card is wider than the ~100dp stat-tile width and reads better on
  * its own row, especially as the single-stat "LifeOps Weather" preset's
- * only content). */
+ * only content).
+ *
+ * ONE composable for every bucket, reading [LocalSize] directly to pick
+ * BASE_WEATHER_* (roomy) vs COMPACT_WEATHER_* (sized to fit a true 2x1
+ * without clipping) -- not two separately-maintained copies. That used to
+ * be two near-identical functions (WeatherSection + CompactWeatherTile)
+ * with independently hand-tuned magic numbers, which is precisely the
+ * anti-pattern Google's own Glance docs warn against (developer.android.com/
+ * develop/ui/compose/glance/build-ui: "a single composable that checks
+ * LocalSize.current" over per-size duplicates) -- and the direct cause of
+ * this session's repeated bugs, where a fix (hi/lo alignment, maxLines,
+ * textAlign) landed in one copy and was forgotten in the other (confirmed
+ * 2026-07-13: "research what is idiomatic" / "fix all that shit"). The
+ * threshold matches bucketFor's own SMALL cutoff (MEDIUM_SIZE.height) so
+ * this never disagrees with the rest of BriefingContent about what counts
+ * as small. */
 @Composable
-private fun WeatherSection(state: BriefingState, scale: Float, modifier: GlanceModifier = GlanceModifier) {
+private fun WeatherCard(state: BriefingState, scale: Float, modifier: GlanceModifier = GlanceModifier) {
     val temp = state.temperatureF ?: return
+    val compact = LocalSize.current.height < MEDIUM_SIZE.height
+    val tempSp = if (compact) COMPACT_WEATHER_TEMP_SP else BASE_WEATHER_TEMP_SP
+    val unitSp = if (compact) COMPACT_WEATHER_UNIT_SP else BASE_WEATHER_UNIT_SP
+    val hiloSp = if (compact) COMPACT_WEATHER_HILO_SP else BASE_WEATHER_HILO_SP
+    val iconSp = if (compact) COMPACT_WEATHER_ICON_SP else BASE_WEATHER_ICON_SP
+    val conditionSp = if (compact) COMPACT_WEATHER_CONDITION_SP else BASE_WEATHER_CONDITION_SP
+    val cardPadding = if (compact) 10.dp else 12.dp
+    val hiloGap = if (compact) 4.dp else 6.dp
+    val iconGap = if (compact) 6.dp else 8.dp
+
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(top = 4.dp)
             .cornerRadius(12.dp)
             .background(ColorProvider(WEATHER_BG))
-            .padding(12.dp),
+            .padding(cardPadding),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // Two flat rows (temp+unit, then high/low side by side), NOT a Row
@@ -958,30 +959,30 @@ private fun WeatherSection(state: BriefingState, scale: Float, modifier: GlanceM
             Row(verticalAlignment = Alignment.Top) {
                 Text(
                     text = "$temp",
-                    style = TextStyle(fontWeight = FontWeight.Bold, fontSize = (BASE_WEATHER_TEMP_SP * scale).sp,
+                    style = TextStyle(fontWeight = FontWeight.Bold, fontSize = (tempSp * scale).sp,
                         color = ColorProvider(Color.White)),
                 )
                 Text(
                     text = "°F",
-                    style = TextStyle(fontSize = (BASE_WEATHER_UNIT_SP * scale).sp, color = ColorProvider(Color.White)),
+                    style = TextStyle(fontSize = (unitSp * scale).sp, color = ColorProvider(Color.White)),
                 )
             }
-            // Both on the same font size -- BASE_WEATHER_HILO_SP was a
-            // leftover from the old layout where high shared a line with
-            // "°F" (so it used the unit's size) and low sat alone below at
-            // its own smaller size; now that both are side by side on one
-            // row, there's no reason for them to differ (confirmed
-            // 2026-07-13, live device: high/low visibly mismatched size).
+            // Both on the same font size -- an earlier version had high
+            // share a line with "°F" (so it used the unit's size) and low
+            // sit alone below at its own smaller size; now that both are
+            // side by side on one row, there's no reason for them to
+            // differ (confirmed 2026-07-13, live device: high/low visibly
+            // mismatched size).
             Row {
                 state.weatherHighF?.let {
-                    Text(text = "↑$it°", style = TextStyle(fontSize = (BASE_WEATHER_HILO_SP * scale).sp,
+                    Text(text = "↑$it°", style = TextStyle(fontSize = (hiloSp * scale).sp,
                         color = ColorProvider(Color.White)))
                 }
                 if (state.weatherHighF != null && state.weatherLowF != null) {
-                    Spacer(modifier = GlanceModifier.width(6.dp))
+                    Spacer(modifier = GlanceModifier.width(hiloGap))
                 }
                 state.weatherLowF?.let {
-                    Text(text = "↓$it°", style = TextStyle(fontSize = (BASE_WEATHER_HILO_SP * scale).sp,
+                    Text(text = "↓$it°", style = TextStyle(fontSize = (hiloSp * scale).sp,
                         color = ColorProvider(Color.White)))
                 }
             }
@@ -997,79 +998,13 @@ private fun WeatherSection(state: BriefingState, scale: Float, modifier: GlanceM
         // unwrapped Text's bounding box is exactly as wide as its one line,
         // so a wrapped two-line label could look shifted relative to the
         // centered emoji above it.
-        Spacer(modifier = GlanceModifier.width(8.dp))
+        Spacer(modifier = GlanceModifier.width(iconGap))
         Spacer(modifier = GlanceModifier.defaultWeight())
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(text = weatherEmoji(state.weatherCondition),
-                style = TextStyle(fontSize = (BASE_WEATHER_ICON_SP * scale).sp))
+                style = TextStyle(fontSize = (iconSp * scale).sp))
             state.weatherCondition?.let {
-                Text(text = it, maxLines = 1, style = TextStyle(fontSize = (BASE_WEATHER_CONDITION_SP * scale).sp,
-                    color = ColorProvider(Color.White), textAlign = TextAlign.Center))
-            }
-        }
-    }
-}
-
-/** A skinnier version of [WeatherSection]'s own blue card, same content --
- * temp+unit, hi/lo, icon, AND the condition text label -- just sized down
- * (COMPACT_WEATHER_* constants, not the full card's) to actually fit a
- * narrower 2x1 footprint instead of overflowing it: reusing the full
- * card's larger sizes clipped the hi/lo text (confirmed 2026-07-13, live
- * device). maxLines=1 + textAlign=Center on the condition text, same fix
- * as WeatherSection's own -- a wrapped second line reads as off-center
- * under the icon. NOT the neutral gray StatTile every other compact tile
- * uses -- two earlier versions routed WEATHER through StatTile/TileRow,
- * then dropped hi/lo, then dropped the condition label entirely; all threw
- * away real content the user wanted (confirmed 2026-07-13: "it should look
- * like the 3x1 but just skinnier" / "i want the hi lo" / "why not just make
- * the mostly sunny text slightly smaller"). fillMaxWidth() always --
- * WEATHER never shares a row with sibling tiles (it isn't a TILE_SECTIONS
- * member), so it's either the sole content of a single-stat preset or its
- * own standalone row on the combo widget, same as the full card. */
-@Composable
-private fun CompactWeatherTile(state: BriefingState, scale: Float, modifier: GlanceModifier = GlanceModifier) {
-    val temp = state.temperatureF ?: return
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .cornerRadius(12.dp)
-            .background(ColorProvider(WEATHER_BG))
-            .padding(10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column {
-            Row(verticalAlignment = Alignment.Top) {
-                Text(
-                    text = "$temp",
-                    style = TextStyle(fontWeight = FontWeight.Bold, fontSize = (COMPACT_WEATHER_TEMP_SP * scale).sp,
-                        color = ColorProvider(Color.White)),
-                )
-                Text(
-                    text = "°F",
-                    style = TextStyle(fontSize = (COMPACT_WEATHER_UNIT_SP * scale).sp, color = ColorProvider(Color.White)),
-                )
-            }
-            Row {
-                state.weatherHighF?.let {
-                    Text(text = "↑$it°", style = TextStyle(fontSize = (COMPACT_WEATHER_HILO_SP * scale).sp,
-                        color = ColorProvider(Color.White)))
-                }
-                if (state.weatherHighF != null && state.weatherLowF != null) {
-                    Spacer(modifier = GlanceModifier.width(4.dp))
-                }
-                state.weatherLowF?.let {
-                    Text(text = "↓$it°", style = TextStyle(fontSize = (COMPACT_WEATHER_HILO_SP * scale).sp,
-                        color = ColorProvider(Color.White)))
-                }
-            }
-        }
-        Spacer(modifier = GlanceModifier.width(6.dp))
-        Spacer(modifier = GlanceModifier.defaultWeight())
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(text = weatherEmoji(state.weatherCondition),
-                style = TextStyle(fontSize = (COMPACT_WEATHER_ICON_SP * scale).sp))
-            state.weatherCondition?.let {
-                Text(text = it, maxLines = 1, style = TextStyle(fontSize = (COMPACT_WEATHER_CONDITION_SP * scale).sp,
+                Text(text = it, maxLines = 1, style = TextStyle(fontSize = (conditionSp * scale).sp,
                     color = ColorProvider(Color.White), textAlign = TextAlign.Center))
             }
         }

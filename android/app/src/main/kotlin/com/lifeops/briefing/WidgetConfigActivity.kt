@@ -597,7 +597,7 @@ private fun PreviewTile(section: WidgetSection, state: BriefingState, scale: Flo
 
 @Composable
 private fun PreviewWeatherCard(state: BriefingState, scale: Float) {
-    // Mirrors the real WeatherSection in BriefingWidget.kt (temp+unit+hi/lo
+    // Mirrors the real WeatherCard in BriefingWidget.kt (temp+unit+hi/lo
     // on the left, condition glyph+label on the right) -- the earlier
     // version of this preview dropped high/low entirely, which made the
     // card look like it wasn't earning its full-width space (confirmed
@@ -606,7 +606,7 @@ private fun PreviewWeatherCard(state: BriefingState, scale: Float) {
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
-            // Matches the real WeatherSection's WEATHER_BG -- kept as its
+            // Matches the real WeatherCard's WEATHER_BG -- kept as its
             // own literal here since the preview is plain Compose (not
             // Glance), not something that can import a GlanceModifier-side
             // color, but it's the same #2F4D80 app-accent blue, not a
@@ -617,7 +617,7 @@ private fun PreviewWeatherCard(state: BriefingState, scale: Float) {
         verticalAlignment = Alignment.Top,
     ) {
         // Two flat rows (temp+unit, then high/low side by side) -- matches
-        // WeatherSection in BriefingWidget.kt exactly. A Row with a
+        // WeatherCard in BriefingWidget.kt exactly. A Row with a
         // multi-line Column nested beside the big number looked fine here
         // (plain Compose) but broke on the real Glance-rendered widget, so
         // this preview switched to the same two-simple-rows shape the real
@@ -627,7 +627,7 @@ private fun PreviewWeatherCard(state: BriefingState, scale: Float) {
         // overriding fontSize keeps the inherited (much taller) MaterialTheme
         // default line height, which caused an earlier vertical gap bug.
         Column {
-            // Top-aligned: matches WeatherSection -- the closest available
+            // Top-aligned: matches WeatherCard -- the closest available
             // approximation of a top-right superscript given neither
             // Compose nor the real widget's Glance TextStyle support
             // baselineShift (confirmed 2026-07-13, user's call).
@@ -636,7 +636,7 @@ private fun PreviewWeatherCard(state: BriefingState, scale: Float) {
                     fontSize = (28 * scale).sp)
                 Text(text = "°F", color = Color.White, fontSize = (11 * scale).sp, lineHeight = (11 * scale).sp)
             }
-            // Both on the same font size, matching WeatherSection's fix --
+            // Both on the same font size, matching WeatherCard's fix --
             // no reason for high/low to differ now that they're side by
             // side on one row instead of two differently-sized lines.
             Row {

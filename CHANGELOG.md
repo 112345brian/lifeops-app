@@ -4,6 +4,25 @@ Notable changes, newest first. Personal project, versioned simply (see
 `VERSION` / `lifeops.__version__`) — dates and the reasoning behind each
 change matter more here than semver strictness.
 
+## [1.16.0] — 2026-07-13
+
+### Changed
+- **Weather rendering consolidated into one composable.** `WeatherSection`
+  and `CompactWeatherTile` were two near-identical hand-copied layouts with
+  independently tuned font-size constants — exactly the pattern
+  [Google's own Glance docs](https://developer.android.com/develop/ui/compose/glance/build-ui)
+  warn against, and the direct cause of several bugs this session where a
+  fix landed in one copy and was forgotten in the other (hi/lo alignment,
+  `maxLines`, `textAlign`, condition-text sizing). Replaced with a single
+  `WeatherCard` that reads `LocalSize.current` directly and picks
+  `BASE_WEATHER_*` (roomy) vs `COMPACT_WEATHER_*` (fits a true 2x1 without
+  clipping) inline, matching the idiomatic pattern from the docs. One
+  source of truth for the layout structure; only the size constants differ.
+- **All widget presets now declare `android:widgetFeatures="reconfigurable"`.**
+  Without it, some launchers (confirmed on Samsung One UI) never show a
+  settings/gear option on long-press after initial placement — the only way
+  to reopen a placed widget's config screen was removing and re-adding it.
+
 ## [1.15.0] — 2026-07-13
 
 ### Changed

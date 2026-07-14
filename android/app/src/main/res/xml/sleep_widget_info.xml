@@ -15,4 +15,5 @@
     android:updatePeriodMillis="1800000"
     android:initialLayout="@layout/widget_loading"
     android:previewLayout="@layout/widget_loading"
-    android:configure="com.lifeops.briefing.WidgetConfigActivity" />
+    android:configure="com.lifeops.briefing.WidgetConfigActivity"
+    android:widgetFeatures="reconfigurable" />
