@@ -250,10 +250,41 @@ internal fun BriefingContent(
     // anywhere else, they detach into their own standalone row instead.
     val dotsInline = visibleOrder.firstOrNull() == WidgetSection.SEVERITY_DOTS
     val showBadge = WidgetSection.SEVERITY_DOTS !in config.hiddenSections
+    val renderableOrder = visibleOrder.filter { section ->
+        !(section == WidgetSection.SEVERITY_DOTS && dotsInline) &&
+            !(state.text == null && section in TEXT_GATED_SECTIONS) &&
+            // At SMALL, only the compact sections render -- the
+            // richer/wider ones (paragraph/events/up-next) still need
+            // at least MEDIUM room. WEATHER and SOCIAL are allowed
+            // through too (see SMALL_BUCKET_ALLOWED); WEATHER renders a
+            // compact StatTile instead of the full card at this bucket.
+            (bucket != WidgetSizeBucket.SMALL || section in SMALL_BUCKET_ALLOWED)
+    }
+    // Badge hidden AND exactly one section left to show -- this single
+    // tile IS the entire widget (a single-stat preset like "LifeOps
+    // Weather"), so it should fill and center in the widget's actual
+    // placed space rather than keep the fixed compact width meant for
+    // sharing a row with 2-3 siblings on the full combo widget. Computed
+    // here (not inside the Column below) so the Column's own padding can
+    // react to it too -- a single-stat preset's true 1x1 footprint (e.g.
+    // 70dp) has much less room to give away than the full widget's, and
+    // the flat 12dp padding this Column used unconditionally was eating
+    // enough of that footprint to clip the 48dp gym ring against its own
+    // edge (confirmed 2026-07-14, live device: "getting clipped by an
+    // invisible border").
+    val solo = !showBadge && renderableOrder.size == 1
+    val outerPadding = when {
+        // Solo presets should use the whole launcher cell. Their tile/card
+        // children already own their internal padding; adding a root inset
+        // makes the widget look undersized next to native widgets.
+        solo -> 0.dp
+        bucket == WidgetSizeBucket.SMALL -> 4.dp
+        else -> 8.dp
+    }
     Column(
         modifier = GlanceModifier
             .fillMaxSize()
-            .padding(12.dp)
+            .padding(outerPadding)
             .clickable(actionRunCallback<OpenPanelAction>()),
     ) {
         // Gated behind the "Severity dots" toggle, not unconditional --
@@ -303,22 +334,6 @@ internal fun BriefingContent(
             )
         }
 
-        val renderableOrder = visibleOrder.filter { section ->
-            !(section == WidgetSection.SEVERITY_DOTS && dotsInline) &&
-                !(state.text == null && section in TEXT_GATED_SECTIONS) &&
-                // At SMALL, only the compact sections render -- the
-                // richer/wider ones (paragraph/events/up-next) still need
-                // at least MEDIUM room. WEATHER and SOCIAL are allowed
-                // through too (see SMALL_BUCKET_ALLOWED); WEATHER renders a
-                // compact StatTile instead of the full card at this bucket.
-                (bucket != WidgetSizeBucket.SMALL || section in SMALL_BUCKET_ALLOWED)
-        }
-        // Badge hidden AND exactly one section left to show -- this single
-        // tile IS the entire widget (a single-stat preset like "LifeOps
-        // Weather"), so it should fill and center in the widget's actual
-        // placed space rather than keep the fixed compact width meant for
-        // sharing a row with 2-3 siblings on the full combo widget.
-        val solo = !showBadge && renderableOrder.size == 1
         for (group in groupSectionsForRendering(renderableOrder)) {
             if (group.size > 1) {
                 TileRow(group, state, nextTasks.gymRing, config.scale)
@@ -643,7 +658,18 @@ private fun StatTile(
 private val MONEY_TILE_OK_BG = Color(0x4D276B5E)
 private val MONEY_TILE_WATCH_BG = Color(0x4DA8641F)
 private val MONEY_TILE_RISK_BG = Color(0x4DB3261E)
+private val MONEY_SOLO_BG = Color(0xFF171A20)
+private val MONEY_SOLO_OK_ACCENT = Color(0xFF52B69A)
+private val MONEY_SOLO_WATCH_ACCENT = Color(0xFFFFB74D)
+private val MONEY_SOLO_RISK_ACCENT = Color(0xFFFF6B6B)
 private const val BASE_MONEY_FONT_SP = 22f
+// Used only for the standalone "LifeOps Money" solo preset -- its widget-
+// info XML declares the literal 40dp sizing-formula floor for n=1 (the one
+// value mathematically guaranteed to render as a true 1x1, since bigger
+// values kept rounding up to 2x2 on live-device testing; see
+// money_widget_info.xml), which doesn't leave room for the 22sp default
+// font without clipping (confirmed 2026-07-14).
+private const val MONEY_SOLO_FONT_SP = 13f
 
 /** No glyph, no label -- just the dollar figure, big and bold, since it's
  * the one number where the amount itself IS the message. Background color
@@ -656,7 +682,15 @@ private const val BASE_MONEY_FONT_SP = 22f
 private fun MoneyTile(
     dollars: Int, severity: String?, scale: Float, modifier: GlanceModifier = GlanceModifier,
     horizontalAlignment: Alignment.Horizontal = Alignment.Start,
+    verticalAlignment: Alignment.Vertical = Alignment.Top,
+    fontSp: Float = BASE_MONEY_FONT_SP,
+    tilePadding: Dp = 6.dp,
+    soloStyle: Boolean = false,
 ) {
+    if (soloStyle) {
+        SoloMoneyTile(dollars, severity, scale, modifier)
+        return
+    }
     val bg = when (severity) {
         "risk", "fucked" -> MONEY_TILE_RISK_BG
         "watch" -> MONEY_TILE_WATCH_BG
@@ -666,18 +700,100 @@ private fun MoneyTile(
         modifier = modifier
             .cornerRadius(10.dp)
             .background(ColorProvider(bg))
-            .padding(6.dp),
+            .padding(tilePadding),
         horizontalAlignment = horizontalAlignment,
+        verticalAlignment = verticalAlignment,
     ) {
         Text(
             text = formatMoney(dollars),
-            style = TextStyle(fontWeight = FontWeight.Bold, fontSize = (BASE_MONEY_FONT_SP * scale).sp,
+            style = TextStyle(fontWeight = FontWeight.Bold, fontSize = (fontSp * scale).sp,
                 color = GlanceTheme.colors.onSurface),
         )
     }
 }
 
-internal fun formatMoney(dollars: Int): String = "$$dollars"
+@Composable
+private fun SoloMoneyTile(dollars: Int, severity: String?, scale: Float, modifier: GlanceModifier) {
+    val isNegative = dollars < 0
+    val status = when {
+        isNegative -> "OVER"
+        severity == "watch" -> "LOW"
+        severity == "risk" || severity == "fucked" -> "RISK"
+        else -> "LEFT"
+    }
+    val accent = when {
+        isNegative || severity == "risk" || severity == "fucked" -> MONEY_SOLO_RISK_ACCENT
+        severity == "watch" -> MONEY_SOLO_WATCH_ACCENT
+        else -> MONEY_SOLO_OK_ACCENT
+    }
+    // Samsung's launcher can grant a visually narrow 1x1 surface even when
+    // LocalSize reports a larger value. Keep the solo preset's typography
+    // conservative so negative amounts like "-$160" never wrap into two
+    // lines on the actual home screen.
+    val labelSp = 8f
+    val valueSp = 22f
+    val statusSp = 9f
+
+    Column(
+        modifier = modifier
+            .cornerRadius(14.dp)
+            .background(ColorProvider(MONEY_SOLO_BG)),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalAlignment = Alignment.Top,
+    ) {
+        Spacer(modifier = GlanceModifier.defaultWeight())
+        Column(
+            modifier = GlanceModifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "SPEND",
+                maxLines = 1,
+                style = TextStyle(
+                    fontWeight = FontWeight.Bold,
+                    fontSize = (labelSp * scale).sp,
+                    color = GlanceTheme.colors.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                ),
+                modifier = GlanceModifier.fillMaxWidth(),
+            )
+            Text(
+                text = formatMoney(dollars),
+                maxLines = 1,
+                style = TextStyle(
+                    fontWeight = FontWeight.Bold,
+                    fontSize = (valueSp * scale).sp,
+                    color = GlanceTheme.colors.onSurface,
+                    textAlign = TextAlign.Center,
+                ),
+                modifier = GlanceModifier.fillMaxWidth().padding(top = 2.dp),
+            )
+        }
+        Spacer(modifier = GlanceModifier.defaultWeight())
+        Box(
+            modifier = GlanceModifier
+                .fillMaxWidth()
+                .background(ColorProvider(accent))
+                .padding(vertical = 5.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = status,
+                maxLines = 1,
+                style = TextStyle(
+                    fontWeight = FontWeight.Bold,
+                    fontSize = (statusSp * scale).sp,
+                    color = ColorProvider(Color(0xFF171A20)),
+                    textAlign = TextAlign.Center,
+                ),
+                modifier = GlanceModifier.fillMaxWidth(),
+            )
+        }
+    }
+}
+
+internal fun formatMoney(dollars: Int): String = if (dollars < 0) "-$${-dollars}" else "$$dollars"
 
 /** Wraps a lone TileRow (e.g. a single-stat preset like "LifeOps Gym")
  * so it fills and centers in the widget's actual placed space instead of
@@ -723,11 +839,21 @@ private fun TileRow(
     val hasCoursework = WidgetSection.COURSEWORK_TILE in sections && state.courseworkHoursNext7d != null
     val hasSleep = WidgetSection.SLEEP_TILE in sections && state.sleepMinutes != null
     if (!hasGym && !hasMoney && !hasCoursework && !hasSleep) return
-    val tileWidth = if (expand) GlanceModifier.fillMaxWidth() else GlanceModifier.width((STAT_TILE_WIDTH_DP * scale).dp)
+    // fillMaxSize(), not just fillMaxWidth() -- a MoneyTile/StatTile asked
+    // to fillMaxHeight() has nothing to fill if ITS parent Row only ever
+    // claimed fillMaxWidth(): the Row would just wrap to its own content
+    // height regardless, same "background box doesn't actually fill"
+    // pattern already hit and fixed for CompactWeatherTile and the gym
+    // ring (confirmed 2026-07-14: "the discretionary budget thing should
+    // be 1x1" surfaced this same gap for MONEY_TILE/COURSEWORK_TILE/
+    // SLEEP_TILE, which none of the earlier fixes touched).
+    val rowModifier = if (expand) GlanceModifier.fillMaxSize() else GlanceModifier.fillMaxWidth()
+    val tileWidth = if (expand) GlanceModifier.fillMaxSize() else GlanceModifier.width((STAT_TILE_WIDTH_DP * scale).dp)
     val tileAlignment = if (expand) Alignment.CenterHorizontally else Alignment.Start
+    val tileVerticalAlignment = if (expand) Alignment.CenterVertically else Alignment.Top
 
     Row(
-        modifier = GlanceModifier.fillMaxWidth().padding(top = 4.dp),
+        modifier = rowModifier.padding(top = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         var addedFirst = false
@@ -736,7 +862,7 @@ private fun TileRow(
                 WidgetSection.GYM_RING -> when {
                     gymRing != null -> {
                         if (addedFirst) Spacer(modifier = GlanceModifier.width(6.dp))
-                        GymRingIndicator(gymRing, scale)
+                        GymRingIndicator(gymRing, scale, solo = expand)
                         true
                     }
                     state.gymLast7d != null && state.gymTarget != null -> {
@@ -748,8 +874,11 @@ private fun TileRow(
                 }
                 WidgetSection.MONEY_TILE -> if (state.discretionaryDollars != null) {
                     if (addedFirst) Spacer(modifier = GlanceModifier.width(6.dp))
-                    MoneyTile(state.discretionaryDollars, moneySeverity, scale,
-                        modifier = tileWidth, horizontalAlignment = tileAlignment)
+                    MoneyTile(state.discretionaryDollars, moneySeverity, scale, modifier = tileWidth,
+                        horizontalAlignment = tileAlignment, verticalAlignment = tileVerticalAlignment,
+                        fontSp = if (expand) MONEY_SOLO_FONT_SP else BASE_MONEY_FONT_SP,
+                        tilePadding = if (expand) 4.dp else 6.dp,
+                        soloStyle = expand)
                     true
                 } else false
                 WidgetSection.COURSEWORK_TILE -> if (state.courseworkHoursNext7d != null) {
@@ -780,10 +909,25 @@ internal fun formatSleepDuration(minutes: Int): String {
     return if (m == 0) "${h}h" else "${h}h${m}m"
 }
 
-/** "Xd since partner" / "Yd since friends" side by side -- two independent
+private data class SocialMetric(val daysSince: Int, val daysUntil: Int?) {
+    val fullLabel: String =
+        daysUntil?.let { "${daysSince}d ago · ${it}d next" } ?: "${daysSince}d ago"
+    val compactLabel: String =
+        daysUntil?.let { "${daysSince}d/${it}d" } ?: "${daysSince}d"
+    val bgColor: Color
+        get() = when {
+            daysUntil != null -> Color(0x4D276B5E)
+            daysSince >= 7 -> Color(0x4DA8641F)
+            else -> Color(0x00000000)
+        }
+}
+
+private data class SocialItem(val emoji: String, val label: String, val metric: SocialMetric)
+
+/** "Xd ago" / "Yd next" social cadence cards -- two independent
  * figures (social_input tracks them separately, same as PARTNER_TASK vs.
- * FRIENDS_TASK elsewhere in the app), so unlike the other stats this isn't
- * a single StatTile-shaped emoji+number; it's a small two-up row. Renders
+ * FRIENDS_TASK elsewhere in the app), so unlike the other stats this is not
+ * just a raw number. Renders
  * standalone (not part of [TILE_SECTIONS]) for the same reason [WeatherCard]
  * does -- two paired numbers read better as their own row than squeezed
  * into the ~100dp gym/money/coursework/sleep tile width. Either figure can
@@ -796,54 +940,159 @@ internal fun formatSleepDuration(minutes: Int): String {
  * structurally identical).
  *
  * When a plan already exists (social_input's has_partner/has_friend), the
- * value appends "→Nd" for the soonest scheduled/proposed date -- "2d" alone
- * doesn't say whether that's 2 days of silence with nothing on the horizon,
- * or 2 days since with something already booked for Friday; the arrow makes
- * "nothing planned yet" visually distinct (bare "2d") from "already handled"
- * (confirmed 2026-07-13, user couldn't tell which case they were looking at).
+ * full-size value says "next" instead of relying on a symbolic arrow. The
+ * compact 1x1 preset keeps only the paired day counts because the explicit
+ * copy would clip at that footprint.
  *
  * [stacked] renders the two chips as a vertical Column instead of a side-by-
  * side Row -- only used for the standalone single-stat "LifeOps Social"
  * preset (see the SOCIAL branch in BriefingContent), letting that widget's
- * default footprint go back to the same narrow 2x1 every other single-stat
- * preset uses instead of needing extra width for two chips side by side.
- * Uses tighter font sizes/padding than the default StatTile -- two full-size
- * stacked chips need ~100dp of height (confirmed 2026-07-13), too tall for
- * a true 2x1; shrunk down they fit within gym/money's same 56dp floor. */
+ * default footprint be a single square cell instead of needing extra width
+ * for two chips side by side (confirmed 2026-07-14: "the social widget to
+ * stack the partner and friend values ... fit in a single 1x1 widget").
+ * Uses shrunk font sizes/padding, not StatTile's defaults -- two full-size
+ * stacked chips need ~100dp of height (confirmed 2026-07-13), but
+ * social_widget_info.xml declares the literal sizing-formula floor for n=1
+ * (40dp), the one value guaranteed to actually render as 1x1 rather than
+ * rounding up to 2x2 (confirmed 2026-07-14, live device: 100dp still
+ * showed "2x2" in the picker). Default-size chips would clip badly at 40dp. */
 @Composable
 private fun SocialSection(state: BriefingState, scale: Float, stacked: Boolean = false) {
-    fun label(daysSince: Int?, daysUntil: Int?): String? =
-        daysSince?.let { s -> daysUntil?.let { u -> "${s}d→${u}d" } ?: "${s}d" }
-    val partner = label(state.partnerDaysSince, state.partnerDaysUntil)
-    val friends = label(state.friendDaysSince, state.friendDaysUntil)
+    fun metric(daysSince: Int?, daysUntil: Int?): SocialMetric? =
+        daysSince?.let { SocialMetric(it, daysUntil) }
+    val partner = metric(state.partnerDaysSince, state.partnerDaysUntil)
+    val friends = metric(state.friendDaysSince, state.friendDaysUntil)
     if (stacked) {
-        // fillMaxSize() on the Column + defaultWeight() on each chip, not
-        // just fillMaxWidth() -- each chip otherwise only wrapped its own
-        // compact content height instead of splitting the widget's actual
-        // available height between them, same gap CompactWeatherTile had
-        // (confirmed 2026-07-13: "keep the blue shit as filled out to 2x1
-        // as you can" applies here too -- these chips' gray backgrounds
-        // were leaving dead space the same way).
-        Column(modifier = GlanceModifier.fillMaxSize().padding(top = 2.dp)) {
-            partner?.let {
-                StatTile("💜", it, scale, modifier = GlanceModifier.fillMaxWidth().defaultWeight(),
-                    emojiSp = 11f, valueSp = 12f, tilePadding = 3.dp)
-            }
-            if (partner != null && friends != null) {
-                Spacer(modifier = GlanceModifier.height(2.dp))
-            }
-            friends?.let {
-                StatTile("👥", it, scale, modifier = GlanceModifier.fillMaxWidth().defaultWeight(),
-                    emojiSp = 11f, valueSp = 12f, tilePadding = 3.dp)
-            }
-        }
+        socialFocusItem(
+            listOfNotNull(
+                partner?.let { SocialItem("💜", "PARTNER", it) },
+                friends?.let { SocialItem("👥", "FRIENDS", it) },
+            )
+        )?.let { SocialFocusTile(it, scale, modifier = GlanceModifier.fillMaxSize()) }
     } else {
         Row(modifier = GlanceModifier.fillMaxWidth().padding(top = 4.dp)) {
-            partner?.let { StatTile("💜", it, scale, modifier = GlanceModifier.defaultWeight()) }
+            partner?.let { SocialTile("💜", it, scale, modifier = GlanceModifier.defaultWeight()) }
             if (partner != null && friends != null) {
                 Spacer(modifier = GlanceModifier.width(6.dp))
             }
-            friends?.let { StatTile("👥", it, scale, modifier = GlanceModifier.defaultWeight()) }
+            friends?.let { SocialTile("👥", it, scale, modifier = GlanceModifier.defaultWeight()) }
+        }
+    }
+}
+
+private fun socialFocusItem(items: List<SocialItem>): SocialItem? {
+    if (items.isEmpty()) return null
+    val unplanned = items.filter { it.metric.daysUntil == null }
+    if (unplanned.isNotEmpty()) {
+        return unplanned.maxByOrNull { it.metric.daysSince }
+    }
+    return items.minByOrNull { it.metric.daysUntil ?: Int.MAX_VALUE }
+}
+
+@Composable
+private fun SocialTile(
+    emoji: String,
+    metric: SocialMetric,
+    scale: Float,
+    modifier: GlanceModifier = GlanceModifier,
+    compact: Boolean = false,
+) {
+    val tileBg = if (metric.bgColor == Color(0x00000000)) {
+        GlanceTheme.colors.surfaceVariant
+    } else {
+        ColorProvider(metric.bgColor)
+    }
+    Row(
+        modifier = modifier
+            .cornerRadius(10.dp)
+            .background(tileBg)
+            .padding(if (compact) 2.dp else 6.dp),
+        horizontalAlignment = if (compact) Alignment.CenterHorizontally else Alignment.Start,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(text = emoji, style = TextStyle(fontSize = ((if (compact) 17f else 17f) * scale).sp))
+        Spacer(modifier = GlanceModifier.width(if (compact) 2.dp else 4.dp))
+        Text(
+            text = if (compact) metric.compactLabel else metric.fullLabel,
+            style = TextStyle(
+                fontWeight = FontWeight.Bold,
+                fontSize = ((if (compact) 17f else 15f) * scale).sp,
+                color = GlanceTheme.colors.onSurface,
+            ),
+        )
+    }
+}
+
+@Composable
+private fun SocialFocusTile(item: SocialItem, scale: Float, modifier: GlanceModifier = GlanceModifier) {
+    val metric = item.metric
+    val planned = metric.daysUntil != null
+    val accent = when {
+        planned -> MONEY_SOLO_OK_ACCENT
+        metric.daysSince >= 7 -> MONEY_SOLO_WATCH_ACCENT
+        else -> MONEY_SOLO_OK_ACCENT
+    }
+    val value = if (planned) "${metric.daysUntil}d" else "${metric.daysSince}d"
+    val status = if (planned) "NEXT" else "AGO"
+    val labelSp = 8f
+    val valueSp = 22f
+    val statusSp = 9f
+
+    Column(
+        modifier = modifier
+            .cornerRadius(14.dp)
+            .background(ColorProvider(MONEY_SOLO_BG)),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalAlignment = Alignment.Top,
+    ) {
+        Spacer(modifier = GlanceModifier.defaultWeight())
+        Column(
+            modifier = GlanceModifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = item.label,
+                maxLines = 1,
+                style = TextStyle(
+                    fontWeight = FontWeight.Bold,
+                    fontSize = (labelSp * scale).sp,
+                    color = GlanceTheme.colors.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                ),
+                modifier = GlanceModifier.fillMaxWidth(),
+            )
+            Text(
+                text = value,
+                maxLines = 1,
+                style = TextStyle(
+                    fontWeight = FontWeight.Bold,
+                    fontSize = (valueSp * scale).sp,
+                    color = GlanceTheme.colors.onSurface,
+                    textAlign = TextAlign.Center,
+                ),
+                modifier = GlanceModifier.fillMaxWidth().padding(top = 2.dp),
+            )
+        }
+        Spacer(modifier = GlanceModifier.defaultWeight())
+        Box(
+            modifier = GlanceModifier
+                .fillMaxWidth()
+                .background(ColorProvider(accent))
+                .padding(vertical = 5.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = status,
+                maxLines = 1,
+                style = TextStyle(
+                    fontWeight = FontWeight.Bold,
+                    fontSize = (statusSp * scale).sp,
+                    color = ColorProvider(Color(0xFF171A20)),
+                    textAlign = TextAlign.Center,
+                ),
+                modifier = GlanceModifier.fillMaxWidth(),
+            )
         }
     }
 }
@@ -872,8 +1121,12 @@ private const val BASE_WEATHER_CONDITION_SP = 15f
 private const val COMPACT_WEATHER_TEMP_SP = 24f
 private const val COMPACT_WEATHER_UNIT_SP = 11f
 private const val COMPACT_WEATHER_HILO_SP = 10f
-private const val COMPACT_WEATHER_ICON_SP = 20f
-private const val COMPACT_WEATHER_CONDITION_SP = 8f
+// 1.3x the previous 20f/8f -- the icon+condition column read too small
+// relative to the temp/hi-lo side once that side got its own weighted
+// half of the card (confirmed 2026-07-13: "the sun icon and sunny need to
+// be like 1.3x bigger").
+private const val COMPACT_WEATHER_ICON_SP = 26f
+private const val COMPACT_WEATHER_CONDITION_SP = 10f
 
 /** Maps NWS's free-text shortForecast (e.g. "Partly Cloudy", "Chance
  * Showers", "Sunny") to one glyph via keyword match -- NWS also serves an
@@ -949,7 +1202,13 @@ private fun WeatherCard(state: BriefingState, scale: Float, modifier: GlanceModi
         // 2026-07-13, live device: "↑85°" floated in its own detached row
         // above "82°F↓65°" instead of stacking beside the number). Two
         // simple same-height rows is the reliable shape.
-        Column {
+        //
+        // At compact size this Column gets defaultWeight() (see below) so
+        // it and the icon/condition column split the card roughly 50/50 --
+        // at full size it stays unweighted and the icon column gets pushed
+        // to the far right by its own trailing Spacer(defaultWeight())
+        // instead, since the full card has room to spare either way.
+        Column(modifier = if (compact) GlanceModifier.defaultWeight() else GlanceModifier) {
             // Glance's TextStyle has no baselineShift/superscript span --
             // there's no way to get a real raised-and-shrunk unit through
             // this API; Alignment.Top (aligning line-box tops, not
@@ -999,8 +1258,19 @@ private fun WeatherCard(state: BriefingState, scale: Float, modifier: GlanceModi
         // so a wrapped two-line label could look shifted relative to the
         // centered emoji above it.
         Spacer(modifier = GlanceModifier.width(iconGap))
-        Spacer(modifier = GlanceModifier.defaultWeight())
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        // Only push-right via an unweighted trailing Spacer at full size --
+        // at compact size the icon/condition column instead gets its own
+        // defaultWeight() below, splitting the card ~50/50 with the temp
+        // side instead of just wrapping its own small content width
+        // (confirmed 2026-07-13: "fill sunny to approximately half of the
+        // 2x1 widget").
+        if (!compact) {
+            Spacer(modifier = GlanceModifier.defaultWeight())
+        }
+        Column(
+            modifier = if (compact) GlanceModifier.defaultWeight() else GlanceModifier,
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
             Text(text = weatherEmoji(state.weatherCondition),
                 style = TextStyle(fontSize = (iconSp * scale).sp))
             state.weatherCondition?.let {
@@ -1151,17 +1421,69 @@ private fun renderGymRingBitmap(sizePx: Int, strokeWidthPx: Float, fill: Float, 
     return bitmap
 }
 
+// Only applied when the ring is a widget's SOLE content (the standalone
+// "LifeOps Gym" preset) -- inside the shared combo-widget row it sits
+// beside money/coursework/sleep tiles sized for BASE_GYM_RING_SIZE_DP, so
+// scaling it up there would throw that row out of alignment (confirmed
+// 2026-07-14: "I want it, by default, to be 1.5x the size" was about the
+// standalone gym widget's icon specifically). Bumped 1.5f -> 1.875f, both
+// confirmed via live-device feedback. 2f is NOT yet confirmed the same
+// way -- it's an untested "just try doubling it, wanna see what happens"
+// value; unlike the two before it, treat this one as provisional until
+// checked on a real device. SOLO_GYM_RING_OVERHEAD_DP's clamp against the
+// widget's real placed size means this is a ceiling the ring reaches for,
+// not a guaranteed final size, which bounds how wrong an unvalidated value
+// here can go (it'll just clamp down, not overflow), but doesn't make it
+// correct.
+private const val SOLO_GYM_RING_SCALE = 2f
+private const val SOLO_GYM_RING_EMOJI_SCALE = 0.82f
+
+// TileRow's own 4dp top padding on the Row wrapping this ring -- subtracted
+// from the widget's REAL placed size (not the declared minWidth/minHeight in
+// gym_widget_info.xml) before sizing the ring at SOLO_GYM_RING_SCALE.
+// Samsung's launcher (confirmed via live-device testing, see
+// android/CLAUDE.md) doesn't always honor a widget-info XML's declared
+// size for the actual placed footprint, so a ring sized only off the XML
+// constant clipped against the real, smaller rendered bounds (confirmed
+// 2026-07-14: "that's a fantastic size, but it's clipping again" after
+// bumping the XML alone). Reading LocalSize.current here instead makes
+// this self-correcting regardless of what the launcher actually grants.
+private const val SOLO_GYM_RING_OVERHEAD_DP = 4f
+private const val SOLO_GYM_RING_MIN_SIZE_DP = 24f
+
 /** Gym ring: fill = trailing-7-day adherence ratio (grows only as real
  * sessions accumulate), color = same-day action signal, intentionally
  * decoupled -- see GymRing's docstring. Rendered as a bitmap ring (see
- * renderGymRingBitmap) with the gym emoji layered on top via a centered Box. */
+ * renderGymRingBitmap) with the gym emoji layered on top via a centered Box.
+ * [solo] (this ring is the widget's only content, e.g. the standalone
+ * "LifeOps Gym" preset) applies [SOLO_GYM_RING_SCALE] on top of [scale],
+ * clamped to the widget's actual placed size (see
+ * [SOLO_GYM_RING_OVERHEAD_DP]) so it can never clip. */
 @Composable
-private fun GymRingIndicator(gymRing: GymRing, scale: Float) {
+private fun GymRingIndicator(gymRing: GymRing, scale: Float, solo: Boolean = false) {
     val context = LocalContext.current
     val density = context.resources.displayMetrics.density
-    val ringSizeDp = (BASE_GYM_RING_SIZE_DP * scale)
+    val effectiveScale = scale * (if (solo) SOLO_GYM_RING_SCALE else 1f)
+    val desiredSizeDp = BASE_GYM_RING_SIZE_DP * effectiveScale
+    val ringSizeDp = if (solo) {
+        val placedSize = LocalSize.current
+        val availableDp = minOf(placedSize.width.value, placedSize.height.value) - SOLO_GYM_RING_OVERHEAD_DP
+        // maxOf(MIN, minOf(desired, available)), not coerceIn(MIN, available)
+        // -- coerceIn throws if its max ends up below its min, which a
+        // widget placed smaller than SOLO_GYM_RING_MIN_SIZE_DP would trigger
+        // (availableDp could be < MIN). maxOf/minOf need no such precondition
+        // and read directly as "never below MIN, never above available".
+        maxOf(SOLO_GYM_RING_MIN_SIZE_DP, minOf(desiredSizeDp, availableDp))
+    } else {
+        desiredSizeDp
+    }
+    // Derived from the ring's actual (possibly clamped) size, not
+    // effectiveScale directly -- keeps the stroke/emoji proportional even
+    // when SOLO_GYM_RING_OVERHEAD_DP clamping shrunk the ring below its
+    // desired size.
+    val actualRingScale = ringSizeDp / BASE_GYM_RING_SIZE_DP
     val sizePx = (ringSizeDp * density).roundToInt()
-    val strokePx = BASE_GYM_RING_STROKE_DP * scale * density
+    val strokePx = BASE_GYM_RING_STROKE_DP * actualRingScale * density
     val ringColor = when (gymRing.color) {
         "green" -> COLOR_OK
         "yellow" -> COLOR_WARN
@@ -1183,7 +1505,8 @@ private fun GymRingIndicator(gymRing: GymRing, scale: Float) {
             contentDescription = "Gym ${gymRing.gymLast7d}/${gymRing.gymTarget}, ${gymRing.color}",
             modifier = GlanceModifier.fillMaxSize(),
         )
-        Text(text = "🏋", style = TextStyle(fontSize = (BASE_GYM_RING_EMOJI_SP * scale).sp))
+        val emojiScale = if (solo) SOLO_GYM_RING_EMOJI_SCALE else 1f
+        Text(text = "🏋", style = TextStyle(fontSize = (BASE_GYM_RING_EMOJI_SP * actualRingScale * emojiScale).sp))
     }
 }
 

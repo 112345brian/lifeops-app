@@ -314,6 +314,40 @@ def _social_calendar(events, action):
     went = _dates_with(events, action, start.isoformat(), end.isoformat())
     return _calendar_days(went)
 
+def _social_status(label, days_since, days_until):
+    """Small display model for the home-page social tracker. It keeps the
+    log calendar anchored to the current cadence question instead of making
+    the user inspect a grid before knowing whether anything needs action."""
+    if days_since is None:
+        primary = "No history"
+        secondary = "Log the last hangout when you know it."
+        tone = "empty"
+    else:
+        primary = f"{days_since}d ago"
+        if days_until is not None:
+            secondary = f"Next in {days_until}d"
+            tone = "planned"
+        elif days_since >= 7:
+            secondary = "No next plan"
+            tone = "watch"
+        else:
+            secondary = "No next plan"
+            tone = "ok"
+    return {"label": label, "primary": primary, "secondary": secondary, "tone": tone}
+
+def _days_since_event(events, action, today):
+    dates = []
+    for e in events:
+        if e.get("action") != action:
+            continue
+        try:
+            d = datetime.date.fromisoformat(e.get("ts", "")[:10])
+        except ValueError:
+            continue
+        if d <= today:
+            dates.append(d)
+    return (today - max(dates)).days if dates else None
+
 def _gym_blocks():
     """Future-only blocked dates, sorted."""
     today = datetime.date.today().isoformat()
@@ -577,6 +611,21 @@ def _build_context(fs=None, include_cycle=False):
     ]
 
     briefing = _today_briefing()
+    briefing_facts = (briefing or {}).get("facts") or {}
+    partner_days_since = briefing_facts.get("partner_days_since")
+    friend_days_since = briefing_facts.get("friend_days_since")
+    if partner_days_since is None:
+        partner_days_since = _days_since_event(all_events, "partner", today)
+    if friend_days_since is None:
+        friend_days_since = _days_since_event(all_events, "friends", today)
+    social_status = [
+        _social_status(config.PARTNER_NAME or "Partner",
+                       partner_days_since,
+                       briefing_facts.get("partner_days_until")),
+        _social_status("Friends",
+                       friend_days_since,
+                       briefing_facts.get("friend_days_until")),
+    ]
     current_attention = _current_attention(briefing, lr)
     return {
         "status_dot":       dot,
@@ -593,6 +642,7 @@ def _build_context(fs=None, include_cycle=False):
         "gym_calendar":     _gym_calendar(all_events),
         "partner_calendar": _social_calendar(all_events, "partner"),
         "friends_calendar": _social_calendar(all_events, "friends"),
+        "social_status":    social_status,
         "partner_name":     config.PARTNER_NAME,
         "gym_blocks":       gym_block_display,
         "gym_sick_until":   sick_until,

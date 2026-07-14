@@ -40,6 +40,11 @@ def run_length(date_str, busy):
     while x.isoformat() in busy: n += 1; x += DAY
     return n
 
+def needs_wind_down(gym_date, r):
+    prior = D(gym_date) - DAY
+    exempt = set(r.get("wind_down_exempt_weekdays", ["Tue"]))
+    return prior.strftime("%a") not in exempt
+
 def plan(inp):
     r = {"target": 4, "floor": 3, "max_consecutive": 2}
     r.update(inp.get("rules", {}))
@@ -85,7 +90,7 @@ def plan(inp):
     for date, slot in chosen:
         out["actions"].append({"op": "create", "date": date, "start": slot[0], "end": slot[1],
                                "buffer_before": 10, "buffer_after": 10, "kind": slot[2]})
-        if slot[2] == "morning":
+        if slot[2] == "morning" and needs_wind_down(date, r):
             out["wind_down"].append({"date": (D(date) - DAY).isoformat(),
                                      "start": "21:00", "end": "23:00"})
 

@@ -23,24 +23,33 @@ def _is_friend_hangout(title, notes):
     return any(re.search(rf"\b{re.escape(n.lower())}\b", text) for n in config.FRIEND_NAMES)
 
 _NOTE_OVERRIDE_RE = re.compile(r"(?im)^\s*(type|cost)\s*:\s*(.+?)\s*$")
+_TYPE_ALIASES = {"concerts": "concert"}
+
+def _normalize_note_type(value):
+    value = value.strip().lower()
+    return _TYPE_ALIASES.get(value, value)
 
 def _parse_note_overrides(notes):
-    """Sweeps an event/task's notes for "type: <name>" / "cost: <dollars>"
-    lines (case-insensitive, one per line, $ optional) -- lets a one-off
+    """Sweeps an event/task's notes for "type: <name>[, <name>...]" /
+    "cost: <dollars>" lines (case-insensitive, one per line, $ optional) -- lets a one-off
     event declare its own spend classification without needing its calendar
     pre-mapped in EVENT_CALS, e.g. a hangout with Chloe on your everyday
     calendar noted "type: friends\\ncost: 30". An explicit cost always wins
     over the type's projected default (config.COSTS); a type with no cost
-    still gets that default. A malformed cost line (non-numeric) is ignored
-    rather than raising, same spirit as this module's other best-effort
-    parsing."""
+    still gets that default. Multiple types are exposed as `types`, while
+    `type` remains the first entry for older single-type callers. A malformed
+    cost line (non-numeric) is ignored rather than raising, same spirit as
+    this module's other best-effort parsing."""
     out = {}
     if not notes:
         return out
     for key, val in _NOTE_OVERRIDE_RE.findall(notes):
         key = key.lower()
         if key == "type":
-            out["type"] = val.strip().lower()
+            types = [_normalize_note_type(p) for p in val.split(",") if p.strip()]
+            if types:
+                out["type"] = types[0]
+                out["types"] = types
         elif key == "cost":
             try:
                 parsed = float(val.strip().lstrip("$"))
@@ -53,6 +62,13 @@ def _parse_note_overrides(notes):
             if parsed >= 0:
                 out["cost"] = parsed
     return out
+
+def _note_types(notes):
+    overrides = _parse_note_overrides(notes)
+    if "types" in overrides:
+        return overrides["types"]
+    typ = overrides.get("type")
+    return [typ] if typ else []
 
 def _d(iso):  return (iso or "")[:10]
 def _hm(iso): return (iso or "")[11:16]
@@ -115,14 +131,25 @@ def gym_ring(gym_last_7d, gym_target, today_needed, today_done):
     gym_target) -- it only grows as real sessions accumulate in the window,
     and completing today's session does NOT artificially inflate it.
 
-    `color` is a separate, same-day ACTION signal layered on top, decoupled
-    from fill:
+    `color` is a separate, same-day ACTION signal, genuinely decoupled from
+    fill -- it is never derived from the gym_last_7d/gym_target ratio itself
+    (a `gym_last_7d >= gym_target` fallback used to live here and silently
+    just re-derived whether fill>=1.0, which is NOT independent of fill, it's
+    the same number relabeled; confirmed 2026-07-14 after a "went two days in
+    a row, why is this yellow" report traced to exactly that fallback firing
+    on a legitimate rest day gym_engine.plan() had already decided not to
+    schedule anything for):
       red    - zero sessions in the trailing 7 days (a total drought)
-      yellow - still need to go: behind target, OR at/above target but
-               today has a scheduled-not-done session (the engine already
-               decided today is a go-day, per `today_needed`)
+      yellow - today has a scheduled-not-done session: the engine (which
+               already accounts for rest days via max_consecutive, blocked
+               evenings, deadline-heavy days, etc. -- see gym_engine.plan())
+               decided today is a go-day, per `today_needed`
       green  - nothing needed right now: today's session is already done,
-               or target is met and nothing was scheduled today
+               or the engine didn't schedule anything for today at all
+               (whether that's because target's met, or because today's a
+               rest/blocked/deadline day the engine chose to skip -- the ring
+               trusts the engine's own decision rather than re-deriving a
+               cruder verdict from the raw count)
 
     Completing today's session turns color green immediately without
     waiting for fill to catch up -- the two are intentionally independent,
@@ -134,10 +161,8 @@ def gym_ring(gym_last_7d, gym_target, today_needed, today_done):
         color = "green"
     elif today_needed:
         color = "yellow"
-    elif gym_last_7d >= gym_target:
-        color = "green"
     else:
-        color = "yellow"
+        color = "green"
     return {"fill": round(fill, 3), "color": color}
 
 def _gym_scheduled_today(fs, now):
@@ -513,33 +538,86 @@ def social_input(fs, now):
         return (now - datetime.datetime.fromisoformat(ts)).days if ts else None
     start = now.date().isoformat(); weekend = (now.date() + datetime.timedelta(days=7)).isoformat()
     open_tasks = fs.list_items(itemType="task", completed=False).get("items", [])
-    def _has(base):  # proposed / planning / locked all count as "has a plan"
+    def _has_hold(base):
+        """A real task or a LifeOps placeholder counts as a scheduling hold
+        for the social engine, so it does not create duplicate holds. The
+        widget's "next" date is computed separately from real commitments
+        only."""
         return any((t.get("title") or "") in (base, f"{base} (proposed)", f"Plan {base}")
                    for t in open_tasks)
-    def _next_date(titles):
-        """Earliest scheduled date (today or later) among open tasks whose
-        title is one of `titles`, using startDateTime or, for auto-scheduled
-        tasks, dueDateTime (same fallback as next_up_input, line ~497)."""
+    def _is_lifeops_social_placeholder(title):
+        return title in {
+            f"{config.PARTNER_TASK} (proposed)", f"Plan {config.PARTNER_TASK}",
+            f"{config.FRIENDS_TASK} (proposed)", f"Plan {config.FRIENDS_TASK}",
+        }
+    def _is_lifeops_generated_social_task(t):
+        title = t.get("title") or ""
+        notes = t.get("notes") or ""
+        return _is_lifeops_social_placeholder(title) or "Locked in (LifeOps)" in notes
+    def _is_friend_commitment(t):
+        return (
+            (t.get("title") or "") == config.FRIENDS_TASK or
+            _is_friend_hangout(t.get("title"), t.get("notes")) or
+            "friends" in _note_types(t.get("notes"))
+        )
+    def _next_task_date(match):
+        """Earliest scheduled date (today or later) among open tasks matching
+        a real commitment predicate, using startDateTime or, for auto-
+        scheduled tasks, dueDateTime."""
         dates = []
         for t in open_tasks:
-            if (t.get("title") or "") not in titles:
+            if not match(t):
                 continue
             st = t.get("startDateTime") or t.get("dueDateTime")
             if st and _d(st) >= start:
                 dates.append(datetime.date.fromisoformat(_d(st)))
         return min(dates) if dates else None
-    has_partner = _has(config.PARTNER_TASK)
+    def _next_event_date(events, match):
+        dates = []
+        for e in events:
+            st = e.get("startDateTime")
+            if st and start <= _d(st) <= weekend and match(e):
+                dates.append(datetime.date.fromisoformat(_d(st)))
+        return min(dates) if dates else None
+    def _min_date(*dates):
+        present = [d for d in dates if d is not None]
+        return min(present) if present else None
+
+    has_partner = _has_hold(config.PARTNER_TASK)
     # A task titled "Friends" always counts, same as before -- but so does
     # any task that _is_friend_hangout would also log as a friend hangout
     # (a FRIEND_NAMES match, or "friend(s)" in title/notes), so a hangout
     # scheduled under someone's actual name doesn't go unrecognized here and
     # get double-proposed/nagged about.
-    has_friend = _has(config.FRIENDS_TASK) or any(
-        _is_friend_hangout(t.get("title"), t.get("notes")) for t in open_tasks)
-    partner_next = _next_date((config.PARTNER_TASK, f"{config.PARTNER_TASK} (proposed)",
-                                f"Plan {config.PARTNER_TASK}"))
-    friend_next = _next_date((config.FRIENDS_TASK, f"{config.FRIENDS_TASK} (proposed)",
-                               f"Plan {config.FRIENDS_TASK}"))
+    has_friend = _has_hold(config.FRIENDS_TASK) or any(
+        not _is_lifeops_social_placeholder(t.get("title") or "") and
+        _is_friend_commitment(t) for t in open_tasks)
+    partner_next = _next_task_date(lambda t: (t.get("title") or "") == config.PARTNER_TASK
+                                   and not _is_lifeops_generated_social_task(t))
+    friend_next = _next_task_date(lambda t: (
+        not _is_lifeops_generated_social_task(t) and _is_friend_commitment(t)
+    ))
+
+    try:
+        friend_event_next = _next_event_date(fs.list_items(itemType="event").get("items", []),
+                                             lambda e: _is_friend_hangout(e.get("title"), e.get("notes")) or
+                                             "friends" in _note_types(e.get("notes")))
+        friend_next = _min_date(friend_next, friend_event_next)
+        if friend_event_next is not None:
+            has_friend = True
+    except Exception:
+        pass
+    for cid, typ in config.EVENT_CALS.items():
+        if typ != "friends":
+            continue
+        try:
+            mapped_next = _next_event_date(fs.list_items(itemType="event", calendarId=cid).get("items", []),
+                                           lambda _e: True)
+            friend_next = _min_date(friend_next, mapped_next)
+            if mapped_next is not None:
+                has_friend = True
+        except Exception:
+            pass
     if config.SOCIAL_CAL:
         try:
             for e in fs.list_items(itemType="event", calendarId=config.SOCIAL_CAL).get("items", []):
@@ -551,7 +629,9 @@ def social_input(fs, now):
                         partner_next = ed
         except Exception:
             pass
-    lo = max(1, config.PROPOSE_AHEAD_DAYS - 3); hi = config.PROPOSE_AHEAD_DAYS + 4
+    # Never propose the next weekly social hold inside the current 7-day
+    # cadence window; it should reserve capacity for the next cycle.
+    lo = max(7, config.PROPOSE_AHEAD_DAYS - 3); hi = config.PROPOSE_AHEAD_DAYS + 4
     days = [now.date() + datetime.timedelta(days=i) for i in range(lo, hi)]
     days.sort(key=lambda d: (d.weekday() < 5, d))   # weekends first, ~3 weeks out
     def _until(d):

@@ -663,7 +663,7 @@ private fun PreviewWeatherCard(state: BriefingState, scale: Float) {
 @Composable
 private fun PreviewSocialRow(state: BriefingState, scale: Float) {
     fun label(daysSince: Int?, daysUntil: Int?): String? =
-        daysSince?.let { s -> daysUntil?.let { u -> "${s}d→${u}d" } ?: "${s}d" }
+        daysSince?.let { s -> daysUntil?.let { u -> "${s}d ago · ${u}d next" } ?: "${s}d ago" }
     Row(horizontalArrangement = Arrangement.spacedBy((6 * scale).dp)) {
         label(state.partnerDaysSince, state.partnerDaysUntil)?.let {
             Text(text = "💜 $it", color = PREVIEW_ON_BG, fontSize = (11 * scale).sp)

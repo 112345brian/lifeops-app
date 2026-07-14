@@ -8,9 +8,16 @@ def test_gym_ring_red_when_zero_sessions_in_trailing_week():
     assert ring == {"fill": 0.0, "color": "red"}
 
 
-def test_gym_ring_yellow_when_behind_target_and_not_done_today():
+def test_gym_ring_green_when_behind_target_but_engine_didnt_schedule_today():
+    """Behind target alone must NOT turn the ring yellow -- only an actual
+    engine-scheduled session today does (today_needed). Otherwise color just
+    re-derives fill>=1.0 under a different name instead of being a genuine
+    same-day action signal, and stays yellow through legitimate rest days
+    the engine already accounted for (confirmed 2026-07-14: "went to the
+    gym yesterday and the day before, you can't be overdue, you need to
+    rest" -- yet the ring showed yellow with no task scheduled at all)."""
     ring = gather.gym_ring(gym_last_7d=2, gym_target=4, today_needed=False, today_done=False)
-    assert ring == {"fill": 0.5, "color": "yellow"}
+    assert ring == {"fill": 0.5, "color": "green"}
 
 
 def test_gym_ring_yellow_when_at_target_but_engine_scheduled_today():
@@ -41,17 +48,25 @@ def test_gym_ring_fill_clamps_at_one_even_when_over_target():
 
 
 def test_parse_note_overrides_reads_type_and_cost():
-    assert gather._parse_note_overrides("type: friends\ncost: 30") == {"type": "friends", "cost": 30.0}
+    assert gather._parse_note_overrides("type: friends\ncost: 30") == {
+        "type": "friends", "types": ["friends"], "cost": 30.0,
+    }
 
 
 def test_parse_note_overrides_tolerates_dollar_sign_and_case():
     assert gather._parse_note_overrides("Type: Friends\nCost: $30.50") == {
-        "type": "friends", "cost": 30.5,
+        "type": "friends", "types": ["friends"], "cost": 30.5,
     }
 
 
 def test_parse_note_overrides_ignores_malformed_cost():
-    assert gather._parse_note_overrides("type: friends\ncost: free") == {"type": "friends"}
+    assert gather._parse_note_overrides("type: friends\ncost: free") == {"type": "friends", "types": ["friends"]}
+
+
+def test_parse_note_overrides_reads_multiple_types():
+    assert gather._parse_note_overrides("type: friends, concerts") == {
+        "type": "friends", "types": ["friends", "concert"],
+    }
 
 
 def test_parse_note_overrides_empty_notes():
@@ -316,6 +331,8 @@ def _patch_social_config(monkeypatch, social_cal=""):
     monkeypatch.setattr(config, "FRIENDS_TASK", "Friends")
     monkeypatch.setattr(config, "SOCIAL_CAL", social_cal)
     monkeypatch.setattr(config, "PROPOSE_AHEAD_DAYS", 7)
+    monkeypatch.setattr(config, "EVENT_CALS", {})
+    monkeypatch.setattr(config, "FRIEND_NAMES", [])
 
 
 def test_social_input_days_until_none_when_nothing_planned(monkeypatch):
@@ -331,6 +348,16 @@ def test_social_input_days_until_none_when_nothing_planned(monkeypatch):
     assert out["friend_days_until"] is None
 
 
+def test_social_input_good_days_start_next_week(monkeypatch):
+    _patch_social_config(monkeypatch)
+    fs = _FakeSpendFlowSavvy({}, tasks=[])
+    now = datetime.datetime(2026, 7, 13, 9, 0)
+
+    out = gather.social_input(fs, now)
+
+    assert min(datetime.date.fromisoformat(d) for d in out["good_days"]) >= now.date() + datetime.timedelta(days=7)
+
+
 def test_social_input_days_until_reads_soonest_scheduled_task(monkeypatch):
     _patch_social_config(monkeypatch)
     fs = _FakeSpendFlowSavvy({}, tasks=[
@@ -343,6 +370,106 @@ def test_social_input_days_until_reads_soonest_scheduled_task(monkeypatch):
 
     assert out["has_friend"] is True
     assert out["friend_days_until"] == 4
+
+
+def test_social_input_placeholders_hold_capacity_but_do_not_set_next(monkeypatch):
+    _patch_social_config(monkeypatch)
+    fs = _FakeSpendFlowSavvy({}, tasks=[
+        {"title": "Friends (proposed)", "startDateTime": "2026-07-20T18:00:00", "completed": False},
+        {"title": "Plan Friends", "dueDateTime": "2026-07-17T21:00:00", "completed": False},
+    ])
+    now = datetime.datetime(2026, 7, 13, 9, 0)
+
+    out = gather.social_input(fs, now)
+
+    assert out["has_friend"] is True
+    assert out["friend_days_until"] is None
+
+
+def test_social_input_ignores_old_lifeops_locked_social_task_for_next(monkeypatch):
+    _patch_social_config(monkeypatch)
+    fs = _FakeSpendFlowSavvy({}, tasks=[
+        {"title": "Friends", "startDateTime": "2026-07-19T21:00:00", "completed": False,
+         "notes": "Locked in (LifeOps)."},
+    ])
+    now = datetime.datetime(2026, 7, 14, 9, 0)
+
+    out = gather.social_input(fs, now)
+
+    assert out["has_friend"] is True
+    assert out["friend_days_until"] is None
+
+
+def test_social_input_days_until_reads_friend_name_calendar_event(monkeypatch):
+    _patch_social_config(monkeypatch)
+    monkeypatch.setattr(config, "FRIEND_NAMES", ["Chloe"])
+    fs = _FakeSpendFlowSavvy({"personal": [
+        {"id": "e1", "title": "Chloe tonight", "startDateTime": "2026-07-13T19:00:00"},
+    ]}, tasks=[
+        {"title": "Friends (proposed)", "startDateTime": "2026-07-20T18:00:00", "completed": False},
+    ])
+    now = datetime.datetime(2026, 7, 13, 9, 0)
+
+    out = gather.social_input(fs, now)
+
+    assert out["has_friend"] is True
+    assert out["friend_days_until"] == 0
+
+
+def test_social_input_days_until_reads_friend_calendar_event_note_type(monkeypatch):
+    _patch_social_config(monkeypatch)
+    fs = _FakeSpendFlowSavvy({"personal": [
+        {"id": "e1", "title": "Dinner", "startDateTime": "2026-07-14T19:00:00",
+         "notes": "type: friends"},
+    ]}, tasks=[])
+    now = datetime.datetime(2026, 7, 13, 9, 0)
+
+    out = gather.social_input(fs, now)
+
+    assert out["has_friend"] is True
+    assert out["friend_days_until"] == 1
+
+
+def test_social_input_days_until_reads_friend_calendar_event_note_types(monkeypatch):
+    _patch_social_config(monkeypatch)
+    fs = _FakeSpendFlowSavvy({"personal": [
+        {"id": "e1", "title": "Show", "startDateTime": "2026-07-14T19:00:00",
+         "notes": "type: concerts, friends"},
+    ]}, tasks=[])
+    now = datetime.datetime(2026, 7, 13, 9, 0)
+
+    out = gather.social_input(fs, now)
+
+    assert out["has_friend"] is True
+    assert out["friend_days_until"] == 1
+
+
+def test_social_input_days_until_reads_friend_task_note_type(monkeypatch):
+    _patch_social_config(monkeypatch)
+    fs = _FakeSpendFlowSavvy({}, tasks=[
+        {"title": "Dinner", "startDateTime": "2026-07-14T19:00:00",
+         "notes": "type: friends", "completed": False},
+    ])
+    now = datetime.datetime(2026, 7, 13, 9, 0)
+
+    out = gather.social_input(fs, now)
+
+    assert out["has_friend"] is True
+    assert out["friend_days_until"] == 1
+
+
+def test_social_input_days_until_reads_friend_task_note_types(monkeypatch):
+    _patch_social_config(monkeypatch)
+    fs = _FakeSpendFlowSavvy({}, tasks=[
+        {"title": "Show", "startDateTime": "2026-07-14T19:00:00",
+         "notes": "type: concerts, friends", "completed": False},
+    ])
+    now = datetime.datetime(2026, 7, 13, 9, 0)
+
+    out = gather.social_input(fs, now)
+
+    assert out["has_friend"] is True
+    assert out["friend_days_until"] == 1
 
 
 def test_social_input_days_until_reads_social_cal_event(monkeypatch):

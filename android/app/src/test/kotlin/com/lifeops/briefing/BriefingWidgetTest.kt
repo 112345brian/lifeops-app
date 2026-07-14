@@ -41,10 +41,15 @@ class BriefingWidgetTest {
         // Regression test for the exact bug reported 2026-07-13: a
         // single-stat preset widget (WidgetDisplayConfig.singleStat) could
         // be dragged onto the home screen but not actually resized down to
-        // its own declared minimum (gym_widget_info.xml's 110x56dp) without
+        // its own declared minimum (gym_widget_info.xml's 120x120dp) without
         // its only content vanishing, because BriefingContent's SMALL
-        // bucket used to hard-stop right after the attention badge.
-        setAppWidgetSize(DpSize(110.dp, 56.dp))
+        // bucket used to hard-stop right after the attention badge. Updated
+        // from the original 110x56dp to match gym_widget_info.xml's later
+        // bump to 120x120dp (2026-07-14, to stop the ring clipping against
+        // its own edge) -- this must track that XML's declared minimum, not
+        // an arbitrary small size, or a real clipping regression at the
+        // widget's true floor would pass silently.
+        setAppWidgetSize(DpSize(120.dp, 120.dp))
         provideComposable {
             GlanceTheme {
                 BriefingContent(
@@ -174,6 +179,27 @@ class BriefingWidgetTest {
     }
 
     @Test
+    fun soloMoneyPreset_showsBudgetStatusAndConventionalNegativeAmount() = runGlanceAppWidgetUnitTest {
+        setAppWidgetSize(DpSize(120.dp, 120.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(
+                        discretionaryDollars = -160,
+                        reasons = listOf(AttentionReason("money", "risk")),
+                    ),
+                    nextTasks = NextTasksState.empty(),
+                    config = WidgetDisplayConfig.singleStat(WidgetSection.MONEY_TILE),
+                )
+            }
+        }
+
+        onNode(hasText("OVER", true)).assertExists()
+        onNode(hasText("-$160", true)).assertExists()
+        onNode(hasText("$-160", true)).assertDoesNotExist()
+    }
+
+    @Test
     fun weatherSection_showsTempHighLowAndCondition() = runGlanceAppWidgetUnitTest {
         setAppWidgetSize(DpSize(250.dp, 200.dp))
         provideComposable {
@@ -242,8 +268,8 @@ class BriefingWidgetTest {
 
         onNode(hasText("💜", true)).assertExists()
         onNode(hasText("👥", true)).assertExists()
-        onNode(hasText("4d", true)).assertExists()
-        onNode(hasText("2d", true)).assertExists()
+        onNode(hasText("4d ago", true)).assertExists()
+        onNode(hasText("2d ago", true)).assertExists()
     }
 
     @Test
@@ -258,7 +284,32 @@ class BriefingWidgetTest {
             }
         }
 
-        onNode(hasText("4d", true)).assertExists()
+        onNode(hasText("4d ago", true)).assertExists()
+        onNode(hasText("👥", true)).assertDoesNotExist()
+    }
+
+    @Test
+    fun singleStatSocialPreset_focusesMostActionableCadence() = runGlanceAppWidgetUnitTest {
+        setAppWidgetSize(DpSize(120.dp, 120.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(
+                        partnerDaysSince = 4,
+                        partnerDaysUntil = 2,
+                        friendDaysSince = 8,
+                        friendDaysUntil = null,
+                    ),
+                    nextTasks = NextTasksState.empty(),
+                    config = WidgetDisplayConfig.singleStat(WidgetSection.SOCIAL),
+                )
+            }
+        }
+
+        onNode(hasText("FRIENDS", true)).assertExists()
+        onNode(hasText("8d", true)).assertExists()
+        onNode(hasText("AGO", true)).assertExists()
+        onNode(hasText("💜", true)).assertDoesNotExist()
         onNode(hasText("👥", true)).assertDoesNotExist()
     }
 

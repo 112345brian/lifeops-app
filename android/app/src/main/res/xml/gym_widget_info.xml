@@ -5,20 +5,40 @@
      gym ring included) instead of just the attention badge, so this no
      longer needs to be artificially held at 150dp/MEDIUM to avoid losing
      its content when resized down (confirmed 2026-07-13: the widget
-     couldn't actually be shrunk to its declared minimum before this fix). -->
+     couldn't actually be shrunk to its declared minimum before this fix).
+
+     minWidth matches minHeight (70dp) and targetCellWidth is 1, not 2:
+     unlike money/coursework/weather/sleep/social, this is a single icon +
+     number with no side-by-side content, so it should default to one
+     square cell, not a 2-wide strip (confirmed 2026-07-14: "it's 1x1
+     widget"). See the widget-info XML section of android/CLAUDE.md for
+     why minWidth (not targetCellWidth) is what actually drives footprint
+     on Samsung's launcher.
+
+     120dp, not the bare 56dp platform floor: BriefingContent's gym ring
+     plus its own padding needs real margin to not clip against this
+     widget's own edge (confirmed 2026-07-14, live device: "not big
+     enough" and "clipped by an invisible border" at 56dp). Bumped
+     70dp -> 96dp -> 112dp -> 120dp alongside GymRingIndicator's
+     SOLO_GYM_RING_SCALE (1.5x, then 1.875x, then an experimental 2x, all
+     confirmed 2026-07-14): the ring alone reaches 96dp at 2x, so 112dp
+     stopped leaving enough room for GymRingIndicator's own
+     SOLO_GYM_RING_OVERHEAD_DP margin and started clamping the ring back
+     down again. -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
-    android:minWidth="110dp"
-    android:minHeight="56dp"
-    android:minResizeWidth="110dp"
-    android:minResizeHeight="56dp"
+    android:minWidth="120dp"
+    android:minHeight="120dp"
+    android:minResizeWidth="120dp"
+    android:minResizeHeight="120dp"
     android:maxResizeWidth="250dp"
     android:maxResizeHeight="276dp"
-    android:targetCellWidth="2"
+    android:targetCellWidth="1"
     android:targetCellHeight="1"
     android:resizeMode="horizontal|vertical"
     android:widgetCategory="home_screen"
     android:updatePeriodMillis="1800000"
+    android:description="@string/widget_description_gym"
     android:initialLayout="@layout/widget_loading"
-    android:previewLayout="@layout/widget_loading"
+    android:previewLayout="@layout/widget_preview_gym"
     android:configure="com.lifeops.briefing.WidgetConfigActivity"
     android:widgetFeatures="reconfigurable" />

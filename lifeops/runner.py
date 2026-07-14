@@ -511,7 +511,10 @@ def run_gym(fs, yn, now):
         d = sd[:10]
         past_day = bool(d) and d < today
         elapsed_today = d == today and bool(ed) and ed < now_iso
-        if past_day or elapsed_today:
+        # Wednesday is not a before-work gym day, so Tuesday night does not
+        # need a wind-down block. Prune any already-created ones too.
+        exempt_tuesday = bool(d) and datetime.date.fromisoformat(d).strftime("%a") == "Tue"
+        if past_day or elapsed_today or exempt_tuesday:
             try:
                 fs.delete_item(t["id"]); _touch()
             except Exception as e:
@@ -671,32 +674,6 @@ def run_spend(fs, yn, now):
 
 def run_social(fs, yn, now):
     from .engines import social_engine
-    sp = os.path.join(history.ROOT, "logs", "social_state.json")
-    st = {"lastLock": "1970-01-01T00:00:00Z"}
-    try: st.update(json.load(open(sp, encoding="utf-8")))
-    except Exception: pass
-    open_tasks = fs.list_items(itemType="task", completed=False).get("items", [])
-
-    # LOCK-IN: completing a "Plan X" task confirms the proposed X block.
-    for d in fs.list_items(itemType="task", completed=True, query="Plan",
-                           modifiedAfter=st["lastLock"]).get("items", []):
-        title = d.get("title") or ""
-        if not title.startswith("Plan "):
-            continue
-        base = title[5:].strip()
-        for t in open_tasks:
-            if t.get("title") == f"{base} (proposed)":
-                fs.create_task(title=base, listId=config.LIST_PERSONAL,
-                               schedulingHoursId=t.get("schedulingHoursId") or config.SH_EVENINGS,
-                               durationMinutes=t.get("durationMinutes") or 120,
-                               dueDateTime=t.get("dueDateTime"), canBeStartedAt=t.get("canBeStartedAt"),
-                               isAutoIgnored=False, notes="Locked in (LifeOps).")
-                fs.delete_item(t["id"]); _touch()
-                _alert_once(f"lock:{base}:{now.date()}", f"🔒 Locked in: {base}")
-                break
-    st["lastLock"] = _utc_iso()
-    os.makedirs(os.path.dirname(sp), exist_ok=True); _save_json_atomic(sp, st)
-
     inp = gather.social_input(fs, now)
     out = social_engine.plan(inp["partner_days"], inp["friend_days"], inp["has_partner"],
                              inp["has_friend"], inp["good_days"], inp["is_protect_day"],
@@ -709,14 +686,14 @@ def run_social(fs, yn, now):
                        schedulingHoursId=config.SH_EVENINGS, durationMinutes=120,
                        priority=config.PRIO_SOCIAL_PROPOSED,
                        dueDateTime=f"{date}T21:00:00", canBeStartedAt=f"{date}T17:00:00",
-                       isAutoIgnored=False, notes="Proposed hangout — complete the 'Plan ...' task to lock it in.")
+                       isAutoIgnored=False, notes="Tentative scheduling hold. Replace it with a real plan after coordinating.")
         plan_due = (datetime.date.fromisoformat(date) - datetime.timedelta(days=config.PLAN_LEAD_DAYS)).isoformat()
         _logged_create(fs, "social", op=f"plan-task for {base}",
                        title=f"Plan {base}", listId=config.LIST_PERSONAL,
                        schedulingHoursId=config.SH_EVENINGS, durationMinutes=15,
                        priority=config.PRIO_SOCIAL_PLAN,
                        dueDateTime=f"{plan_due}T21:00:00", isAutoIgnored=False,
-                       notes="Reach out + arrange it. Completing this LOCKS IN the hangout.")
+                       notes="Reach out + arrange it. Add or keep the real hangout separately after coordinating.")
     if out["creates"]:
         _touch()
     for n in out["nudges"]:

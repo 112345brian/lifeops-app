@@ -1,25 +1,32 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Single-stat preset (social only). SocialSection now stacks the
+<!-- Single-stat preset (social only). SocialSection stacks the
      partner/friends chips vertically for this preset (see [stacked] in
-     BriefingWidget.kt), each chip using tighter font sizes/padding than the
-     default StatTile, so both fit within the same true 2x1 (110dp x 56dp)
-     footprint every other single-stat preset uses:matching weather's
-     footprint too, so the two line up when placed together (confirmed
-     2026-07-13: "ideally we would have the weather 2x1, then the
-     friends/social 2x1"). -->
+     BriefingWidget.kt) instead of side by side, so it fits a single
+     square cell (confirmed 2026-07-14: "the social widget to stack the
+     partner and friend values ... ideally, it should be able to fit in a
+     single 1x1 widget"). 100dp still showed as "2x2" in the picker on live
+     Samsung device testing (confirmed 2026-07-14) despite being under the
+     generic "70 x n - 30" formula's documented 110dp n=2 threshold: see
+     money_widget_info.xml's comment for the same finding. Using the
+     literal formula floor for n=1 (40dp) instead: mathematically
+     guaranteed to never round up to 2 cells on any compliant launcher.
+     SocialSection's stacked chips use shrunk font sizes for this preset
+     specifically (see the stacked branch's StatTile calls) since default
+     sizing doesn't fit two rows in a widget this small. -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
-    android:minWidth="110dp"
-    android:minHeight="56dp"
-    android:minResizeWidth="110dp"
-    android:minResizeHeight="56dp"
+    android:minWidth="40dp"
+    android:minHeight="40dp"
+    android:minResizeWidth="40dp"
+    android:minResizeHeight="40dp"
     android:maxResizeWidth="280dp"
     android:maxResizeHeight="250dp"
-    android:targetCellWidth="2"
+    android:targetCellWidth="1"
     android:targetCellHeight="1"
     android:resizeMode="horizontal|vertical"
     android:widgetCategory="home_screen"
     android:updatePeriodMillis="1800000"
+    android:description="@string/widget_description_social"
     android:initialLayout="@layout/widget_loading"
-    android:previewLayout="@layout/widget_loading"
+    android:previewLayout="@layout/widget_preview_social"
     android:configure="com.lifeops.briefing.WidgetConfigActivity"
     android:widgetFeatures="reconfigurable" />

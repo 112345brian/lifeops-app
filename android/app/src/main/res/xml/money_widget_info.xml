@@ -1,19 +1,30 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Single-stat preset (money tile only): see gym_widget_info.xml's
-     comment for why minHeight/minResizeHeight are 56dp, not 150dp. -->
+<!-- Single-stat preset (discretionary budget / money tile only). True 1x1
+     square footprint. 100dp still showed as "2x2" in the picker on live
+     Samsung device testing (confirmed 2026-07-14) despite being under the
+     generic "70 x n - 30" formula's documented 110dp n=2 threshold: that
+     formula is Google's own recommendation, not necessarily this specific
+     launcher's actual internal cell pitch, which appears smaller than the
+     formula assumes. Using the literal formula floor for n=1 (40dp)
+     instead: that value is mathematically guaranteed to never round up to
+     2 cells on any compliant launcher, since it's the documented minimum a
+     single cell is ever defined to require. MoneyTile's own font size is
+     shrunk for the solo/expand case (see MONEY_SOLO_FONT_SP) since the
+     default 22sp doesn't fit in a widget this small without clipping. -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
-    android:minWidth="110dp"
-    android:minHeight="56dp"
-    android:minResizeWidth="110dp"
-    android:minResizeHeight="56dp"
+    android:minWidth="40dp"
+    android:minHeight="40dp"
+    android:minResizeWidth="40dp"
+    android:minResizeHeight="40dp"
     android:maxResizeWidth="250dp"
     android:maxResizeHeight="276dp"
-    android:targetCellWidth="2"
+    android:targetCellWidth="1"
     android:targetCellHeight="1"
     android:resizeMode="horizontal|vertical"
     android:widgetCategory="home_screen"
     android:updatePeriodMillis="1800000"
+    android:description="@string/widget_description_money"
     android:initialLayout="@layout/widget_loading"
-    android:previewLayout="@layout/widget_loading"
+    android:previewLayout="@layout/widget_preview_money"
     android:configure="com.lifeops.briefing.WidgetConfigActivity"
     android:widgetFeatures="reconfigurable" />

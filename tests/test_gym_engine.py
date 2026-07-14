@@ -74,6 +74,14 @@ def test_deadline_heavy_forces_morning():
     creates = [a for a in out["actions"] if a["op"] == "create"]
     assert all(a["kind"] == "morning" for a in creates)
 
+def test_morning_gym_creates_prior_night_wind_down():
+    out = gym_engine.plan(_inp(completed=3, days=[_day("2026-07-07", deadline_heavy=True)]))
+    assert out["wind_down"] == [{"date": "2026-07-06", "start": "21:00", "end": "23:00"}]
+
+def test_wednesday_morning_gym_does_not_create_tuesday_wind_down():
+    out = gym_engine.plan(_inp(completed=3, days=[_day("2026-07-08", deadline_heavy=True)]))
+    assert out["wind_down"] == []
+
 def test_day_after_show_skipped():
     # day 1 is after a show → skip it, day 2 is clean
     dates = _dates(7)

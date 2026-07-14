@@ -4,6 +4,32 @@ Notable changes, newest first. Personal project, versioned simply (see
 `VERSION` / `lifeops.__version__`) — dates and the reasoning behind each
 change matter more here than semver strictness.
 
+## [1.17.0] — 2026-07-14
+
+### Changed
+- **Social tracking now separates tentative scheduling holds from real
+  hangout plans.** LifeOps can still create `Friends (proposed)` /
+  `Plan Friends`-style holds so future social time is accounted for in
+  scheduling, but those placeholders no longer make the widget say a
+  hangout is actually planned. Old generated `Locked in (LifeOps)` social
+  tasks are also ignored for widget `next` dates, so only real/manual
+  commitments, configured social calendar events, friend-name matches, or
+  `type: friends` notes count as actual upcoming social time.
+- **Social proposals now respect the weekly cadence.** The engine only
+  proposes a new partner/friend hold when that cadence is due and no hold
+  or actual plan already exists; candidate proposal dates start in the next
+  weekly cycle rather than inside the current week.
+- **Social 1x1 widget now follows the Money widget visual pattern.** The
+  standalone Social preset picks the most actionable cadence and renders it
+  as a dark solo card with a compact label (`FRIENDS` / `PARTNER`), large
+  value (`8d` / `2d`), and bottom status bar (`AGO` / `NEXT`) instead of a
+  compressed two-row emoji chip layout. The full widget still shows both
+  partner and friends when there is room.
+- **`type:` note overrides now support multiple comma-separated types.**
+  Notes such as `type: friends, concerts` or `type: concerts, friends`
+  are parsed into a full type list for social detection while preserving
+  the first normalized type for existing spend classification.
+
 ## [1.16.1] — 2026-07-14
 
 ### Fixed

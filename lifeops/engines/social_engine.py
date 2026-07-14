@@ -6,10 +6,12 @@ overdue. Recency from the durable history log. Pure logic — no names baked in
 def plan(partner_days, friend_days, has_partner, has_friend, good_days, is_protect_day,
          partner_name="Partner"):
     creates, nudges = [], []
+    def due(days):
+        return days is None or days >= 7
     if is_protect_day and good_days:
-        if not has_partner:
+        if not has_partner and due(partner_days):
             creates.append({"kind": "partner", "date": good_days[0]})
-        if not has_friend:
+        if not has_friend and due(friend_days):
             creates.append({"kind": "friends", "date": good_days[1 if len(good_days) > 1 else 0]})
     if partner_days is not None and partner_days >= 7:
         nudges.append(f"It's been {partner_days} days since {partner_name} — put a slot in for you two.")

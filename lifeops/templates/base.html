@@ -344,6 +344,39 @@ tr:last-child td { border-bottom: none; }
                     border-radius: var(--shape-sm); padding: .4rem .7rem; font-size: 13px; }
 
 /* ── calendar ── */
+.social-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .6rem;
+  margin-bottom: .8rem;
+}
+.social-summary-item {
+  background: var(--md-surface-container-high);
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--shape-sm);
+  padding: .65rem .75rem;
+}
+.social-summary-planned { border-color: rgba(74,222,128,.45); background: rgba(74,222,128,.10); }
+.social-summary-watch { border-color: rgba(251,191,36,.55); background: rgba(251,191,36,.10); }
+.social-summary-empty { border-style: dashed; }
+.social-summary-label {
+  color: var(--md-on-surface-variant);
+  font-size: 11px;
+  font-weight: 600;
+  margin-bottom: .1rem;
+}
+.social-summary-primary {
+  color: var(--md-on-surface);
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.15;
+}
+.social-summary-secondary {
+  color: var(--md-on-surface-variant);
+  font-size: 12px;
+  margin-top: .15rem;
+}
+@media (max-width: 420px) { .social-summary { grid-template-columns: 1fr; } }
 .cal-tabs { display: flex; gap: .4rem; margin-bottom: .6rem; }
 .cal-weekdays, .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: .35rem; }
 .cal-weekdays { margin-bottom: .4rem; }

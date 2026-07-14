@@ -137,6 +137,15 @@
 <!-- ── Calendar ── -->
 <div class="card section" id="calendar">
   <div class="card-title">Calendar</div>
+  <div class="social-summary" aria-label="Social hangout status">
+    {% for item in social_status %}
+    <div class="social-summary-item social-summary-{{ item.tone }}">
+      <div class="social-summary-label">{{ item.label }}</div>
+      <div class="social-summary-primary">{{ item.primary }}</div>
+      <div class="social-summary-secondary">{{ item.secondary }}</div>
+    </div>
+    {% endfor %}
+  </div>
   <div class="cal-tabs">
     <button type="button" class="btn btn-sm btn-primary cal-tab-btn" data-cal="gym">🏋️ Gym</button>
     <button type="button" class="btn btn-sm cal-tab-btn" data-cal="partner">❤️ {{ partner_name }}</button>

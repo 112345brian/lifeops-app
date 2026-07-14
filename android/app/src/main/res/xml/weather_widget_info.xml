@@ -19,7 +19,8 @@
     android:resizeMode="horizontal|vertical"
     android:widgetCategory="home_screen"
     android:updatePeriodMillis="1800000"
+    android:description="@string/widget_description_weather"
     android:initialLayout="@layout/widget_loading"
-    android:previewLayout="@layout/widget_loading"
+    android:previewLayout="@layout/widget_preview_weather"
     android:configure="com.lifeops.briefing.WidgetConfigActivity"
     android:widgetFeatures="reconfigurable" />

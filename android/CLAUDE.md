@@ -72,16 +72,16 @@ just match `targetCellWidth`.
 
 ## Padding: the flat-margin problem is OUR code, not a hidden system default
 
-**The actual, confirmed cause**: `BriefingContent`'s root `Column` applies a
-flat `GlanceModifier.padding(12.dp)` unconditionally, regardless of how much
-room the widget actually has. On the full 4x3 combo widget 12dp is
-negligible; on a single-stat preset's true 2x1/1x1 footprint (56–70dp
-total), that same 12dp on all four sides eats a large fraction of the whole
-widget and was directly causing content to look uncentered/clipped
-(confirmed live-device: "clipped by an invisible border"). This is a real
-bug in code we wrote, with a real fix: make the padding size-aware (smaller
-when the widget's sole content is a single solo tile) rather than a flat
-constant — see the `solo` handling in `BriefingContent`.
+**The actual, confirmed cause**: `BriefingContent`'s root `Column` used to
+apply a flat `GlanceModifier.padding(12.dp)` unconditionally, regardless of
+how much room the widget actually had. On the full 4x3 combo widget 12dp was
+noticeable; on a single-stat preset's true 2x1/1x1 footprint (56–70dp total),
+that same 12dp on all four sides ate a large fraction of the whole widget and
+was directly causing content to look uncentered/clipped (confirmed
+live-device: "clipped by an invisible border"). This is a real bug in code we
+wrote, with a real fix: keep root padding size-aware and especially avoid
+outer padding on solo widgets, whose tile/card children already own their
+internal padding — see the `solo` handling in `BriefingContent`.
 
 **A dead end, corrected here so it doesn't get re-investigated**:
 `appWidgetPadding` / `appWidgetInnerRadius` / `appWidgetRadius` are **not**
@@ -97,11 +97,68 @@ own `cornerRadius()`/`background()` modifiers, or the
 project deliberately doesn't use), are the two real levers for corner-safe
 padding in a Glance widget specifically.
 
+## Money widget design: finance instruments, not generic alert blocks
+
+Do not render the standalone money widget as a plain red rectangle with only
+the raw balance. That reads like a generic error tile, not a finance widget.
+The useful convention from actual budgeting apps is "available/safe money +
+context label", with warning color used as a status accent rather than the
+entire surface:
+
+- YNAB's mobile widget centers favorite budget categories and their balances:
+  quick access to "category balances you use a lot" and category-specific
+  available money.
+- Rocket Money's widgets are explicitly framed around "Safe to Spend",
+  upcoming bills, recent transactions, and spending. The primary small
+  surface is "how much you can safely spend", not a raw account warning.
+- PocketGuard's core product language is "safe-to-spend" / "what's in your
+  pocket", again making the disposable amount the headline and the state the
+  supporting context.
+
+For LifeOps, the money preset should therefore feel like a compact budget
+instrument: neutral/dark card, prominent amount, a short state label such as
+`OVER`, `LOW`, or `LEFT`, and red/yellow/green as an accent/status signal.
+Negative amounts should format conventionally (`-$160`, not `$-160`). Keep
+the combined-widget money tile simpler, but avoid styling the solo money
+widget as a full-bleed danger slab unless the product decision changes.
+
+References checked 2026-07-14:
+[YNAB widget guide](https://support.ynab.com/en_us/ynab-widget-for-mobile-a-guide-HJPEEQYR9),
+[YNAB widgets announcement](https://www.ynab.com/blog/widgets-for-ynab-on-ios),
+[Rocket Money widgets](https://help.rocketmoney.com/en/articles/9217610-rocket-money-widgets),
+[PocketGuard](https://pocketguard.com/).
+
 The official minWidth/minHeight formula for a widget's default placed size
 is `70 × n − 30` dp per grid cell (n=1→40dp, n=2→110dp, n=3→180dp) — this
 already matches the values in our `*_widget_info.xml` files; if you're
 choosing a new default size for a preset, use this formula rather than
 guessing.
+
+**Critical: these thresholds are a hard ceiling, not just a starting
+point.** The formula isn't merely a *recommendation* — it's how the launcher
+actually computes cell count from your declared dp value. Declare anything
+at or above the *next* n's threshold and the launcher rounds UP to that many
+cells, in both width and height independently. Confirmed live-device
+(2026-07-14): `money_widget_info.xml` and `social_widget_info.xml` were both
+set to `120dp` (copied from `gym_widget_info.xml` without rechecking against
+the formula) — `120dp` is past the `n=2` threshold (`110dp`), so the widget
+picker showed them as **"2x2"**, not "1x1", despite `targetCellWidth`/
+`targetCellHeight` both declaring `1` (which the launcher doesn't honor
+anyway, per the picker-footprint note above). Both were corrected to
+`100dp` (a 10dp margin under `110dp`). If a preset genuinely needs more
+room than a formula tier gives, you cannot "round up a little" and still
+get that tier's cell count — you either fit under the next threshold or you
+accept the next cell count.
+
+**Exception where exceeding the tier IS worth it**: `gym_widget_info.xml`
+stays at `120dp` (i.e., accepts 2x2, not a true 1x1) because the gym ring is
+a fixed-pixel bitmap (see `GymRingIndicator`'s `SOLO_GYM_RING_SCALE`) that
+clips instead of reflowing, unlike text which wraps/truncates gracefully.
+That 120dp value came from live-device trial and error (70→96→112→120dp,
+confirmed 2026-07-14) weighing "fits cleanly in 1 cell" against "doesn't
+clip" and choosing not-clipping. Money and Social's content (text only) had
+no such tradeoff to make, so there was no reason to exceed the ceiling for
+them — that was simply a copy-paste mistake, not a deliberate choice.
 
 Also don't fully trust the declared XML size at render time: Samsung's
 launcher doesn't always grant a widget exactly what `minWidth`/`minHeight`
