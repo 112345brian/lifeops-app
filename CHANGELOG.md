@@ -4,6 +4,19 @@ Notable changes, newest first. Personal project, versioned simply (see
 `VERSION` / `lifeops.__version__`) — dates and the reasoning behind each
 change matter more here than semver strictness.
 
+## [1.16.1] — 2026-07-14
+
+### Fixed
+- **"Restart server" button appeared broken.** `_restart_server()`'s
+  detached helper waited only 800ms before `schtasks /end` killed the
+  process -- too tight over a real network hop. Confirmed live: the
+  caller's browser was still sitting on the bare `POST /system/restart`
+  URL when the process died mid-response (before its 303 redirect could
+  arrive), so a reload/retry of that URL hit it as a `GET` and 405'd --
+  reading as "the button doesn't work" when the restart had actually
+  already fired. Bumped the delay to 3000ms so the redirect reliably
+  reaches the browser first.
+
 ## [1.16.0] — 2026-07-13
 
 ### Changed
