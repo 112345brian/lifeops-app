@@ -475,12 +475,19 @@ def _restart_server():
     Uses CREATE_NO_WINDOW rather than DETACHED_PROCESS for the helper: with no
     console at all (DETACHED_PROCESS), powershell.exe silently exits without
     running the script — CREATE_NO_WINDOW gives it a real (hidden) console so
-    it actually executes."""
+    it actually executes.
+
+    The delay before `schtasks /end` has to outlast this request's own
+    303 redirect actually reaching the browser -- 800ms was too tight over
+    a real network hop (confirmed 2026-07-14: the caller's browser was
+    still sitting on the bare POST URL when the process died mid-response,
+    so a reload/retry hit it as a GET and 405'd, reading as "the button
+    doesn't work" when the restart itself had actually already fired)."""
     check = subprocess.run(["schtasks", "/query", "/tn", "LifeOps-web"],
                            capture_output=True,
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     if check.returncode == 0:
-        script = ('Start-Sleep -Milliseconds 800; '
+        script = ('Start-Sleep -Milliseconds 3000; '
                   'schtasks /end /tn "LifeOps-web"; '
                   'Start-Sleep -Seconds 2; '
                   'schtasks /run /tn "LifeOps-web"')
