@@ -4,6 +4,43 @@ Notable changes, newest first. Personal project, versioned simply (see
 `VERSION` / `lifeops.__version__`) — dates and the reasoning behind each
 change matter more here than semver strictness.
 
+## [1.14.0] — 2026-07-13
+
+### Fixed
+- **Widget setup screen's Save button was unreachable, for real this time.**
+  Two earlier attempts this same day both relied on Compose's
+  `navigationBarsPadding()`/`WindowInsets` to clear the 3-button nav bar and
+  neither worked on a real Samsung device — insets weren't dispatching
+  correctly to this Activity's window even with edge-to-edge enabled. Fixed
+  by reading the nav bar's real height straight from the platform's
+  `navigation_bar_height` dimen resource and applying it as literal padding,
+  bypassing Compose's insets APIs entirely.
+- **Widget setup preview silently hid toggled-on sections.** It gated
+  content by the widget's *current placed size*, but Samsung's launcher
+  drops a freshly-added widget at a small default footprint before the user
+  ever touches it — so toggling "Briefing text" or "Weather" on did nothing
+  visible, contradicting the user's own choice. The preview now renders
+  everything the Sections list says is on, full stop; the size-bucket
+  gating stays real-widget-only.
+- **Weather card's high/low arrows didn't line up.** `°F↑85°` / `↓67°` put
+  the up-arrow on the same line as `°F`, offset from the down-arrow on the
+  line below by `°F`'s width. `°F` now sits with the temperature; high and
+  low get their own column so both arrows are flush left against each
+  other.
+- **Weather card's low-temp line floated with a large unwanted gap above
+  it** in the setup preview specifically — overriding `fontSize` alone
+  without `lineHeight` kept Material3's much taller inherited line height.
+  Both lines now set `lineHeight` explicitly.
+- **Social widget picker showed a different footprint than Weather's** (2
+  columns vs. 3) despite both declaring the same `targetCellWidth`. Samsung's
+  launcher recomputes the picker footprint from `minWidth`/`minHeight`
+  rather than honoring `targetCellWidth`/`targetCellHeight` — bumped
+  Social's `minWidth` to match Weather's 180dp exactly.
+- **`WEATHER_LAT`/`WEATHER_LON` were never set** in the private secrets repo,
+  so every weather figure (current temp included, not just high/low) was
+  silently absent on any machine syncing from it. Added Anaheim Hills
+  coordinates.
+
 ## [1.13.0] — 2026-07-13
 
 ### Added

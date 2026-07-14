@@ -784,15 +784,20 @@ private fun WeatherSection(state: BriefingState, scale: Float) {
                 style = TextStyle(fontWeight = FontWeight.Bold, fontSize = (BASE_WEATHER_TEMP_SP * scale).sp,
                     color = ColorProvider(Color.White)),
             )
-            // "°F↑85°" / "↓67°" -- a tight 2-line group immediately beside
-            // the number, matching the original reference design exactly.
-            // Was 3 separate stacked lines (°F, ↑, ↓); that read as more
-            // disconnected from the number than intended (2026-07-13).
+            Text(
+                text = "°F",
+                style = TextStyle(fontSize = (BASE_WEATHER_UNIT_SP * scale).sp, color = ColorProvider(Color.White)),
+            )
+            // High/low get their own column, arrows flush left against each
+            // other -- putting "°F" on the same line as "↑85°" pushed the
+            // up-arrow in by "°F"'s width while "↓67°" started at the
+            // column's own left edge, so the two arrows never lined up
+            // (confirmed 2026-07-13, live device screenshot).
             Column {
-                Text(
-                    text = "°F" + (state.weatherHighF?.let { "↑$it°" } ?: ""),
-                    style = TextStyle(fontSize = (BASE_WEATHER_UNIT_SP * scale).sp, color = ColorProvider(Color.White)),
-                )
+                state.weatherHighF?.let {
+                    Text(text = "↑$it°", style = TextStyle(fontSize = (BASE_WEATHER_UNIT_SP * scale).sp,
+                        color = ColorProvider(Color.White)))
+                }
                 state.weatherLowF?.let {
                     Text(text = "↓$it°", style = TextStyle(fontSize = (BASE_WEATHER_HILO_SP * scale).sp,
                         color = ColorProvider(Color.White)))

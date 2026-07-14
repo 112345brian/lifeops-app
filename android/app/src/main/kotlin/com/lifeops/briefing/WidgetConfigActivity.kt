@@ -6,6 +6,7 @@ import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.core.view.WindowCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -16,7 +17,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -52,7 +52,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.DpSize
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.glance.GlanceId
@@ -111,6 +111,17 @@ class WidgetConfigActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // targetSdk 35+ forces edge-to-edge drawing regardless of this call,
+        // but without it Compose's WindowInsets composition locals never got
+        // real dispatched values here -- navigationBarsPadding() rendered as
+        // 0dp even with this set (confirmed 2026-07-13 on a real Samsung
+        // device: the Save button still sat directly under/behind the
+        // 3-button nav bar's icons after adding navigationBarsPadding()).
+        // Rather than keep guessing at *why* Compose's own insets dispatch
+        // isn't reaching this Activity's window, navBarHeightDp() below
+        // reads the nav bar's real height straight from the platform
+        // resource instead -- doesn't depend on insets dispatch at all.
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         // Must happen before any UI work -- if the user backs out without
         // saving, the App Widget host must not add the widget.
         setResult(Activity.RESULT_CANCELED)
@@ -132,12 +143,15 @@ class WidgetConfigActivity : ComponentActivity() {
             .getAppWidgetInfo(appWidgetId)?.provider?.className
         val presetDefault = WidgetPresets.defaultConfigFor(providerClassName)
 
+        val navBarHeightDp = navigationBarHeightDp()
+
         setContent {
             MaterialTheme(colorScheme = LifeOpsDarkColors) {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     WidgetConfigScreen(
                         loadInitial = { loadInitialState(appWidgetId, glanceId, presetDefault) },
                         onSave = { config -> saveAndFinish(appWidgetId, glanceId, config) },
+                        navBarHeightDp = navBarHeightDp,
                     )
                 }
             }
@@ -145,10 +159,9 @@ class WidgetConfigActivity : ComponentActivity() {
     }
 
     /** One DataStore read for everything the config screen needs: the
-     * persisted display config (or [fallback] if none saved yet), the
+     * persisted display config (or [fallback] if none saved yet), and the
      * currently-persisted briefing/next-tasks snapshot (feeds [WidgetPreview]
-     * real data when available), and the instance's actual size bucket --
-     * see [resolveSizeBucket]. */
+     * real data when available). */
     private suspend fun loadInitialState(
         appWidgetId: Int,
         glanceId: GlanceId,
@@ -171,32 +184,7 @@ class WidgetConfigActivity : ComponentActivity() {
         } catch (e: org.json.JSONException) {
             null
         }
-        val bucket = resolveSizeBucket(appWidgetId, glanceId)
-        return ConfigScreenData(config, state, nextTasks, bucket)
-    }
-
-    /** The preview used to render every section regardless of what size the
-     * widget was actually placed at -- misrepresenting what a small
-     * single-stat preset (or any widget resized down) will actually show
-     * (confirmed 2026-07-13). Prefers the real placed size
-     * (GlanceAppWidgetManager.getAppWidgetSizes, populated once the App
-     * Widget host has actually bound and sized this instance -- works for
-     * re-opening configure on an ALREADY-placed widget); falls back to the
-     * provider's declared minWidth/minHeight for a widget being configured
-     * for the very first time, before any size is known yet. Reuses the
-     * exact same [bucketFor] the real widget uses, not a re-derived
-     * approximation. */
-    private suspend fun resolveSizeBucket(appWidgetId: Int, glanceId: GlanceId): WidgetSizeBucket {
-        val sizes = try {
-            GlanceAppWidgetManager(this).getAppWidgetSizes(glanceId)
-        } catch (e: Exception) {
-            emptyList()
-        }
-        val size = sizes.maxByOrNull { it.width.value * it.height.value } ?: run {
-            val info = AppWidgetManager.getInstance(this).getAppWidgetInfo(appWidgetId)
-            if (info != null) DpSize(info.minWidth.dp, info.minHeight.dp) else DpSize(250.dp, 250.dp)
-        }
-        return bucketFor(size)
+        return ConfigScreenData(config, state, nextTasks)
     }
 
     private suspend fun saveAndFinish(appWidgetId: Int, glanceId: GlanceId, config: WidgetDisplayConfig) {
@@ -210,16 +198,13 @@ class WidgetConfigActivity : ComponentActivity() {
 }
 
 /** Bundles everything WidgetConfigScreen needs from one DataStore read: the
- * config to seed the form with, the real persisted state/next-tasks
+ * config to seed the form with, and the real persisted state/next-tasks
  * (nullable -- a freshly-placed widget has neither yet) [WidgetPreview]
- * renders live data from when available, and the instance's actual size
- * bucket (see [WidgetConfigActivity.resolveSizeBucket]) so the preview only
- * shows what that size will actually render. */
+ * renders live data from when available. */
 private data class ConfigScreenData(
     val config: WidgetDisplayConfig,
     val state: BriefingState?,
     val nextTasks: NextTasksState?,
-    val bucket: WidgetSizeBucket,
 )
 
 private fun sectionLabel(section: WidgetSection): String = when (section) {
@@ -242,6 +227,17 @@ private fun <T> List<T>.moved(from: Int, to: Int): List<T> {
     return mutable
 }
 
+/** Reads the 3-button/gesture nav bar's real height straight from the
+ * platform resource, in dp -- see the [WidgetConfigActivity.onCreate]
+ * comment for why this exists instead of Compose's own
+ * navigationBarsPadding(). Falls back to 0dp (no bar, e.g. fully gestural
+ * nav with no persistent bar) if the resource isn't present. */
+private fun Activity.navigationBarHeightDp(): Dp {
+    val resId = resources.getIdentifier("navigation_bar_height", "dimen", "android")
+    val px = if (resId > 0) resources.getDimensionPixelSize(resId) else 0
+    return (px / resources.displayMetrics.density).dp
+}
+
 private const val MAX_TASKS_SLIDER_MAX = 9f
 private const val MAX_TASKS_SLIDER_STEPS = 7 // 1..9 inclusive, 7 intermediate steps
 
@@ -249,6 +245,7 @@ private const val MAX_TASKS_SLIDER_STEPS = 7 // 1..9 inclusive, 7 intermediate s
 private fun WidgetConfigScreen(
     loadInitial: suspend () -> ConfigScreenData,
     onSave: suspend (WidgetDisplayConfig) -> Unit,
+    navBarHeightDp: Dp,
 ) {
     var initial by remember { mutableStateOf<ConfigScreenData?>(null) }
     val scope = rememberCoroutineScope()
@@ -281,11 +278,16 @@ private fun WidgetConfigScreen(
             // system nav bar/gesture bar -- targetSdk 35+ enforces
             // edge-to-edge by default, so without this the Save button
             // rendered right underneath the 3-button nav bar's Home
-            // button, unreachable (confirmed 2026-07-13 on a real device).
+            // button, unreachable. navBarHeightDp is read straight from the
+            // platform resource (see [navigationBarHeightDp]), not from
+            // Compose's own WindowInsets -- navigationBarsPadding() measured
+            // 0dp here even after enabling edge-to-edge (confirmed
+            // 2026-07-13 on a real Samsung device: the button still
+            // rendered directly behind the nav bar's icons).
             Surface(
                 shadowElevation = 8.dp,
                 color = MaterialTheme.colorScheme.surfaceVariant,
-                modifier = Modifier.navigationBarsPadding(),
+                modifier = Modifier.padding(bottom = navBarHeightDp),
             ) {
                 Button(
                     onClick = {
@@ -326,7 +328,6 @@ private fun WidgetConfigScreen(
                     order = order,
                     hidden = hidden,
                     scale = scale,
-                    bucket = loaded.bucket,
                 )
             }
 
@@ -476,7 +477,6 @@ private fun WidgetPreview(
     order: List<WidgetSection>,
     hidden: Set<WidgetSection>,
     scale: Float,
-    bucket: WidgetSizeBucket,
 ) {
     val usingSample = state?.text == null
     val previewState = if (usingSample) SAMPLE_STATE else state!!
@@ -486,18 +486,21 @@ private fun WidgetPreview(
     // badge's own row only when left in their default (first) position;
     // moved anywhere else, they get their own standalone row instead.
     val dotsInline = visible.firstOrNull() == WidgetSection.SEVERITY_DOTS
-    // Same gating BriefingContent applies: text-gated sections vanish
-    // until a real briefing has landed, and at SMALL only the compact
-    // tile sections survive alongside the badge -- reusing the real
-    // TEXT_GATED_SECTIONS/TILE_SECTIONS/bucket check (not a re-derived
-    // copy) so this can't silently drift from what the placed widget
-    // actually does (confirmed 2026-07-13: the preview used to render
-    // every section regardless of bucket, overpromising content a small
-    // widget would never show).
+    // Text-gated sections vanish until a real briefing has landed, same as
+    // BriefingContent -- reuses TEXT_GATED_SECTIONS so this can't silently
+    // drift from what the placed widget actually does. Deliberately does
+    // NOT also apply the real widget's SMALL-bucket/LARGE-only gating: an
+    // earlier version did, using the widget's CURRENT placed size -- but a
+    // freshly-added widget on this launcher gets dropped at a small default
+    // footprint before the user has touched it, so that gating hid every
+    // section the user had just toggled on, contradicting their own choice
+    // (confirmed 2026-07-13, live device: "Briefing text" toggled on, never
+    // appeared in preview). The Sections list below already gives the user
+    // full manual control over what shows; the preview's job is to render
+    // that choice honestly, not re-guess it from an incidental placement size.
     val renderableOrder = visible.filter { section ->
         !(section == WidgetSection.SEVERITY_DOTS && dotsInline) &&
-            !(previewState.text == null && section in TEXT_GATED_SECTIONS) &&
-            (bucket != WidgetSizeBucket.SMALL || section in TILE_SECTIONS)
+            !(previewState.text == null && section in TEXT_GATED_SECTIONS)
     }
 
     Column(
@@ -546,19 +549,15 @@ private fun WidgetPreview(
                 WidgetSection.WEATHER -> PreviewWeatherCard(previewState, scale)
                 WidgetSection.SOCIAL -> PreviewSocialRow(previewState, scale)
                 WidgetSection.BRIEFING_PARAGRAPH ->
-                    if (bucket == WidgetSizeBucket.LARGE) {
-                        Text(
-                            text = previewState.text ?: "",
-                            color = PREVIEW_ON_BG, fontSize = (12 * scale).sp,
-                            maxLines = 3,
-                        )
-                    }
-                WidgetSection.TODAY_EVENTS -> if (bucket == WidgetSizeBucket.LARGE) {
-                    previewTasks.events.forEach {
-                        Text(text = "📅 ${it.title}", color = PREVIEW_ON_BG, fontSize = (11 * scale).sp)
-                    }
+                    Text(
+                        text = previewState.text ?: "",
+                        color = PREVIEW_ON_BG, fontSize = (12 * scale).sp,
+                        maxLines = 3,
+                    )
+                WidgetSection.TODAY_EVENTS -> previewTasks.events.forEach {
+                    Text(text = "📅 ${it.title}", color = PREVIEW_ON_BG, fontSize = (11 * scale).sp)
                 }
-                WidgetSection.UP_NEXT -> if (bucket == WidgetSizeBucket.LARGE && previewTasks.tasks.isNotEmpty()) {
+                WidgetSection.UP_NEXT -> if (previewTasks.tasks.isNotEmpty()) {
                     Column {
                         Text(text = "Up next", color = PREVIEW_ON_BG, fontWeight = FontWeight.Bold,
                             fontSize = (11 * scale).sp)
@@ -620,12 +619,25 @@ private fun PreviewWeatherCard(state: BriefingState, scale: Float) {
         Row(verticalAlignment = Alignment.Top) {
             Text(text = "${state.temperatureF ?: "--"}", color = Color.White, fontWeight = FontWeight.Bold,
                 fontSize = (28 * scale).sp)
-            // "°F↑85°" / "↓67°" -- matches WeatherSection's real 2-line
-            // grouping, not 3 separate stacked lines.
+            Text(text = "°F", color = Color.White, fontSize = (11 * scale).sp, lineHeight = (11 * scale).sp)
+            // High/low get their own column, arrows flush left against each
+            // other -- matches WeatherSection in BriefingWidget.kt: putting
+            // "°F" on the same line as "↑85°" pushed the up-arrow in by
+            // "°F"'s width while "↓67°" started at the column's own left
+            // edge, so the two arrows never lined up (confirmed 2026-07-13,
+            // live device screenshot). lineHeight is set explicitly to match
+            // fontSize on every line here -- Text() only overriding fontSize
+            // keeps the inherited (much taller) MaterialTheme default line
+            // height, which is what caused the original vertical gap.
             Column {
-                Text(text = "°F" + (state.weatherHighF?.let { "↑${it}°" } ?: ""),
-                    color = Color.White, fontSize = (11 * scale).sp)
-                state.weatherLowF?.let { Text(text = "↓${it}°", color = Color.White, fontSize = (10 * scale).sp) }
+                state.weatherHighF?.let {
+                    Text(text = "↑${it}°", color = Color.White,
+                        fontSize = (11 * scale).sp, lineHeight = (11 * scale).sp)
+                }
+                state.weatherLowF?.let {
+                    Text(text = "↓${it}°", color = Color.White,
+                        fontSize = (10 * scale).sp, lineHeight = (10 * scale).sp)
+                }
             }
         }
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
