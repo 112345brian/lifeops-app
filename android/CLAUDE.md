@@ -70,23 +70,32 @@ column counts in the picker if their `minWidth` values round differently.
 Match `minWidth` exactly across presets you want to look consistent, don't
 just match `targetCellWidth`.
 
-## Padding: don't apply a flat margin outside a solo tile's own background
+## Padding: the flat-margin problem is OUR code, not a hidden system default
 
-Per [Android's App Widget Design Guidelines](https://developer.android.com/guide/practices/ui_guidelines/widget_design):
-since Android 4.0, the system already applies a small automatic margin
-*outside* every widget's own background/frame, and the explicit guidance is
-**"do not add extra margins outside your widget's background shape — avoid
-double-margining."** `BriefingContent`'s root `Column` used to apply a flat
-`GlanceModifier.padding(12.dp)` unconditionally, which sits *outside* every
-section's own background (e.g. `WeatherCard`'s blue box, the gym ring) —
-exactly the anti-pattern the guidelines warn against. On the full 4x3 combo
-widget 12dp is negligible; on a single-stat preset's true 2x1/1x1 footprint
-(56–70dp total), that same 12dp on all four sides eats a large fraction of
-the whole widget and was directly causing content to look uncentered/clipped
-(confirmed live-device: "clipped by an invisible border"). Fix: make this
-padding size-aware (e.g. smaller when the widget's sole content is a single
-solo tile) rather than a flat constant — see the `solo` handling in
-`BriefingContent` for the current approach.
+**The actual, confirmed cause**: `BriefingContent`'s root `Column` applies a
+flat `GlanceModifier.padding(12.dp)` unconditionally, regardless of how much
+room the widget actually has. On the full 4x3 combo widget 12dp is
+negligible; on a single-stat preset's true 2x1/1x1 footprint (56–70dp
+total), that same 12dp on all four sides eats a large fraction of the whole
+widget and was directly causing content to look uncentered/clipped
+(confirmed live-device: "clipped by an invisible border"). This is a real
+bug in code we wrote, with a real fix: make the padding size-aware (smaller
+when the widget's sole content is a single solo tile) rather than a flat
+constant — see the `solo` handling in `BriefingContent`.
+
+**A dead end, corrected here so it doesn't get re-investigated**:
+`appWidgetPadding` / `appWidgetInnerRadius` / `appWidgetRadius` are **not**
+real Android framework attributes with a silent system-applied default.
+They're a custom `AppWidgetAttrs` `<declare-styleable>` from Google's own
+widget project template (see [Updating your widget for Android 12](https://medium.com/androiddevelopers/updating-your-widget-for-android-12-92e7de87424c)) —
+an app must declare this styleable itself in `attrs.xml` AND write code to
+read it (`obtainStyledAttributes()` or equivalent) before it does anything
+at all. We have never declared or consumed it, so it is not silently active
+in either direction — there is no hidden default to "tighten" here. Glance's
+own `cornerRadius()`/`background()` modifiers, or the
+`androidx.glance.appwidget.components.Scaffold` component (which this
+project deliberately doesn't use), are the two real levers for corner-safe
+padding in a Glance widget specifically.
 
 The official minWidth/minHeight formula for a widget's default placed size
 is `70 × n − 30` dp per grid cell (n=1→40dp, n=2→110dp, n=3→180dp) — this
