@@ -327,7 +327,13 @@ def homework_input(fs, now):
             continue
         dur = t.get("durationMinutes") or 0; prog = t.get("progressMinutes") or 0
         out.append({"title": t.get("title") or "", "due_in_h": h, "due_in_days": h / 24,
-                    "remaining_min": max(0, dur - prog), "progress": prog})
+                    "remaining_min": max(0, dur - prog), "progress": prog,
+                    # Kept alongside due_in_h/due_in_days (relative, used by the
+                    # engines' math) so a caller that needs the real wall-clock
+                    # due date -- e.g. phrasing "finish X by Thursday 5pm"
+                    # deterministically, without an LLM -- doesn't have to
+                    # reconstruct it from now + due_in_h.
+                    "due_iso": due})
     return out
 
 def deadline_input(fs, now):
@@ -348,7 +354,8 @@ def deadline_input(fs, now):
         dur = t.get("durationMinutes") or 0
         prog = t.get("progressMinutes") or 0
         out.append({"title": t.get("title") or "", "due_in_h": h, "due_in_days": h / 24,
-                    "remaining_min": max(0, dur - prog), "listId": t.get("listId")})
+                    "remaining_min": max(0, dur - prog), "listId": t.get("listId"),
+                    "due_iso": due})  # see homework_input's due_iso for why
     return out
 
 def _upcoming_schedule(fs, now):
@@ -478,7 +485,13 @@ def spend_input(fs, yn, now):
     would double-subtract if this were already netted. net_fun_money: same
     balance minus every swept event's cost -- "what's actually free to
     assign right now" once known future spend is accounted for -- is what
-    the daily briefing/widget shows instead of the raw balance."""
+    the daily briefing/widget shows instead of the raw balance. today_budget:
+    sum of just TODAY's (days_until == 0) event costs -- the amount already
+    earmarked for whatever's happening today, so checking this mid-outing
+    doesn't read as "broke" just because net_fun_money also reserves money
+    for stuff next week (confirmed 2026-07-15: net_fun_money conflates "safe
+    to spend on tonight's plans, which are already budgeted for" with
+    "healthy for everything coming up" into one number)."""
     caltype = config.EVENT_CALS
     start = now.date().isoformat(); end = (now.date() + datetime.timedelta(days=21)).isoformat()
     events = []
@@ -550,7 +563,9 @@ def spend_input(fs, yn, now):
     fun = sum(c.get("balance", 0) for c in month.get("categories", [])
               if c["name"].lower() in disc) / 1000.0
     net_fun = fun - sum(e.get("cost", 0) or 0 for e in events)
-    return {"events": events, "fun_money": fun, "net_fun_money": net_fun}
+    today_budget = sum(e.get("cost", 0) or 0 for e in events if e.get("days_until") == 0)
+    return {"events": events, "fun_money": fun, "net_fun_money": net_fun,
+            "today_budget": today_budget}
 
 def social_input(fs, now):
     def ago(ts):

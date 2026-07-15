@@ -48,7 +48,18 @@ YNAB_COVER_ORDER = [s.strip() for s in os.environ.get(
 
 # Anthropic (judgment calls only)
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+# A dated snapshot, not a rolling alias -- Anthropic eventually deprecates
+# snapshots, so this needs a manual bump every so often (no code-level
+# alert when that happens; check the Anthropic model deprecation page
+# periodically).
 JUDGE_MODEL       = os.environ.get("JUDGE_MODEL", "claude-haiku-4-5-20251001")
+# Explicit bound so a hung request doesn't stall a daily-tier run
+# indefinitely -- the SDK's own default is much longer than this feature
+# needs. The Anthropic client also auto-retries transient failures
+# (connection errors, 429, 5xx) up to LLM_MAX_RETRIES times with backoff
+# before this timeout even comes into play, per-attempt.
+LLM_TIMEOUT_SECONDS = float(os.environ.get("LLM_TIMEOUT_SECONDS", "30"))
+LLM_MAX_RETRIES = int(os.environ.get("LLM_MAX_RETRIES", "2"))
 
 # ntfy
 NTFY_SIGNAL_TOPIC = os.environ.get("NTFY_SIGNAL_TOPIC", "")   # phone -> app
@@ -80,6 +91,14 @@ FRIENDS_TASK = os.environ.get("FRIENDS_TASK", "Friends")
 FRIEND_NAMES = [s.strip() for s in os.environ.get("FRIEND_NAMES", "").split(",") if s.strip()]
 SOCIAL_CAL = os.environ.get("SOCIAL_CAL", "")          # partner's FlowSavvy calendar id
 BLOCK_CAL  = os.environ.get("BLOCK_CAL",  "")          # calendar for UI-created busy blocks
+
+# Calendar event titles you already know are routine/recurring -- checked
+# case-insensitively by notable_events.py BEFORE its inferred title-history
+# heuristic, for events whose recurrence the heuristic hasn't picked up on
+# yet (e.g. a brand-new-to-us standing meeting) or that will never repeat
+# often enough in a single FlowSavvy pull/local history window to be
+# detected automatically. Comma-separated, e.g. "Team Standup,Book Club".
+ROUTINE_EVENT_TITLES = [s.strip() for s in os.environ.get("ROUTINE_EVENT_TITLES", "").split(",") if s.strip()]
 
 # Web panel shared secret. If set, every request must present it once as
 # ?token=... (a cookie is set after that). Unset = open (localhost-only use).

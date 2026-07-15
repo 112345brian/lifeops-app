@@ -128,6 +128,48 @@ References checked 2026-07-14:
 [Rocket Money widgets](https://help.rocketmoney.com/en/articles/9217610-rocket-money-widgets),
 [PocketGuard](https://pocketguard.com/).
 
+## Information density: reduce items per row before shrinking text
+
+When a widget needs to show more datapoints than comfortably fit at normal
+size, the fix is **fewer items per row, not smaller text**. This app hit
+that exact mistake in `ComboGridContent`'s money/social/coursework row: all
+three were crammed across one row (each ~1/3 of the left half's width,
+~47dp), which forced their font down to 14sp/6sp/6sp — well below
+`SoloStatCard`'s own 22sp/8sp/9sp defaults every solo widget uses at an
+equal-or-smaller footprint. Confirmed 2026-07-15 ("the columns are really
+skinny... it should be LEGIBLE") and fixed by capping stat tiles at 2 per
+row, giving a 3rd its own full-width row, and switching back to
+`SoloStatCard`'s plain defaults now that each tile has a real column's
+worth of width instead of a forced third.
+
+Real production widgets consistently make this same trade under space
+pressure:
+
+- Android's own smallest app-widget footprint shows exactly **one** metric;
+  iOS's smallest shows **two** — neither platform tries to cram three
+  metrics into a shrunk small size.
+- Shopify's Android widget team hit a hard technical ceiling
+  (`Binder` transaction buffer limit under Android 12's dynamic layouts) and
+  responded by **removing rows**, not shrinking every row's text to fit more
+  in the same space.
+- Shopify's iOS widget team built a tiered hierarchy explicitly keyed to
+  "how many metrics we are receiving" — small widgets show fewer metrics
+  with minimal supporting info, medium/large progressively reveal more —
+  rather than one fixed metric count rendered smaller or larger to fit
+  whatever size was placed.
+
+If a design calls for more datapoints than fit at a normal, legible size,
+either the widget's declared size needs to grow (see the sizing-formula
+tiers below — `combo_widget_info.xml`'s `minHeight` moved from the n=2 to
+the n=3 tier for exactly this reason) or the datapoint count needs to drop,
+not the font size.
+
+References checked 2026-07-15:
+[App Widget Design Guidelines — Android Developers](https://developer.android.com/design/ui/mobile/guides/widgets/style),
+[Widget Layouts — Android Developers](https://developer.android.com/design/ui/mobile/guides/widgets/layouts),
+[Lessons From Building Android Widgets — Shopify Engineering](https://shopify.engineering/lessons-building-android-widgets),
+[Lessons From Building iOS Widgets — Shopify Engineering](https://shopify.engineering/lessons-building-ios-widgets).
+
 The official minWidth/minHeight formula for a widget's default placed size
 is `70 × n − 30` dp per grid cell (n=1→40dp, n=2→110dp, n=3→180dp) — this
 already matches the values in our `*_widget_info.xml` files; if you're

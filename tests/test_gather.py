@@ -237,6 +237,25 @@ def test_spend_input_uses_projected_cost_for_mapped_calendar_event(monkeypatch):
     ]
     assert out["fun_money"] == 200
     assert out["net_fun_money"] == 165
+    assert out["today_budget"] == 0
+
+
+def test_spend_input_today_budget_sums_only_same_day_events(monkeypatch):
+    """today_budget must total just the days_until == 0 events -- the
+    amount already earmarked for what's happening right now -- and ignore
+    every other upcoming event's cost, unlike net_fun_money which nets all
+    of them against the balance."""
+    _patch_spend_config(monkeypatch, event_cals={"cal1": "friends", "cal2": "date"})
+    fs = _FakeSpendFlowSavvy({
+        "cal1": [{"id": "e1", "title": "Chloe hangout", "startDateTime": "2026-07-13T18:00:00", "notes": None}],
+        "cal2": [{"id": "e2", "title": "Date night", "startDateTime": "2026-07-15T18:00:00", "notes": None}],
+    })
+    now = datetime.datetime(2026, 7, 13, 9, 0)
+
+    out = gather.spend_input(fs, _FakeYnab(200), now)
+
+    assert out["today_budget"] == 35
+    assert out["net_fun_money"] == 200 - 35 - 50
 
 
 def test_spend_input_explicit_note_cost_overrides_projected_cost(monkeypatch):

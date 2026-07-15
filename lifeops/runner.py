@@ -820,22 +820,44 @@ def run_briefing(fs, yn, now):
     (at-risk coursework, today's load vs. capacity, gym status, discretionary
     money) as one glanceable ntfy + a panel card, so a looming deadline or a
     dwindling budget shows up proactively instead of only when you go looking.
-    Inspired by Motion's deadline-risk surfacing + Sunsama's morning plan."""
-    if not config.ANTHROPIC_API_KEY:
-        print("[briefing] skip (no key)"); return
+    Inspired by Motion's deadline-risk surfacing + Sunsama's morning plan.
+
+    Fully deterministic, no LLM call -- attention.compute() already produces
+    a plain-English headline for the one genuinely-judgment-requiring part
+    (today's overall state), and everything else here (deadline phrasing,
+    notable events, a same-day $0 event) is a direct formatting of data the
+    engines already computed. There used to be an LLM synthesis step; it was
+    retired (2026-07-15) once its only remaining job was rephrasing
+    attention.headline in a slightly different voice -- not worth the cost,
+    latency, or hallucination surface for that."""
     from .engines import load_engine
-    from . import llm
+    from . import risk_tracking, notable_events
     today = now.date()
 
     # coursework: at-risk items + due-today + total load in the next 7 days
     # (reuse the homework watcher's own inputs so the two never disagree)
     hw = gather.homework_input(fs, now)
-    risks = [t for t, _lvl in load_engine.plan(hw)["alerts"]]
-    # generalized "won't fit" crunch across ALL deadline tasks (not just coursework)
-    risks += [t for t, _lvl in load_engine.deadline_risk(gather.deadline_input(fs, now))["alerts"]]
+    # Deterministic, concrete "Finish X by Thursday 5pm" phrasing -- built
+    # straight from the same items load_engine.plan/deadline_risk already
+    # flag as at-risk (at_risk_assignments/deadline_crunch_item are the raw
+    # items behind those functions' own alert strings, so this can't
+    # disagree with them about what's actually at risk), with NO LLM
+    # involved. Only items never surfaced before are returned -- see
+    # risk_tracking.newly_at_risk's docstring for why an already-known
+    # at-risk/overdue item shouldn't get renarrated every single day.
+    at_risk_items = load_engine.at_risk_assignments(hw)
+    crunch_item = load_engine.deadline_crunch_item(gather.deadline_input(fs, now))
+    if crunch_item is not None:
+        at_risk_items = at_risk_items + [crunch_item]
+    # The FULL current at-risk set (every day, not deduped) -- attention.compute
+    # needs this to stay evergreen so an unresolved risk keeps showing up in
+    # its state/reasons on day 2, 3, etc., not just the day it was first
+    # noticed. newly_at_risk (below) is the deduped, display-ready subset.
+    coursework_at_risk = [a.get("title") or "" for a in at_risk_items]
+    newly_at_risk = risk_tracking.newly_at_risk(at_risk_items, now)
     due_today = [a["title"] for a in hw if 0 <= a.get("due_in_h", 1e9) <= 24]
     overdue = [{"title": a["title"], "due_in_h": a.get("due_in_h"),
-                "due": a.get("due")}
+                "due": a.get("due_iso")}
                for a in hw if a.get("due_in_h", 0) < 0 and a.get("remaining_min", 0) > 0]
     load_7d_h = round(sum(a.get("remaining_min", 0) for a in hw
                           if a.get("due_in_days", 99) <= 7) / 60.0, 1)
@@ -853,20 +875,30 @@ def run_briefing(fs, yn, now):
     gym_last_7d = gym_ring["gym_last_7d"]
     trained_today = gym_ring["today_done"]
 
-    # money: discretionary balance net of known upcoming event costs (what's
-    # actually free to assign, not the raw YNAB balance -- see
-    # gather.spend_input's docstring) + the nearest upcoming paid social events
+    # money: discretionary_dollars is the balance net of ALL known upcoming
+    # event costs (what's healthy for planning, not the raw YNAB balance --
+    # see gather.spend_input's docstring); discretionary_today_dollars is
+    # just what's earmarked for today, so a mid-outing phone check doesn't
+    # read as "broke" over money reserved for next week + the nearest
+    # upcoming paid social events
     try:
         sp = gather.spend_input(fs, yn, now)
         fun_money = round(sp.get("net_fun_money", sp.get("fun_money", 0)))
+        today_budget = round(sp.get("today_budget", 0))
         near = sorted(sp.get("events", []), key=lambda e: e.get("days_until", 99))[:2]
         # No dollar figure in the label -- a calendar event is assumed
         # already paid for; cost still feeds fun_money's margin math below,
         # just never gets narrated (2026-07-12: user doesn't want ticket
         # prices mentioned at all).
         upcoming = [f"{e['label']} in {e['days_until']}d" for e in near]
+        # Anything happening TODAY (days_until 0) even if its cost is $0 or
+        # nothing else is at risk -- a $0 family event is exactly the kind
+        # of thing worth a mention, "nothing's on fire" shouldn't mean
+        # "nothing's happening." Deterministic, not top-2-truncated like
+        # `near` above, so a same-day event can't fall off that list.
+        today_event_names = [e["label"] for e in sp.get("events", []) if e.get("days_until") == 0]
     except Exception:
-        fun_money, upcoming = None, []
+        fun_money, today_budget, upcoming, today_event_names = None, None, [], []
 
     # weather: current temp + today's high/low + condition at WEATHER_LAT/LON
     # (NOAA/NWS, no API key). None everywhere if unconfigured or unreachable
@@ -899,23 +931,56 @@ def run_briefing(fs, yn, now):
         partner_days_since, friend_days_since = None, None
         partner_days_until, friend_days_until = None, None
 
+    # upcoming notable events: deterministic, no LLM -- see
+    # notable_events.upcoming_notable_events's docstring. Wrapped like
+    # every other non-critical add-on above -- a FlowSavvy schedule fetch
+    # failure here must not take down the whole daily briefing. Logged
+    # (not just silently `[]`), unlike a plain empty result -- this is the
+    # one add-on above where "empty" and "the fetch broke" are otherwise
+    # genuinely indistinguishable to whoever's looking at the widget: an
+    # empty notable-events list is now rendered with an explicit "Nothing
+    # scheduled" / "Nothing upcoming" empty state (see BriefingWidget.kt),
+    # so a swallowed fetch failure would read as a confidently-empty week
+    # instead of an unknown one (confirmed 2026-07-15: "i'm freaked out
+    # that we're going to miss an event" -- a silent fetch failure
+    # masquerading as "genuinely nothing" is exactly that risk, not the
+    # ROUTINE_INTERVAL_DAYS threshold itself).
+    try:
+        schedule_items = gather._upcoming_schedule(fs, now)
+        # Signal 2 from notable_events.upcoming_notable_events's docstring:
+        # manually-curated titles only (config.ROUTINE_EVENT_TITLES) -- no
+        # longer cross-referenced against the chore-cycling task list. That
+        # cross-check was removed (2026-07-15): chores are always
+        # itemType=task and this function only ever considers
+        # itemType=event, so the two sets can't collide today, and the
+        # extra FlowSavvy API call it cost on every daily run was guarding
+        # against a collision with no evidence it ever happens.
+        known_routine = {t.lower() for t in config.ROUTINE_EVENT_TITLES}
+        notable = notable_events.upcoming_notable_events(schedule_items, now, known_routine)
+    except Exception as e:
+        print(f"[notable_events] fetch/compute failed, showing none this run: {e}")
+        notable = []
+
     facts = {"date": today.isoformat(), "weekday": now.strftime("%A"),
-             "coursework_at_risk": risks, "due_today": due_today,
+             "coursework_at_risk": coursework_at_risk,
+             "due_today": due_today,
+             "notable_events": notable,
              "overdue": overdue,
              "coursework_hours_next_7d": load_7d_h,
              "gym_last_7d": gym_last_7d, "gym_target": 4,
              "trained_today": trained_today, "gym_ring": gym_ring,
-             "discretionary_dollars": fun_money, "upcoming_paid_events": upcoming,
+             "discretionary_dollars": fun_money, "discretionary_today_dollars": today_budget,
+             "upcoming_paid_events": upcoming,
              "temperature_f": w.get("temp_f"), "weather_high_f": w.get("high_f"),
              "weather_low_f": w.get("low_f"), "weather_condition": w.get("condition"),
              "sleep_minutes": sleep_min,
              "partner_days_since": partner_days_since, "friend_days_since": friend_days_since,
              "partner_days_until": partner_days_until, "friend_days_until": friend_days_until}
     facts["attention"] = attention.compute(facts)
-    try:
-        text = llm.daily_briefing(facts)
-    except Exception as e:
-        print(f"[briefing] llm error: {e}"); return
+
+    text = _compose_briefing_text(facts["attention"]["headline"], today_event_names,
+                                  newly_at_risk, notable)
+
     # "#briefing" (not "briefing") -- panel_url() joins this straight onto
     # the base path, and the briefing card lives on the Home page as an
     # anchor, not its own route, so this needs the bare-path+anchor form.
@@ -938,6 +1003,24 @@ def run_briefing(fs, yn, now):
     os.makedirs(os.path.dirname(bp), exist_ok=True)
     _save_json_atomic(bp, {"date": today.isoformat(), "text": text, "facts": facts})
     print("[briefing] sent")
+
+def _compose_briefing_text(headline, today_event_names, newly_at_risk, notable):
+    """Builds the full briefing text with NO LLM involved -- see
+    run_briefing's docstring for why. `headline` is
+    attention.compute()'s own plain-English judgment for the day (already a
+    real sentence, not a fragment needing rephrasing); the rest are direct
+    formattings of data the engines already computed."""
+    sections = [headline]
+    today_names = {name.strip().lower() for name in today_event_names}
+    if today_event_names:
+        sections.append("Also today: " + ", ".join(today_event_names) + ".")
+    if newly_at_risk:
+        sections.append("\n".join(item["phrase"] for item in newly_at_risk))
+    notable = [e for e in notable if (e.get("title") or "").strip().lower() not in today_names]
+    if notable:
+        sections.append("Coming up: " + ", ".join(
+            f"{e['title']} ({e['weekday']})" for e in notable))
+    return "\n\n".join(sections)
 
 def run_deadlines(fs, yn, now):
     """Generalized deadline-risk watchdog (Motion-style) over ALL deadline-bearing

@@ -4,6 +4,35 @@ Notable changes, newest first. Personal project, versioned simply (see
 `VERSION` / `lifeops.__version__`) — dates and the reasoning behind each
 change matter more here than semver strictness.
 
+## [1.18.2] — 2026-07-15
+
+### Added
+- **Daily briefing text is now deterministic instead of LLM-written.**
+  The morning briefing leads with `attention.compute()`'s headline, adds
+  concrete deadline phrases from the same load-engine inputs that already
+  drive risk alerts, names same-day events even when they cost $0, and
+  includes upcoming notable events from calendar data without asking the
+  model to rephrase facts it did not compute.
+- **Notable events now have a local deterministic filter.** New
+  `notable_events.py` records observed event occurrence dates, filters
+  manually configured routine titles, treats close recurrences as routine,
+  but still surfaces rare recurring events such as annual or infrequent
+  commitments.
+- **Deadline-risk phrasing is tracked by exact due datetime.** New
+  `risk_tracking.py` prevents repeat narration of the same unresolved risk
+  while still surfacing a same-title deadline again when its due date or due
+  time changes.
+- **LLM calls now have explicit timeout/retry settings and usage logging.**
+  The remaining judgment calls append best-effort token usage records to
+  `logs/llm_usage.jsonl`, while `LLM_TIMEOUT_SECONDS` and
+  `LLM_MAX_RETRIES` bound Anthropic client behavior.
+
+### Fixed
+- **Discretionary spending facts now distinguish today from future plans.**
+  `spend_input()` returns `today_budget` separately from net future spend so
+  widget and briefing surfaces can show money earmarked for today's plans
+  without making future commitments read as spendable cash.
+
 ## [1.18.1] — 2026-07-15
 
 ### Fixed
