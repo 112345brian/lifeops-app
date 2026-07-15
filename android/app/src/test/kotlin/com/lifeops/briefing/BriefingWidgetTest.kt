@@ -17,6 +17,7 @@ import com.lifeops.briefing.data.WeatherInfo
 import com.lifeops.briefing.data.WidgetDisplayConfig
 import com.lifeops.briefing.data.WidgetSection
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -107,6 +108,32 @@ class BriefingWidgetTest {
         gymLast7d = 2, gymTarget = 3,
         fetchedAtEpochMillis = System.currentTimeMillis(),
     )
+
+    @Test
+    fun effectiveWidgetScale_growsWithReadablePlacedFootprint() {
+        val config = WidgetDisplayConfig.default()
+
+        val compact = effectiveWidgetScale(DpSize(120.dp, 90.dp), config, solo = false)
+        val roomy = effectiveWidgetScale(DpSize(250.dp, 250.dp), config, solo = false)
+        val solo = effectiveWidgetScale(DpSize(120.dp, 120.dp), config, solo = true)
+        val combo = effectiveWidgetScale(DpSize(250.dp, 180.dp), WidgetDisplayConfig.comboGrid(), solo = false)
+
+        assertEquals(1.0f, compact)
+        assertTrue(roomy > compact)
+        assertTrue(solo > compact)
+        assertEquals(WidgetDisplayConfig.MAX_SCALE, combo)
+    }
+
+    @Test
+    fun effectiveWidgetScale_keepsUserScaleAsAdjustmentAndClamps() {
+        val adjusted = effectiveWidgetScale(
+            DpSize(250.dp, 250.dp),
+            WidgetDisplayConfig.default().copy(scale = 1.2f),
+            solo = false,
+        )
+
+        assertEquals(WidgetDisplayConfig.MAX_SCALE, adjusted)
+    }
 
     @Test
     fun smallSize_showsBadgeAndCompactTiles_butNotParagraphOrFreshness() = runGlanceAppWidgetUnitTest {

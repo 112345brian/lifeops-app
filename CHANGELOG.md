@@ -4,12 +4,20 @@ Notable changes, newest first. Personal project, versioned simply (see
 `VERSION` / `lifeops.__version__`) — dates and the reasoning behind each
 change matter more here than semver strictness.
 
+## [1.18.6] — 2026-07-15
+
+### Changed
+- **Widget text sizing is now automatic instead of a larger saved default.**
+  Persisted widget scale is back to a neutral `1.0x` user adjustment, while
+  the renderer computes an effective type/icon scale from the actual placed
+  widget footprint, including solo presets and the combo grid.
+
 ## [1.18.5] — 2026-07-15
 
 ### Changed
-- **New widget instances default to the larger legible text scale.** Widget
-  display config now has an explicit `DEFAULT_SCALE` of `1.3x`, and JSON
-  payloads without a saved scale fall back to that value instead of `1.0x`.
+- **Widget text scaling was first adjusted toward larger defaults.** This
+  was superseded by `1.18.6`, which keeps persisted user scale neutral and
+  moves legibility into render-time automatic sizing.
 
 ## [1.18.4] — 2026-07-15
 

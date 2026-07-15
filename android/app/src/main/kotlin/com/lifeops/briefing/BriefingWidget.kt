@@ -66,7 +66,9 @@ import com.lifeops.briefing.data.WidgetSection
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
+import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.math.sqrt
 
 /** The three layouts BriefingContent renders, keyed to how much room the
  * placed widget actually has (see BriefingWidget.sizeMode). A user can
@@ -84,6 +86,32 @@ internal fun bucketFor(size: DpSize): WidgetSizeBucket = when {
     size.height < MEDIUM_SIZE.height -> WidgetSizeBucket.SMALL
     size.height < LARGE_SIZE.height -> WidgetSizeBucket.MEDIUM
     else -> WidgetSizeBucket.LARGE
+}
+
+/** Computes the actual type/icon scale from the placed widget footprint.
+ * [WidgetDisplayConfig.scale] remains a user adjustment around the automatic
+ * base, not a hidden product default. */
+internal fun effectiveWidgetScale(
+    size: DpSize,
+    config: WidgetDisplayConfig,
+    solo: Boolean,
+    comboGrid: Boolean = config.comboGrid,
+): Float {
+    val width = size.width.value.coerceAtLeast(1f)
+    val height = size.height.value.coerceAtLeast(1f)
+    val referenceArea = when {
+        comboGrid -> 180f * 140f
+        solo -> 95f * 95f
+        else -> 220f * 150f
+    }
+    val areaScale = sqrt((width * height) / referenceArea)
+    val narrowSpanLimit = min(width / 90f, height / 70f)
+    val automaticScale = min(areaScale, narrowSpanLimit)
+        .coerceIn(1.0f, WidgetDisplayConfig.MAX_SCALE)
+    return (automaticScale * config.scale).coerceIn(
+        WidgetDisplayConfig.MIN_SCALE,
+        WidgetDisplayConfig.MAX_SCALE,
+    )
 }
 
 /**
@@ -263,7 +291,8 @@ internal fun BriefingContent(
         ComboGridContent(state, nextTasks, config, phoneWeather)
         return
     }
-    val bucket = bucketFor(LocalSize.current)
+    val placedSize = LocalSize.current
+    val bucket = bucketFor(placedSize)
     // Hide-filtered first, THEN check what's first -- a hidden section ahead
     // of SEVERITY_DOTS in the raw sectionOrder must not defeat the
     // inline-with-badge rule just because it still occupies an earlier
@@ -297,6 +326,7 @@ internal fun BriefingContent(
     // edge (confirmed 2026-07-14, live device: "getting clipped by an
     // invisible border").
     val solo = !showBadge && renderableOrder.size == 1
+    val scale = effectiveWidgetScale(placedSize, config, solo = solo)
     val outerPadding = when {
         // Solo presets should use the whole launcher cell. Their tile/card
         // children already own their internal padding; adding a root inset
@@ -320,7 +350,7 @@ internal fun BriefingContent(
         // weather-only widget said "FUCKED" for no visible reason).
         if (showBadge) {
             AttentionHeader(state, compact = bucket == WidgetSizeBucket.SMALL,
-                showInlineDots = dotsInline, scale = config.scale)
+                showInlineDots = dotsInline, scale = scale)
         }
 
         // SMALL used to hard-stop right here, showing ONLY the badge --
@@ -391,17 +421,17 @@ internal fun BriefingContent(
 
         for (group in groupSectionsForRendering(renderableOrder)) {
             if (group.size > 1) {
-                TileRow(group, state, nextTasks.gymRing, config.scale)
+                TileRow(group, state, nextTasks.gymRing, scale)
                 continue
             }
             when (val section = group.first()) {
-                WidgetSection.SEVERITY_DOTS -> StandaloneSeverityDots(state.reasons, config.scale)
+                WidgetSection.SEVERITY_DOTS -> StandaloneSeverityDots(state.reasons, scale)
                 WidgetSection.GYM_RING, WidgetSection.MONEY_TILE, WidgetSection.COURSEWORK_TILE,
                 WidgetSection.SLEEP_TILE ->
-                    SoloableTileRow(section, state, nextTasks.gymRing, config.scale, solo)
+                    SoloableTileRow(section, state, nextTasks.gymRing, scale, solo)
                 WidgetSection.BRIEFING_PARAGRAPH -> {
                     val text = state.text
-                    if (bucket == WidgetSizeBucket.LARGE && text != null) BriefingParagraph(text, config.scale)
+                    if (bucket == WidgetSizeBucket.LARGE && text != null) BriefingParagraph(text, scale)
                 }
                 WidgetSection.TODAY_EVENTS ->
                     if (bucket == WidgetSizeBucket.LARGE && nextTasks.events.isNotEmpty()) {
@@ -416,7 +446,7 @@ internal fun BriefingContent(
                     // "LifeOps Events" solo preset rendering nothing at all).
                     if (bucket == WidgetSizeBucket.LARGE || solo) {
                         NotableEventsSection(state.notableEvents,
-                            dynamicListCounts[WidgetSection.NOTABLE_EVENTS] ?: MIN_EVENTS_SHOWN, config.scale)
+                            dynamicListCounts[WidgetSection.NOTABLE_EVENTS] ?: MIN_EVENTS_SHOWN, scale)
                     }
                 WidgetSection.UP_NEXT ->
                     if (bucket == WidgetSizeBucket.LARGE && nextTasks.tasks.isNotEmpty()) {
@@ -447,7 +477,7 @@ internal fun BriefingContent(
                         WeatherCard(
                             temperatureF, w?.highF ?: state.weatherHighF,
                             w?.lowF ?: state.weatherLowF, w?.condition ?: state.weatherCondition,
-                            config.scale,
+                            scale,
                             modifier = if (solo) GlanceModifier.fillMaxSize() else GlanceModifier.padding(top = 4.dp))
                     }
                 }
@@ -464,7 +494,7 @@ internal fun BriefingContent(
                         // existing side-by-side row -- it's tuned to fit a
                         // lot of vertical content already, and stacking
                         // there would cost an extra row it doesn't need.
-                        SocialSection(state, config.scale, stacked = solo)
+                        SocialSection(state, scale, stacked = solo)
                     }
             }
         }
@@ -1413,7 +1443,6 @@ internal val COMBO_OUTER_RADIUS = 16.dp
 private fun ComboGridContent(
     state: BriefingState, nextTasks: NextTasksState, config: WidgetDisplayConfig, phoneWeather: WeatherInfo? = null,
 ) {
-    val scale = config.scale
     // Same "phoneWeather > nextTasks.weather > state" priority as
     // BriefingContent's own WEATHER branch -- see WeatherCard's docstring.
     val w = phoneWeather ?: nextTasks.weather
@@ -1421,7 +1450,9 @@ private fun ComboGridContent(
     val highF = w?.highF ?: state.weatherHighF
     val lowF = w?.lowF ?: state.weatherLowF
     val condition = w?.condition ?: state.weatherCondition
-    val layout = comboLayoutFor(LocalSize.current)
+    val placedSize = LocalSize.current
+    val layout = comboLayoutFor(placedSize)
+    val scale = effectiveWidgetScale(placedSize, config, solo = false, comboGrid = true)
     val compactCells = layout != ComboLayout.TALL_4X3
     val moneySeverity = state.reasons.firstOrNull { it.domain == "money" }?.severity
     val courseworkSeverity = state.reasons.firstOrNull { it.domain == "coursework" }?.severity

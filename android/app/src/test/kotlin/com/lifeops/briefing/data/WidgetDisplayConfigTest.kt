@@ -33,7 +33,7 @@ class WidgetDisplayConfigTest {
         )
         assertEquals(WidgetSection.entries.toSet(), config.sectionOrder.toSet())
         assertEquals(emptySet<WidgetSection>(), config.hiddenSections)
-        assertEquals(WidgetDisplayConfig.DEFAULT_SCALE, config.scale)
+        assertEquals(1.0f, config.scale)
         assertEquals(null, config.maxTasksOverride)
         assertEquals(config, WidgetDisplayConfig.fromJson(config.toJson()))
     }
@@ -101,10 +101,10 @@ class WidgetDisplayConfigTest {
     }
 
     @Test
-    fun missingScaleUsesCurrentDefaultScale() {
+    fun missingScaleUsesNeutralUserScale() {
         val config = WidgetDisplayConfig.fromJson("""{"sectionOrder": [], "hiddenSections": []}""")
 
-        assertEquals(WidgetDisplayConfig.DEFAULT_SCALE, config.scale)
+        assertEquals(1.0f, config.scale)
     }
 
     @Test

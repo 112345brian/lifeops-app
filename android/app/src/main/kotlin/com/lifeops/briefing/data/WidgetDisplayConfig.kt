@@ -49,7 +49,7 @@ data class WidgetDisplayConfig(
         WidgetSection.UP_NEXT,
     ),
     val hiddenSections: Set<WidgetSection> = emptySet(),
-    val scale: Float = DEFAULT_SCALE,
+    val scale: Float = 1.0f,
     val maxTasksOverride: Int? = null,
     // True only for the "LifeOps Combo" preset (see [comboGrid]) -- tells
     // BriefingContent to render the dedicated size-aware gapless combo
@@ -77,7 +77,6 @@ data class WidgetDisplayConfig(
         // font/icon size calculation in BriefingWidget.kt.
         const val MIN_SCALE = 0.85f
         const val MAX_SCALE = 1.3f
-        const val DEFAULT_SCALE = 1.3f
 
         fun default() = WidgetDisplayConfig()
 
@@ -149,7 +148,7 @@ data class WidgetDisplayConfig(
                 // vanishing silently.
                 sectionOrder = order + WidgetSection.entries.filter { it !in order },
                 hiddenSections = parseSections(o.optJSONArray("hiddenSections")).toSet(),
-                scale = o.optDouble("scale", DEFAULT_SCALE.toDouble()).toFloat().coerceIn(MIN_SCALE, MAX_SCALE),
+                scale = o.optDouble("scale", 1.0).toFloat().coerceIn(MIN_SCALE, MAX_SCALE),
                 maxTasksOverride = if (o.isNull("maxTasksOverride") || !o.has("maxTasksOverride")) {
                     null
                 } else {
