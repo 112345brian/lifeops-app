@@ -4,6 +4,21 @@ Notable changes, newest first. Personal project, versioned simply (see
 `VERSION` / `lifeops.__version__`) — dates and the reasoning behind each
 change matter more here than semver strictness.
 
+## [1.18.1] — 2026-07-15
+
+### Fixed
+- **LifeOps Combo's 4x3 layout now uses the full block without showing
+  empty events.** The tall combo renderer keeps the highest-priority cells
+  in an explicit grid, reserves the larger events region only when notable
+  events exist, and otherwise reclaims that space for the next priority
+  cells so the widget does not show "Nothing scheduled" or stretch a single
+  column across the whole card.
+- **Combo priority and compacting now match the intended information
+  hierarchy.** The default order is weather, gym, notable events,
+  discretionary spending, then social; spending and social show their
+  richer two-part summaries in the roomy 4x3 placement, while compact
+  placements choose the most actionable single value.
+
 ## [1.18.0] — 2026-07-15
 
 ### Added

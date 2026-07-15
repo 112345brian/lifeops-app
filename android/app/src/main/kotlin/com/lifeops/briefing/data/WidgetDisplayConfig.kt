@@ -52,11 +52,11 @@ data class WidgetDisplayConfig(
     val scale: Float = 1.0f,
     val maxTasksOverride: Int? = null,
     // True only for the "LifeOps Combo" preset (see [comboGrid]) -- tells
-    // BriefingContent to skip the normal section-order/TileRow rendering
-    // entirely and render the dedicated gapless 2x2 ComboGridContent
-    // instead. hiddenSections/sectionOrder are still populated by
-    // [comboGrid] for consistency with WidgetConfigActivity's toggles, but
-    // ComboGridContent ignores them -- this flag is checked first.
+    // BriefingContent to render the dedicated size-aware gapless combo
+    // surface instead of the normal section-by-section briefing layout.
+    // sectionOrder/hiddenSections still matter: ComboGridContent uses them
+    // to decide which compact-compatible cells to show first as the placed
+    // size grows from 2x2 to 3x2, 4x2, and taller variants.
     val comboGrid: Boolean = false,
 ) {
     fun toJson(): String = JSONObject().apply {
@@ -90,23 +90,34 @@ data class WidgetDisplayConfig(
             hiddenSections = WidgetSection.entries.filter { it != section }.toSet(),
         )
 
-        /** Starting config for the "LifeOps Combo" preset: a single 4x2
-         * widget instance whose left 2x2 half merges money/social/coursework
-         * (equispaced, gapless top row) and weather (gapless bottom row),
-         * and whose right 2x2 half is notable events, all as one continuous
-         * surface instead of five separate single-stat widgets placed side
-         * by side (which always have the launcher's own grid gaps between
-         * them). hiddenSections mirrors what's actually shown so the
-         * configure screen's toggles don't look inconsistent with this
-         * preset, even though rendering itself branches on [comboGrid]
-         * before ever consulting sectionOrder/hiddenSections. */
-        private val COMBO_GRID_SECTIONS = setOf(
+        /** Sections the "LifeOps Combo" renderer knows how to show as
+         * compact cells. Default placement starts with the subset below,
+         * but the configure screen may reveal any supported section and
+         * reorder them; the renderer takes as many cells as the current
+         * placed size can fit. */
+        val COMBO_GRID_SUPPORTED_SECTIONS = setOf(
+            WidgetSection.GYM_RING,
             WidgetSection.MONEY_TILE, WidgetSection.SOCIAL, WidgetSection.COURSEWORK_TILE,
-            WidgetSection.WEATHER, WidgetSection.NOTABLE_EVENTS,
+            WidgetSection.SLEEP_TILE, WidgetSection.WEATHER, WidgetSection.NOTABLE_EVENTS,
+        )
+
+        /** Starting config for the "LifeOps Combo" preset. Order is the
+         * salience priority the renderer consumes when space is constrained:
+         * weather, gym, notable events, discretionary spending, social.
+         * Coursework remains supported/customizable, but is not a default
+         * priority cell. */
+        private val COMBO_GRID_DEFAULT_SECTIONS = listOf(
+            WidgetSection.WEATHER,
+            WidgetSection.GYM_RING,
+            WidgetSection.NOTABLE_EVENTS,
+            WidgetSection.MONEY_TILE,
+            WidgetSection.SOCIAL,
         )
 
         fun comboGrid(): WidgetDisplayConfig = WidgetDisplayConfig(
-            hiddenSections = WidgetSection.entries.filter { it !in COMBO_GRID_SECTIONS }.toSet(),
+            sectionOrder = COMBO_GRID_DEFAULT_SECTIONS +
+                WidgetSection.entries.filter { it !in COMBO_GRID_DEFAULT_SECTIONS },
+            hiddenSections = WidgetSection.entries.filter { it !in COMBO_GRID_DEFAULT_SECTIONS }.toSet(),
             comboGrid = true,
         )
 

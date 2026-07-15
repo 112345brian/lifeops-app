@@ -113,4 +113,23 @@ class WidgetDisplayConfigTest {
         assertEquals(WidgetDisplayConfig.MAX_SCALE, tooLarge.scale)
         assertEquals(WidgetDisplayConfig.MIN_SCALE, tooSmall.scale)
     }
+
+    @Test
+    fun comboGridDefaultIsFocusedButSupportsAdditionalCompactCells() {
+        val config = WidgetDisplayConfig.comboGrid()
+
+        assertEquals(true, config.comboGrid)
+        assertEquals(
+            listOf(
+                WidgetSection.WEATHER, WidgetSection.GYM_RING, WidgetSection.NOTABLE_EVENTS,
+                WidgetSection.MONEY_TILE, WidgetSection.SOCIAL,
+            ),
+            config.sectionOrder.take(5),
+        )
+        assertEquals(false, WidgetSection.GYM_RING in config.hiddenSections)
+        assertEquals(true, WidgetSection.COURSEWORK_TILE in config.hiddenSections)
+        assertEquals(true, WidgetSection.SLEEP_TILE in config.hiddenSections)
+        assertEquals(true, WidgetSection.GYM_RING in WidgetDisplayConfig.COMBO_GRID_SUPPORTED_SECTIONS)
+        assertEquals(true, WidgetSection.SLEEP_TILE in WidgetDisplayConfig.COMBO_GRID_SUPPORTED_SECTIONS)
+    }
 }

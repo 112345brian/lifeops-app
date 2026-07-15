@@ -16,6 +16,7 @@ import com.lifeops.briefing.data.TodayEvent
 import com.lifeops.briefing.data.WeatherInfo
 import com.lifeops.briefing.data.WidgetDisplayConfig
 import com.lifeops.briefing.data.WidgetSection
+import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -66,7 +67,8 @@ class BriefingWidgetTest {
 
         onNode(hasText("GYM", true)).assertExists()
         onNode(hasText("2/3", true)).assertExists()
-        onNode(hasText("7 DAYS", true)).assertExists()
+        onNode(hasText("7 DAYS", true)).assertDoesNotExist()
+        onNode(hasContentDescription("Gym 2/3, today status unavailable")).assertExists()
     }
 
     @Test
@@ -203,6 +205,31 @@ class BriefingWidgetTest {
         onNode(hasText("OVER", true)).assertExists()
         onNode(hasText("-$160", true)).assertExists()
         onNode(hasText("$-160", true)).assertDoesNotExist()
+    }
+
+    @Test
+    fun soloMoneyPreset_headlinesTodaysBudgetWhenSomethingIsEarmarkedForToday() = runGlanceAppWidgetUnitTest {
+        // 2026-07-15: checking the widget mid-outing must not read as
+        // "broke" just because discretionaryDollars nets in NEXT week's
+        // plans too -- discretionaryTodayDollars headlines instead, labeled
+        // "TODAY", while the future/net balance still remains visible.
+        setAppWidgetSize(DpSize(120.dp, 120.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(
+                        discretionaryDollars = -125, discretionaryTodayDollars = 40,
+                        reasons = listOf(AttentionReason("money", "risk")),
+                    ),
+                    nextTasks = NextTasksState.empty(),
+                    config = WidgetDisplayConfig.singleStat(WidgetSection.MONEY_TILE),
+                )
+            }
+        }
+
+        onNode(hasText("TODAY", true)).assertExists()
+        onNode(hasText("$40", true)).assertExists()
+        onNode(hasText("FUTURE -$125", true)).assertExists()
     }
 
     @Test
@@ -660,38 +687,45 @@ class BriefingWidgetTest {
     }
 
     @Test
-    fun comboGrid_emptyNotableEvents_showsExplicitEmptyStateNotABlankQuadrant() = runGlanceAppWidgetUnitTest {
-        // 280x220dp -- matches combo_widget_info.xml's actual declared
-        // default size (bumped from 150dp tall to fit the 3-row stat/
-        // coursework/weather stack, see that file's own comment).
+    fun comboGrid_emptyNotableEvents_omitsEventsCellAndUsesSpaceForPriorityCells() = runGlanceAppWidgetUnitTest {
+        // 280x220dp exercises the richer/taller combo variant; the provider
+        // itself can now shrink as far as the 2x2 tier.
         setAppWidgetSize(DpSize(280.dp, 220.dp))
         provideComposable {
             GlanceTheme {
                 BriefingContent(
-                    state = fullState.copy(notableEvents = emptyList()),
+                    state = fullState.copy(
+                        temperatureF = 64,
+                        notableEvents = emptyList(),
+                        discretionaryDollars = 250,
+                        partnerDaysSince = 6,
+                    ),
                     nextTasks = NextTasksState.empty(),
                     config = WidgetDisplayConfig.comboGrid(),
                 )
             }
         }
 
-        onNode(hasText("Nothing scheduled", true)).assertExists()
+        onNode(hasText("Nothing scheduled", true)).assertDoesNotExist()
+        onNode(hasText("64", true)).assertExists()
+        onNode(hasText("GYM", true)).assertExists()
+        onNode(hasText("SPEND", true)).assertExists()
+        onNode(hasText("PARTNER", true)).assertExists()
     }
 
     @Test
-    fun comboGrid_allThreeStatsPresent_moneyAndSocialShareRowCourseworkGetsItsOwn() = runGlanceAppWidgetUnitTest {
-        // Regression test for 2026-07-15's restructure: money/social/
-        // coursework used to all share one row (each ~1/3 width, forced
-        // down to a shrunk font to fit); coursework now gets its own
-        // full-width row instead, at the same font size every solo widget
-        // uses -- see ComboGridContent's own docstring and
-        // combo_widget_info.xml's comment.
+    fun comboGrid_tallModeShowsPriorityCellsAndBothSocialRelationships() = runGlanceAppWidgetUnitTest {
         setAppWidgetSize(DpSize(280.dp, 220.dp))
         provideComposable {
             GlanceTheme {
                 BriefingContent(
                     state = fullState.copy(
-                        discretionaryDollars = -125, partnerDaysSince = 6, courseworkHoursNext7d = 4.1,
+                        discretionaryDollars = -125,
+                        partnerDaysSince = 8,
+                        partnerDaysUntil = null,
+                        friendDaysSince = 2,
+                        friendDaysUntil = 3,
+                        notableEvents = sixNotable,
                         // High/low deliberately distinct from the temp AND
                         // each other -- "64" as a hasText(substring=true)
                         // needle would otherwise ambiguously match more than
@@ -705,15 +739,254 @@ class BriefingWidgetTest {
             }
         }
 
+        onNode(hasText("64", true)).assertExists()
+        onNode(hasText("GYM", true)).assertExists()
+        onNode(hasText("Coming up", true)).assertExists()
+        onNode(hasText("TODAY", true)).assertDoesNotExist()
         onNode(hasText("SPEND", true)).assertExists()
         onNode(hasText("-$125", true)).assertExists()
-        onNode(hasText("PARTNER", true)).assertExists()
-        onNode(hasText("COURSEWORK", true)).assertExists()
-        onNode(hasText("4.1h", true)).assertExists()
+        onNode(hasText("SOCIAL", true)).assertExists()
+        onNode(hasText("P 8d ago", true)).assertExists()
+        onNode(hasText("F 3d next", true)).assertExists()
+    }
+
+    @Test
+    fun comboLayoutFor_mapsCommonLauncherSpansToExplicitVariants() {
+        assertEquals(ComboLayout.COMPACT_2X2, comboLayoutFor(DpSize(120.dp, 120.dp)))
+        assertEquals(ComboLayout.MEDIUM_3X2, comboLayoutFor(DpSize(200.dp, 150.dp)))
+        assertEquals(ComboLayout.WIDE_4X2, comboLayoutFor(DpSize(280.dp, 150.dp)))
+        assertEquals(ComboLayout.TALL_4X3, comboLayoutFor(DpSize(280.dp, 220.dp)))
+    }
+
+    @Test
+    fun comboGrid_2x2_showsWeatherAndGymOnly() = runGlanceAppWidgetUnitTest {
+        setAppWidgetSize(DpSize(120.dp, 120.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(
+                        discretionaryDollars = 250,
+                        partnerDaysSince = 6,
+                        courseworkHoursNext7d = 4.1,
+                        temperatureF = 64,
+                        notableEvents = sixNotable,
+                    ),
+                    nextTasks = NextTasksState.empty(),
+                    config = WidgetDisplayConfig.comboGrid(),
+                )
+            }
+        }
+
         onNode(hasText("64", true)).assertExists()
-        // The old combo-specific abbreviation, dropped once coursework got
-        // its own full-width row and no longer needed to fit ~1/3 of it.
-        onNode(hasText("CLASS", true)).assertDoesNotExist()
+        onNode(hasText("GYM", true)).assertExists()
+        onNode(hasText("SPEND", true)).assertDoesNotExist()
+        onNode(hasText("PARTNER", true)).assertDoesNotExist()
+        onNode(hasText("Coming up", true)).assertDoesNotExist()
+    }
+
+    @Test
+    fun comboGrid_compactMoneyCellShowsTodayWithoutFutureSecondary() = runGlanceAppWidgetUnitTest {
+        setAppWidgetSize(DpSize(280.dp, 150.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(
+                        temperatureF = 64,
+                        discretionaryDollars = -125,
+                        discretionaryTodayDollars = 40,
+                        partnerDaysSince = 6,
+                    ),
+                    nextTasks = NextTasksState.empty(),
+                    config = WidgetDisplayConfig.comboGrid(),
+                )
+            }
+        }
+
+        onNode(hasText("TODAY", true)).assertExists()
+        onNode(hasText("$40", true)).assertExists()
+        onNode(hasText("FUTURE -$125", true)).assertDoesNotExist()
+    }
+
+    @Test
+    fun comboGrid_tallMoneyCellShowsTodayAndFutureNumbers() = runGlanceAppWidgetUnitTest {
+        setAppWidgetSize(DpSize(280.dp, 220.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(
+                        temperatureF = 64,
+                        discretionaryDollars = -125,
+                        discretionaryTodayDollars = 40,
+                        notableEvents = sixNotable,
+                    ),
+                    nextTasks = NextTasksState.empty(),
+                    config = WidgetDisplayConfig.comboGrid(),
+                )
+            }
+        }
+
+        onNode(hasText("TODAY", true)).assertExists()
+        onNode(hasText("$40", true)).assertExists()
+        onNode(hasText("FUTURE -$125", true)).assertExists()
+    }
+
+    @Test
+    fun comboGrid_3x2_addsNotableEventsWhenTheyExist() = runGlanceAppWidgetUnitTest {
+        setAppWidgetSize(DpSize(200.dp, 150.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(
+                        discretionaryDollars = 250,
+                        partnerDaysSince = 6,
+                        courseworkHoursNext7d = 4.1,
+                        temperatureF = 64,
+                        notableEvents = sixNotable,
+                    ),
+                    nextTasks = NextTasksState.empty(),
+                    config = WidgetDisplayConfig.comboGrid(),
+                )
+            }
+        }
+
+        onNode(hasText("64", true)).assertExists()
+        onNode(hasText("GYM", true)).assertExists()
+        onNode(hasText("Coming up", true)).assertExists()
+        onNode(hasText("Notable 1", true)).assertExists()
+        onNode(hasText("SPEND", true)).assertDoesNotExist()
+    }
+
+    @Test
+    fun comboGrid_3x2_skipsEmptyEventsAndAddsMoney() = runGlanceAppWidgetUnitTest {
+        setAppWidgetSize(DpSize(200.dp, 150.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(
+                        discretionaryDollars = 250,
+                        partnerDaysSince = 6,
+                        temperatureF = 64,
+                        notableEvents = emptyList(),
+                    ),
+                    nextTasks = NextTasksState.empty(),
+                    config = WidgetDisplayConfig.comboGrid(),
+                )
+            }
+        }
+
+        onNode(hasText("Nothing scheduled", true)).assertDoesNotExist()
+        onNode(hasText("64", true)).assertExists()
+        onNode(hasText("GYM", true)).assertExists()
+        onNode(hasText("SPEND", true)).assertExists()
+    }
+
+    @Test
+    fun comboGrid_4x2_addsMoneyAfterEvents() = runGlanceAppWidgetUnitTest {
+        setAppWidgetSize(DpSize(280.dp, 150.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(
+                        discretionaryDollars = 250,
+                        partnerDaysSince = 6,
+                        courseworkHoursNext7d = 4.1,
+                        temperatureF = 64,
+                        weatherHighF = 92,
+                        weatherLowF = 58,
+                        weatherCondition = "Sunny",
+                        notableEvents = sixNotable,
+                    ),
+                    nextTasks = NextTasksState.empty(),
+                    config = WidgetDisplayConfig.comboGrid(),
+                )
+            }
+        }
+
+        onNode(hasText("64", true)).assertExists()
+        onNode(hasText("GYM", true)).assertExists()
+        onNode(hasText("Coming up", true)).assertExists()
+        onNode(hasText("SPEND", true)).assertExists()
+        onNode(hasText("PARTNER", true)).assertDoesNotExist()
+    }
+
+    @Test
+    fun comboGrid_tallerPlacementAddsEvents() = runGlanceAppWidgetUnitTest {
+        setAppWidgetSize(DpSize(280.dp, 220.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(
+                        discretionaryDollars = 250,
+                        partnerDaysSince = 6,
+                        courseworkHoursNext7d = 4.1,
+                        temperatureF = 64,
+                        notableEvents = sixNotable,
+                    ),
+                    nextTasks = NextTasksState.empty(),
+                    config = WidgetDisplayConfig.comboGrid(),
+                )
+            }
+        }
+
+        onNode(hasText("64", true)).assertExists()
+        onNode(hasText("GYM", true)).assertExists()
+        onNode(hasText("Coming up", true)).assertExists()
+        onNode(hasText("Notable 1", true)).assertExists()
+    }
+
+    @Test
+    fun comboGrid_honorsHiddenSectionsWhenSpaceIsTight() = runGlanceAppWidgetUnitTest {
+        setAppWidgetSize(DpSize(120.dp, 120.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(
+                        discretionaryDollars = 250,
+                        partnerDaysSince = 6,
+                        courseworkHoursNext7d = 4.1,
+                    ),
+                    nextTasks = NextTasksState.empty(),
+                    config = WidgetDisplayConfig.comboGrid().copy(
+                        hiddenSections = WidgetDisplayConfig.comboGrid().hiddenSections + WidgetSection.SOCIAL,
+                    ),
+                )
+            }
+        }
+
+        onNode(hasText("64", true)).assertDoesNotExist()
+        onNode(hasText("GYM", true)).assertExists()
+        onNode(hasText("SPEND", true)).assertExists()
+        onNode(hasText("PARTNER", true)).assertDoesNotExist()
+    }
+
+    @Test
+    fun comboGrid_honorsSectionOrderWhenChoosingCompactCells() = runGlanceAppWidgetUnitTest {
+        setAppWidgetSize(DpSize(120.dp, 120.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(
+                        discretionaryDollars = 250,
+                        partnerDaysSince = 6,
+                        courseworkHoursNext7d = 4.1,
+                    ),
+                    nextTasks = NextTasksState.empty(),
+                    config = WidgetDisplayConfig.comboGrid().copy(
+                        sectionOrder = listOf(WidgetSection.COURSEWORK_TILE, WidgetSection.MONEY_TILE, WidgetSection.SOCIAL) +
+                            WidgetSection.entries.filter {
+                                it != WidgetSection.COURSEWORK_TILE &&
+                                    it != WidgetSection.MONEY_TILE &&
+                                    it != WidgetSection.SOCIAL
+                            },
+                        hiddenSections = WidgetDisplayConfig.comboGrid().hiddenSections - WidgetSection.COURSEWORK_TILE,
+                    ),
+                )
+            }
+        }
+
+        onNode(hasText("COURSEWORK", true)).assertExists()
+        onNode(hasText("SPEND", true)).assertExists()
+        onNode(hasText("PARTNER", true)).assertDoesNotExist()
     }
 
     @Test
@@ -786,7 +1059,35 @@ class BriefingWidgetTest {
 
         onNode(hasText("GYM", true)).assertExists()
         onNode(hasText("2/4", true)).assertExists()
-        onNode(hasText("TODAY", true)).assertExists()
+        onNode(hasText("TODAY", true)).assertDoesNotExist()
+        onNode(hasContentDescription("Gym 2/4, needs gym today")).assertExists()
+    }
+
+    @Test
+    fun singleStatGymPreset_fullAndDoneEncodesHealthyCountAndNoActionNeeded() = runGlanceAppWidgetUnitTest {
+        setAppWidgetSize(DpSize(120.dp, 120.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState,
+                    nextTasks = NextTasksState(
+                        tasks = emptyList(),
+                        gymRing = GymRing(
+                            fill = 1.0f,
+                            color = "green",
+                            gymLast7d = 4,
+                            gymTarget = 4,
+                            todayDone = true,
+                        ),
+                    ),
+                    config = WidgetDisplayConfig.singleStat(WidgetSection.GYM_RING),
+                )
+            }
+        }
+
+        onNode(hasText("4/4", true)).assertExists()
+        onNode(hasText("DONE", true)).assertDoesNotExist()
+        onNode(hasContentDescription("Gym 4/4, no gym needed today")).assertExists()
     }
 
     @Test

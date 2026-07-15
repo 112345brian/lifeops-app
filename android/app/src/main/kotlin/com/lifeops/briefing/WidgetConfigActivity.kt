@@ -338,7 +338,7 @@ private fun WidgetConfigScreen(
 
             ConfigCard(title = "Preview") {
                 if (loaded.config.comboGrid) {
-                    ComboGridPreview(state = loaded.state, scale = scale)
+                    ComboGridPreview(state = loaded.state, order = order, hidden = hidden, scale = scale)
                 } else {
                     WidgetPreview(
                         state = loaded.state,
@@ -350,30 +350,31 @@ private fun WidgetConfigScreen(
                 }
             }
 
-            // ComboGridContent (the "LifeOps Combo" preset) checks
-            // config.comboGrid first and, by design, never consults
-            // sectionOrder/hiddenSections/maxTasksOverride at all -- see its
-            // and WidgetDisplayConfig.comboGrid()'s docstrings. Showing these
-            // toggles for a combo instance would let a user "turn off"
-            // Social or resize the task list and see Save succeed with no
-            // effect at all on the actual placed widget.
-            if (!loaded.config.comboGrid) {
-                ConfigCard(title = "Sections", subtitle = "Toggle on/off, reorder with the arrows.") {
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        order.forEachIndexed { index, section ->
-                            if (index > 0) HorizontalDivider()
-                            SectionRow(
-                                label = sectionLabel(section),
-                                enabled = section !in hidden,
-                                onToggle = { checked ->
-                                    hidden = if (checked) hidden - section else hidden + section
-                                },
-                                onMoveUp = { order = order.moved(index, index - 1) },
-                                onMoveDown = { order = order.moved(index, index + 1) },
-                                moveUpEnabled = index > 0,
-                                moveDownEnabled = index < order.lastIndex,
-                            )
+            ConfigCard(
+                title = "Sections",
+                subtitle = if (loaded.config.comboGrid) {
+                    "Combo shows the first cells that fit the placed size."
+                } else {
+                    "Toggle on/off, reorder with the arrows."
+                },
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    order.forEachIndexed { index, section ->
+                        if (loaded.config.comboGrid && section !in WidgetDisplayConfig.COMBO_GRID_SUPPORTED_SECTIONS) {
+                            return@forEachIndexed
                         }
+                        if (index > 0) HorizontalDivider()
+                        SectionRow(
+                            label = sectionLabel(section),
+                            enabled = section !in hidden,
+                            onToggle = { checked ->
+                                hidden = if (checked) hidden - section else hidden + section
+                            },
+                            onMoveUp = { order = order.moved(index, index - 1) },
+                            onMoveDown = { order = order.moved(index, index + 1) },
+                            moveUpEnabled = index > 0,
+                            moveDownEnabled = index < order.lastIndex,
+                        )
                     }
                 }
             }
@@ -482,7 +483,8 @@ private fun SectionRow(
 private val SAMPLE_STATE = BriefingState(
     date = null, text = "Sample briefing text — this is what your paragraph will look like.",
     attentionState = "watch", attentionSymbol = "◆", attentionLabel = "WATCH",
-    gymLast7d = 3, gymTarget = 4, discretionaryDollars = 250, courseworkHoursNext7d = 4.5,
+    gymLast7d = 3, gymTarget = 4, discretionaryDollars = 250, discretionaryTodayDollars = 40,
+    courseworkHoursNext7d = 4.5,
     temperatureF = 72, weatherHighF = 80, weatherLowF = 60, weatherCondition = "Sunny",
     sleepMinutes = 420, partnerDaysSince = 2, friendDaysSince = 5, friendDaysUntil = 4,
     reasons = listOf(AttentionReason("coursework", "risk"), AttentionReason("money", "watch")),
@@ -509,7 +511,7 @@ private fun WidgetPreview(
     scale: Float,
 ) {
     val usingSample = state?.text == null
-    val previewState = if (usingSample) SAMPLE_STATE else state!!
+    val previewState = if (usingSample) SAMPLE_STATE else state
     val previewTasks = if (usingSample) SAMPLE_TASKS else (nextTasks ?: NextTasksState.empty())
     val visible = order.filter { it !in hidden }
     // Same rule as BriefingContent's dotsInline: severity dots ride on the
@@ -620,33 +622,17 @@ private fun WidgetPreview(
     }
 }
 
-/** Mirrors ComboGridContent in BriefingWidget.kt (a 4x3 grid: [money|social]
- * -- only when 2+ stats exist -- over coursework, full-width, over weather,
- * full-width, on the left half; notable events filling the whole right
- * half) in plain Compose, so the "LifeOps Combo" preset's configure screen
- * actually shows what the real Glance-rendered widget looks like. The
- * generic per-section WidgetPreview loop above doesn't apply here --
- * ComboGridContent ignores sectionOrder/hiddenSections entirely (see
- * WidgetDisplayConfig.comboGrid's docstring), so previewing via that loop
- * would show a layout the real combo widget never renders. Reuses
- * BriefingWidget's own severity/color/day-time-formatting helpers (made
- * internal specifically for this) rather than re-deriving them a second
- * time, so this preview can't silently disagree with the real widget about
- * what a severity color or a notable event's day label means -- only the
- * layout primitives differ (plain Compose Row/Column/Text vs. Glance), same
- * as every other *Preview* composable on this screen.
- *
- * At most 2 stats share the top row; a 3rd spills onto its own full-width
- * row instead -- see ComboGridContent's own docstring for why (real
- * per-metric widgets reduce items-per-row under space pressure rather than
- * shrinking text; confirmed 2026-07-15 UI audit: "the columns are really
- * skinny... it should be LEGIBLE"). aspectRatio matches
- * combo_widget_info.xml's declared 280x220dp default (4x3, not the old
- * 4x2's 280x150dp). */
+/** Plain-Compose approximation of ComboGridContent for the configure
+ * screen. It honors the same combo-compatible section order/visibility and
+ * reuses BriefingWidget's own presentation helpers so labels, values,
+ * statuses, severity colors, and notable-event day formatting stay aligned
+ * with the real Glance widget. It is not a full simulator for every
+ * launcher span; the real widget chooses 2x2/3x2/4x2/taller variants from
+ * LocalSize.current at render time. */
 @Composable
-private fun ComboGridPreview(state: BriefingState?, scale: Float) {
+private fun ComboGridPreview(state: BriefingState?, order: List<WidgetSection>, hidden: Set<WidgetSection>, scale: Float) {
     val usingSample = state?.text == null
-    val previewState = if (usingSample) SAMPLE_STATE else state!!
+    val previewState = if (usingSample) SAMPLE_STATE else state
     Column(verticalArrangement = Arrangement.spacedBy((6 * scale).dp)) {
         if (usingSample) {
             Text(
@@ -656,21 +642,38 @@ private fun ComboGridPreview(state: BriefingState?, scale: Float) {
         }
         val moneySeverity = previewState.reasons.firstOrNull { it.domain == "money" }?.severity
         val courseworkSeverity = previewState.reasons.firstOrNull { it.domain == "coursework" }?.severity
-        val socialItem = socialFocusItem(
-            listOfNotNull(
-                previewState.partnerDaysSince?.let {
-                    SocialItem("💜", "PARTNER", SocialMetric(it, previewState.partnerDaysUntil))
-                },
-                previewState.friendDaysSince?.let {
-                    SocialItem("👥", "FRIENDS", SocialMetric(it, previewState.friendDaysUntil))
-                },
-            )
+        val socialItems = listOfNotNull(
+            previewState.partnerDaysSince?.let {
+                SocialItem("💜", "PARTNER", SocialMetric(it, previewState.partnerDaysUntil))
+            },
+            previewState.friendDaysSince?.let {
+                SocialItem("👥", "FRIENDS", SocialMetric(it, previewState.friendDaysUntil))
+            },
         )
-        val topStats = buildList {
-            previewState.discretionaryDollars?.let { add(moneyStatPresentation(it, moneySeverity)) }
-            socialItem?.let { add(socialStatPresentation(it)) }
-            previewState.courseworkHoursNext7d?.let { add(courseworkStatPresentation(it, courseworkSeverity)) }
+        val visibleComboSections = order.filter {
+            it !in hidden && it in WidgetDisplayConfig.COMBO_GRID_SUPPORTED_SECTIONS
         }
+        val topStats = buildList {
+            visibleComboSections.forEach { section ->
+                when (section) {
+                    WidgetSection.GYM_RING ->
+                        if (previewState.gymLast7d != null && previewState.gymTarget != null) {
+                            add(gymFallbackStatPresentation(previewState.gymLast7d, previewState.gymTarget))
+                        }
+                    WidgetSection.MONEY_TILE -> previewState.discretionaryDollars?.let {
+                        add(moneyStatPresentation(it, moneySeverity, previewState.discretionaryTodayDollars))
+                    }
+                    WidgetSection.SOCIAL -> socialStatPresentation(socialItems, compact = false)?.let { add(it) }
+                    WidgetSection.COURSEWORK_TILE -> previewState.courseworkHoursNext7d?.let {
+                        add(courseworkStatPresentation(it, courseworkSeverity))
+                    }
+                    WidgetSection.SLEEP_TILE -> previewState.sleepMinutes?.let { add(sleepStatPresentation(it)) }
+                    else -> Unit
+                }
+            }
+        }
+        val showWeather = WidgetSection.WEATHER in visibleComboSections && previewState.temperatureF != null
+        val showEvents = WidgetSection.NOTABLE_EVENTS in visibleComboSections && previewState.notableEvents.isNotEmpty()
         val rowStats = topStats.take(2)
         val fullWidthStats = topStats.drop(2)
         Row(
@@ -693,7 +696,7 @@ private fun ComboGridPreview(state: BriefingState?, scale: Float) {
                     if (rowStats.isNotEmpty()) ComboPreviewDividerHorizontal()
                     ComboPreviewStatTile(stat, scale, Modifier.fillMaxWidth().weight(1f))
                 }
-                if (previewState.temperatureF != null) {
+                if (showWeather) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -720,45 +723,48 @@ private fun ComboGridPreview(state: BriefingState?, scale: Float) {
             // tinting the whole quadrant "ok"-green read as a false status
             // signal (confirmed 2026-07-15: "why is the upcoming events
             // green").
-            ComboPreviewDivider()
-            val eventsToShow = previewState.notableEvents.take(COMBO_EVENTS_SHOWN)
-            Column(
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .weight(1f)
-                    .background(MONEY_SOLO_BG)
-                    .padding((8 * scale).dp),
-                verticalArrangement = Arrangement.spacedBy((4 * scale).dp),
-            ) {
-                // "Coming up" header -- see ComboEventsTile's own doc for
-                // why a header-less centered "Nothing upcoming"/list read as
-                // adrift with nothing to anchor it (confirmed 2026-07-15 UI
-                // audit).
-                Text(text = "Coming up", color = PREVIEW_ON_BG, fontWeight = FontWeight.Bold,
-                    fontSize = (COMBO_EVENTS_HEADER_SP * scale).sp)
-                if (eventsToShow.isEmpty()) {
-                    Text(text = "Nothing scheduled", color = PREVIEW_ON_BG_DIM,
-                        fontSize = (COMBO_TILE_VALUE_SP * scale).sp)
-                } else {
-                    eventsToShow.forEach { event ->
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(text = notableEventDay(event), fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.Bold, color = PREVIEW_ON_BG,
-                                fontSize = (COMBO_TILE_VALUE_SP * scale).sp,
-                                modifier = Modifier.width((26 * scale).dp))
-                            notableEventTime(event)?.let { time ->
-                                Text(text = time, fontFamily = FontFamily.Monospace,
+            if (showEvents) {
+                ComboPreviewDivider()
+                val eventsToShow = previewState.notableEvents.take(COMBO_EVENTS_SHOWN)
+                Column(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .weight(1f)
+                        .background(MONEY_SOLO_BG)
+                        .padding((8 * scale).dp),
+                    verticalArrangement = Arrangement.spacedBy((4 * scale).dp),
+                ) {
+                    // "Coming up" header -- see ComboEventsTile's own doc for
+                    // why a header-less centered "Nothing upcoming"/list read as
+                    // adrift with nothing to anchor it (confirmed 2026-07-15 UI
+                    // audit).
+                    Text(text = "Coming up", color = PREVIEW_ON_BG, fontWeight = FontWeight.Bold,
+                        fontSize = (COMBO_EVENTS_HEADER_SP * scale).sp)
+                    if (eventsToShow.isEmpty()) {
+                        Text(text = "Nothing scheduled", color = PREVIEW_ON_BG_DIM,
+                            fontSize = (COMBO_TILE_VALUE_SP * scale).sp)
+                    } else {
+                        eventsToShow.forEach { event ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(text = notableEventDay(event), fontFamily = FontFamily.Monospace,
                                     fontWeight = FontWeight.Bold, color = PREVIEW_ON_BG,
                                     fontSize = (COMBO_TILE_VALUE_SP * scale).sp,
-                                    modifier = Modifier.width((54 * scale).dp))
+                                    modifier = Modifier.width((26 * scale).dp))
+                                notableEventTime(event)?.let { time ->
+                                    Text(text = time, fontFamily = FontFamily.Monospace,
+                                        fontWeight = FontWeight.Bold, color = PREVIEW_ON_BG,
+                                        fontSize = (COMBO_TILE_VALUE_SP * scale).sp,
+                                        modifier = Modifier.width((54 * scale).dp))
+                                }
+                                Text(text = event.title, color = PREVIEW_ON_BG, fontWeight = FontWeight.Bold,
+                                    maxLines = 1, fontSize = (COMBO_TILE_VALUE_SP * scale).sp)
                             }
-                            Text(text = event.title, color = PREVIEW_ON_BG, fontWeight = FontWeight.Bold,
-                                maxLines = 1, fontSize = (COMBO_TILE_VALUE_SP * scale).sp)
                         }
-                    }
-                    val hidden = previewState.notableEvents.size - eventsToShow.size
-                    if (hidden > 0) {
-                        Text(text = "+$hidden more", color = PREVIEW_ON_BG_DIM, fontSize = (COMBO_TILE_VALUE_SP * scale).sp)
+                        val hiddenCount = previewState.notableEvents.size - eventsToShow.size
+                        if (hiddenCount > 0) {
+                            Text(text = "+$hiddenCount more", color = PREVIEW_ON_BG_DIM,
+                                fontSize = (COMBO_TILE_VALUE_SP * scale).sp)
+                        }
                     }
                 }
             }
@@ -794,6 +800,11 @@ private fun ComboPreviewStatTile(stat: SoloStatPresentation, scale: Float, modif
         Text(text = stat.value, color = PREVIEW_ON_BG, fontWeight = FontWeight.Bold,
             fontSize = (COMBO_PREVIEW_VALUE_SP * scale).sp, maxLines = 1,
             modifier = Modifier.padding(top = 1.dp))
+        stat.secondary?.let {
+            Text(text = it, color = PREVIEW_ON_BG_DIM, fontWeight = FontWeight.Bold,
+                fontSize = (COMBO_PREVIEW_LABEL_SP * scale).sp, maxLines = 1,
+                modifier = Modifier.padding(top = 1.dp))
+        }
         Spacer(modifier = Modifier.height((4 * scale).dp))
         Box(
             modifier = Modifier

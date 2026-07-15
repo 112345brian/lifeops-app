@@ -33,6 +33,15 @@ data class BriefingState(
     val gymLast7d: Int? = null,
     val gymTarget: Int? = null,
     val discretionaryDollars: Int? = null,
+    /** Just today's (days_until == 0) earmarked event costs -- what's safe
+     * to spend on tonight's already-budgeted plans, as opposed to
+     * [discretionaryDollars] which nets ALL upcoming plans (including
+     * today's) against the balance and reads as "broke" mid-outing even
+     * when the money for that exact outing was already set aside
+     * (confirmed 2026-07-15: "if I check my phone and see -125, I won't
+     * spend anything, but that doesn't work if I've already budgeted for
+     * this specific outing"). See gather.spend_input's docstring. */
+    val discretionaryTodayDollars: Int? = null,
     val courseworkHoursNext7d: Double? = null,
     val temperatureF: Int? = null,
     val weatherHighF: Int? = null,
@@ -57,6 +66,7 @@ data class BriefingState(
         put("gymLast7d", gymLast7d)
         put("gymTarget", gymTarget)
         put("discretionaryDollars", discretionaryDollars)
+        put("discretionaryTodayDollars", discretionaryTodayDollars)
         put("courseworkHoursNext7d", courseworkHoursNext7d)
         put("temperatureF", temperatureF)
         put("weatherHighF", weatherHighF)
@@ -143,6 +153,7 @@ data class BriefingState(
                 gymLast7d = o.optIntOrNull("gymLast7d"),
                 gymTarget = o.optIntOrNull("gymTarget"),
                 discretionaryDollars = o.optIntOrNull("discretionaryDollars"),
+                discretionaryTodayDollars = o.optIntOrNull("discretionaryTodayDollars"),
                 courseworkHoursNext7d = o.optDoubleOrNull("courseworkHoursNext7d"),
                 temperatureF = o.optIntOrNull("temperatureF"),
                 weatherHighF = o.optIntOrNull("weatherHighF"),
@@ -176,6 +187,7 @@ data class BriefingState(
                 gymLast7d = facts.optIntOrNull("gym_last_7d"),
                 gymTarget = facts.optIntOrNull("gym_target"),
                 discretionaryDollars = facts.optIntOrNull("discretionary_dollars"),
+                discretionaryTodayDollars = facts.optIntOrNull("discretionary_today_dollars"),
                 courseworkHoursNext7d = facts.optDoubleOrNull("coursework_hours_next_7d"),
                 temperatureF = facts.optIntOrNull("temperature_f"),
                 weatherHighF = facts.optIntOrNull("weather_high_f"),

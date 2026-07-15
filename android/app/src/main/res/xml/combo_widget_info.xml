@@ -1,35 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- "LifeOps Combo": a 4x3 widget instance whose left 2x3 half stacks
-     [money|social] (2-wide) over coursework (full-width) over weather
-     (full-width), and whose right 2x3 half is notable events: see
-     ComboGridContent in BriefingWidget.kt. The point of this preset is
-     specifically to avoid the launcher's own inter-widget grid gap that
-     five separately-placed single-stat widgets would have between them, so
-     minWidth/minHeight are deliberately set inside the "70 x n - 30"
-     formula's tiers (see android/CLAUDE.md): minWidth stays in the n=4
-     tier (250dp to 319dp) same as before (280dp gives comfortable margin
-     under the 320dp n=5 ceiling), but minHeight moved from the n=2 tier to
-     the n=3 tier (180dp to 249dp): 220dp, safely under the 250dp n=4
-     ceiling. When the grid still crammed 3 stat tiles across one 2-wide
-     row, each tile only got ~1/3 of the left half's width; splitting
-     coursework onto its own full-width row instead needed a 3rd row of
-     vertical room to keep every row's height (and therefore its
-     SoloStatCard label/value/status-bar text) from shrinking below what's
-     legible (confirmed 2026-07-15: "the text is small... it should be
-     LEGIBLE"). Real per-metric widgets consistently reduce item count
-     rather than shrinking text to force more into the same row (Android's
-     own smallest widget shows exactly one metric, iOS's smallest shows
-     two): this follows the same principle by moving the 3rd stat to its
-     own row instead of keeping 3 abreast at a shrunk size. -->
+<!-- "LifeOps Combo": one resizable dynamic widget, not a separate provider
+     for every launcher span. minWidth/minHeight sit at the 2-cell tier
+     (110dp == 70*2-30; see android/CLAUDE.md) so launchers can offer 2x2,
+     while targetCellWidth/Height keep the default placement at a roomy 4x2.
+     BriefingWidget.kt reads LocalSize.current with SizeMode.Exact and picks
+     a layout for 2x2, 3x2, 4x2, or taller placements, reducing the number
+     of visible cells as space tightens instead of shrinking text until it
+     clips. -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
-    android:minWidth="280dp"
-    android:minHeight="220dp"
-    android:minResizeWidth="280dp"
-    android:minResizeHeight="220dp"
+    android:minWidth="110dp"
+    android:minHeight="110dp"
+    android:minResizeWidth="110dp"
+    android:minResizeHeight="110dp"
     android:maxResizeWidth="400dp"
     android:maxResizeHeight="320dp"
     android:targetCellWidth="4"
-    android:targetCellHeight="3"
+    android:targetCellHeight="2"
     android:resizeMode="horizontal|vertical"
     android:widgetCategory="home_screen"
     android:updatePeriodMillis="1800000"

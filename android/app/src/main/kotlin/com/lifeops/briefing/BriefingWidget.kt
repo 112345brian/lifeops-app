@@ -36,7 +36,9 @@ import androidx.glance.currentState
 import androidx.glance.layout.Alignment
 import androidx.glance.layout.Box
 import androidx.glance.layout.Column
+import androidx.glance.layout.ColumnScope
 import androidx.glance.layout.Row
+import androidx.glance.layout.RowScope
 import androidx.glance.layout.Spacer
 import androidx.glance.layout.fillMaxHeight
 import androidx.glance.layout.fillMaxSize
@@ -258,7 +260,7 @@ internal fun BriefingContent(
     phoneWeather: WeatherInfo? = null,
 ) {
     if (config.comboGrid) {
-        ComboGridContent(state, nextTasks, config.scale, phoneWeather)
+        ComboGridContent(state, nextTasks, config, phoneWeather)
         return
     }
     val bucket = bucketFor(LocalSize.current)
@@ -597,6 +599,7 @@ internal data class SoloStatPresentation(
     val value: String,
     val status: String,
     val accent: Color,
+    val secondary: String? = null,
 )
 
 private const val BASE_BADGE_FONT_SP = 14f
@@ -892,9 +895,10 @@ private fun MoneyTile(
     tilePadding: Dp = 6.dp,
     soloStyle: Boolean = false,
     cornerRadiusDp: Dp = 10.dp,
+    todayDollars: Int? = null,
 ) {
     if (soloStyle) {
-        SoloMoneyTile(dollars, severity, scale, modifier)
+        SoloMoneyTile(dollars, severity, scale, modifier, todayDollars = todayDollars)
         return
     }
     SeverityValueTile(formatMoney(dollars), severity, scale, modifier,
@@ -919,6 +923,7 @@ private fun MoneyTile(
 @Composable
 private fun SoloStatCard(
     label: String, value: String, status: String, accent: Color, scale: Float, modifier: GlanceModifier,
+    secondary: String? = null,
     labelSp: Float = 8f,
     valueSp: Float = 22f,
     statusSp: Float = 9f,
@@ -966,6 +971,19 @@ private fun SoloStatCard(
                 ),
                 modifier = GlanceModifier.fillMaxWidth().padding(top = 2.dp),
             )
+            secondary?.let {
+                Text(
+                    text = it,
+                    maxLines = 1,
+                    style = TextStyle(
+                        fontWeight = FontWeight.Bold,
+                        fontSize = (8f * scale).sp,
+                        color = GlanceTheme.colors.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                    ),
+                    modifier = GlanceModifier.fillMaxWidth().padding(top = 1.dp),
+                )
+            }
         }
         Spacer(modifier = GlanceModifier.defaultWeight())
         Box(
@@ -995,15 +1013,32 @@ private fun SoloMoneyTile(
     dollars: Int, severity: String?, scale: Float, modifier: GlanceModifier,
     labelSp: Float = 8f, valueSp: Float = 22f, statusSp: Float = 9f,
     cornerRadiusDp: Dp = 14.dp, statusVerticalPaddingDp: Dp = 5.dp,
+    todayDollars: Int? = null,
 ) {
-    val stat = moneyStatPresentation(dollars, severity)
+    val stat = moneyStatPresentation(dollars, severity, todayDollars)
     SoloStatCard(label = stat.label, value = stat.value, status = stat.status,
-        accent = stat.accent, scale = scale, modifier = modifier,
+        accent = stat.accent, scale = scale, modifier = modifier, secondary = stat.secondary,
         labelSp = labelSp, valueSp = valueSp, statusSp = statusSp,
         cornerRadiusDp = cornerRadiusDp, statusVerticalPaddingDp = statusVerticalPaddingDp)
 }
 
-internal fun moneyStatPresentation(dollars: Int, severity: String?): SoloStatPresentation {
+/** [todayDollars], when a positive amount is already earmarked for TODAY
+ * specifically (days_until == 0 events -- see gather.spend_input's
+ * docstring), becomes the headline value/label instead of [dollars] (the
+ * net-of-everything-upcoming balance) -- that's the number worth checking
+ * mid-outing, when [dollars] alone would read as "broke" purely because it
+ * also reserves money for next week (confirmed 2026-07-15). On a day with
+ * nothing specifically budgeted, todayDollars is 0/null and this falls back
+ * to the previous "SPEND"/net-balance headline unchanged. When today is
+ * headlined, the net future balance remains visible as secondary text so
+ * the tile carries both numbers. status/accent always reflect [severity]
+ * (the overall net picture), regardless of which number is headlined. */
+internal fun moneyStatPresentation(
+    dollars: Int,
+    severity: String?,
+    todayDollars: Int? = null,
+    compact: Boolean = false,
+): SoloStatPresentation {
     val isNegative = dollars < 0
     val status = when {
         isNegative -> "OVER"
@@ -1016,7 +1051,14 @@ internal fun moneyStatPresentation(dollars: Int, severity: String?): SoloStatPre
         severity == "watch" -> MONEY_SOLO_WATCH_ACCENT
         else -> MONEY_SOLO_OK_ACCENT
     }
-    return SoloStatPresentation("SPEND", formatMoney(dollars), status, accent)
+    return if (!compact && todayDollars != null && todayDollars > 0) {
+        SoloStatPresentation("TODAY", formatMoney(todayDollars), status, accent,
+            secondary = "FUTURE ${formatMoney(dollars)}")
+    } else if (compact && todayDollars != null && todayDollars > 0) {
+        SoloStatPresentation("TODAY", formatMoney(todayDollars), status, accent)
+    } else {
+        SoloStatPresentation("SPEND", formatMoney(dollars), status, accent)
+    }
 }
 
 internal fun formatMoney(dollars: Int): String = if (dollars < 0) "-$${-dollars}" else "$$dollars"
@@ -1072,11 +1114,16 @@ internal fun sleepSeverity(minutes: Int): String = if (minutes < SLEEP_OK_MIN) "
  * StatTile it used to share with Coursework's solo widget. */
 @Composable
 private fun SoloSleepTile(minutes: Int, scale: Float, modifier: GlanceModifier) {
+    val stat = sleepStatPresentation(minutes)
+    SoloStatCard(label = stat.label, value = stat.value, status = stat.status,
+        accent = stat.accent, scale = scale, modifier = modifier)
+}
+
+internal fun sleepStatPresentation(minutes: Int): SoloStatPresentation {
     val severity = sleepSeverity(minutes)
     val status = if (severity == "watch") "LOW" else "SLEEP"
     val accent = if (severity == "watch") MONEY_SOLO_WATCH_ACCENT else MONEY_SOLO_OK_ACCENT
-    SoloStatCard(label = "SLEEP", value = formatSleepDuration(minutes), status = status,
-        accent = accent, scale = scale, modifier = modifier)
+    return SoloStatPresentation("SLEEP", formatSleepDuration(minutes), status, accent)
 }
 
 /** Wraps a lone TileRow (e.g. a single-stat preset like "LifeOps Gym")
@@ -1172,7 +1219,7 @@ private fun TileRow(
                         horizontalAlignment = tileAlignment, verticalAlignment = tileVerticalAlignment,
                         fontSp = if (expand) MONEY_SOLO_FONT_SP else BASE_MONEY_FONT_SP,
                         tilePadding = if (expand) 4.dp else 6.dp,
-                        soloStyle = expand)
+                        soloStyle = expand, todayDollars = state.discretionaryTodayDollars)
                     true
                 } else false
                 WidgetSection.COURSEWORK_TILE -> if (state.courseworkHoursNext7d != null) {
@@ -1203,18 +1250,12 @@ private fun TileRow(
 }
 
 /** The "LifeOps Combo" preset (see [WidgetDisplayConfig.comboGrid]): one
- * 2x2 widget instance merging money/social/coursework into a single
- * equispaced, gapless top row and weather into a gapless bottom row.
- * Placing four separate single-stat widgets side by side on the launcher
- * always leaves the launcher's own inter-widget grid gaps between them;
- * this is one continuous Glance surface instead, so there's no gap to
- * eliminate in the first place. No outer padding, no Spacer between any of
- * the four pieces -- each GlanceModifier.defaultWeight() split (three
- * equal columns on top, two equal rows overall) is what makes them
- * equispaced, not a fixed width/height. A missing figure (e.g. no social
- * data configured) just leaves that column's slot empty rather than
- * collapsing the row, matching how every other section already treats
- * absent data. */
+ * resizable, gapless Glance surface that chooses how many configured cells
+ * to show from LocalSize.current. Placing separate single-stat widgets side
+ * by side on the launcher always leaves launcher grid gaps between them;
+ * this keeps the cells inside one continuous rounded card. Tight placements
+ * show the first configured cells only, while wider/taller placements reveal
+ * more cells instead of shrinking text until it clips. */
 // Used by ComboEventsTile's list rows/empty-state text, not the stat tiles
 // (those switched to SoloStatCard's own plain defaults -- see
 // ComboGridContent's docstring) -- the events quadrant is still a genuinely
@@ -1240,9 +1281,24 @@ internal const val COMBO_EVENTS_SHOWN = 3
 // competed too much with COMBO_TILE_VALUE_SP's row text for the same small
 // footprint.
 internal const val COMBO_EVENTS_HEADER_SP = 11f
+internal enum class ComboLayout { COMPACT_2X2, MEDIUM_3X2, WIDE_4X2, TALL_4X3 }
 
-/** Occupies the entire right 2x2 half of the widget's 4x2 footprint (see
- * combo_widget_info.xml). A notable event is a list item (day/time/title),
+internal fun comboLayoutFor(size: DpSize): ComboLayout = when {
+    size.width.value < 180f -> ComboLayout.COMPACT_2X2
+    size.width.value < 250f -> ComboLayout.MEDIUM_3X2
+    size.height.value < 180f -> ComboLayout.WIDE_4X2
+    else -> ComboLayout.TALL_4X3
+}
+
+private data class ComboCell(
+    val section: WidgetSection,
+    val stat: SoloStatPresentation? = null,
+    val gymRing: GymRing? = null,
+    val gymCompleted: Int? = null,
+    val gymTarget: Int? = null,
+)
+
+/** Agenda-style combo cell. A notable event is a list item (day/time/title),
  * not a single stat -- it can't take the label/value/status-bar
  * [SoloStatCard] shape the left half's three tiles now use (see
  * ComboGridContent), so this stays its own flat agenda-list card instead,
@@ -1296,7 +1352,7 @@ private fun ComboEventsTile(events: List<NotableEvent>, scale: Float, modifier: 
         // empty -- a genuinely empty upcoming-events list is a normal,
         // common result (most weeks have zero one-off events), not a
         // loading/error state, so this quadrant should say so rather than
-        // leave a blank hole in an otherwise-solid 4x2 card (confirmed
+        // leave a blank hole in an otherwise-solid combo card (confirmed
         // 2026-07-15: "what if we don't have any events there? ... this
         // widget should be dynamic").
         if (events.isEmpty()) {
@@ -1324,10 +1380,10 @@ private fun ComboEventsTile(events: List<NotableEvent>, scale: Float, modifier: 
 internal val COMBO_BG = MONEY_SOLO_BG
 internal val COMBO_OUTER_RADIUS = 16.dp
 
-/** 4x3 footprint (see combo_widget_info.xml): the left 2x3 half stacks
- * [money|social] (2-wide, only when 2+ stats are present) over coursework
- * (full-width) over weather (full-width); the right 2x3 half is
- * [ComboEventsTile]. No Spacer between any of the pieces, AND every
+/** Size-aware Combo renderer. COMPACT_2X2 shows two configured cells,
+ * MEDIUM_3X2 shows three, WIDE_4X2 shows four, and TALL_4X3 keeps the
+ * richer left-stack plus events shape. No Spacer between any of the pieces,
+ * AND every
  * individual tile inside is flat (cornerRadiusDp = 0.dp) -- only the OUTER
  * edge of this whole Row is rounded/opaque ([COMBO_BG]/[COMBO_OUTER_RADIUS]),
  * and Glance clips its children to that shape. Each tile independently
@@ -1349,86 +1405,201 @@ internal val COMBO_OUTER_RADIUS = 16.dp
  * 8f/22f/9f defaults every solo widget uses at a comparable or smaller
  * footprint. That's the opposite of how real per-metric widgets handle
  * space pressure -- Shopify's own postmortems on both platforms describe
- * REDUCING the metric count per row as space shrinks (Android's smallest
- * widget shows exactly one metric; iOS's smallest shows two), not shrinking
- * text to force more into the same row. [topStats] now only ever puts 2
- * items across one row ([rowStats]); a 3rd spills onto its own full-width
- * row ([fullWidthStats]), and [ComboStatTile] uses [SoloStatCard]'s plain
- * defaults -- no more combo-specific shrunk constants at all (confirmed
- * 2026-07-15 UI audit: "the columns are really skinny... it should be
- * LEGIBLE"). combo_widget_info.xml's minHeight grew from the n=2 to the n=3
- * sizing tier to give the now-3-row left half enough vertical room to
- * match. */
+ * reducing metric count per row as space shrinks, not shrinking text to
+ * force more into the same row. Combo cells use [SoloStatCard]'s normal
+ * typography; the current implementation preserves legibility across
+ * launcher spans by reducing visible cell count at smaller sizes. */
 @Composable
 private fun ComboGridContent(
-    state: BriefingState, nextTasks: NextTasksState, scale: Float, phoneWeather: WeatherInfo? = null,
+    state: BriefingState, nextTasks: NextTasksState, config: WidgetDisplayConfig, phoneWeather: WeatherInfo? = null,
 ) {
+    val scale = config.scale
     // Same "phoneWeather > nextTasks.weather > state" priority as
     // BriefingContent's own WEATHER branch -- see WeatherCard's docstring.
     val w = phoneWeather ?: nextTasks.weather
     val temperatureF = w?.temperatureF ?: state.temperatureF
+    val highF = w?.highF ?: state.weatherHighF
+    val lowF = w?.lowF ?: state.weatherLowF
+    val condition = w?.condition ?: state.weatherCondition
+    val layout = comboLayoutFor(LocalSize.current)
+    val compactCells = layout != ComboLayout.TALL_4X3
     val moneySeverity = state.reasons.firstOrNull { it.domain == "money" }?.severity
     val courseworkSeverity = state.reasons.firstOrNull { it.domain == "coursework" }?.severity
-    val socialItem = socialFocusItem(
-        listOfNotNull(
-            state.partnerDaysSince?.let { SocialItem("💜", "PARTNER", SocialMetric(it, state.partnerDaysUntil)) },
-            state.friendDaysSince?.let { SocialItem("👥", "FRIENDS", SocialMetric(it, state.friendDaysUntil)) },
-        )
+    val socialItems = listOfNotNull(
+        state.partnerDaysSince?.let { SocialItem("💜", "PARTNER", SocialMetric(it, state.partnerDaysUntil)) },
+        state.friendDaysSince?.let { SocialItem("👥", "FRIENDS", SocialMetric(it, state.friendDaysUntil)) },
     )
-    // Fixed order (money, social, coursework) same as before -- only the
-    // grouping into rows below changed, not which stats exist or their
-    // priority when one's missing.
-    val topStats = buildList {
-        state.discretionaryDollars?.let { add(moneyStatPresentation(it, moneySeverity)) }
-        socialItem?.let { add(socialStatPresentation(it)) }
-        state.courseworkHoursNext7d?.let { add(courseworkStatPresentation(it, courseworkSeverity)) }
+    val cells = buildList {
+        for (section in config.sectionOrder.filter {
+            it !in config.hiddenSections && it in WidgetDisplayConfig.COMBO_GRID_SUPPORTED_SECTIONS
+        }) {
+            when (section) {
+                WidgetSection.GYM_RING -> when {
+                    nextTasks.gymRing != null -> add(ComboCell(section, gymRing = nextTasks.gymRing))
+                    state.gymLast7d != null && state.gymTarget != null ->
+                        add(ComboCell(section, gymCompleted = state.gymLast7d, gymTarget = state.gymTarget))
+                }
+                WidgetSection.MONEY_TILE -> state.discretionaryDollars?.let {
+                    add(ComboCell(section, moneyStatPresentation(
+                        it, moneySeverity, state.discretionaryTodayDollars, compact = compactCells)))
+                }
+                WidgetSection.COURSEWORK_TILE -> state.courseworkHoursNext7d?.let {
+                    add(ComboCell(section, courseworkStatPresentation(it, courseworkSeverity)))
+                }
+                WidgetSection.SLEEP_TILE -> state.sleepMinutes?.let {
+                    add(ComboCell(section, sleepStatPresentation(it)))
+                }
+                WidgetSection.SOCIAL -> socialStatPresentation(socialItems, compact = compactCells)?.let {
+                    add(ComboCell(section, it))
+                }
+                WidgetSection.WEATHER -> if (temperatureF != null) add(ComboCell(section))
+                WidgetSection.NOTABLE_EVENTS -> if (state.notableEvents.isNotEmpty()) add(ComboCell(section))
+                else -> Unit
+            }
+        }
     }
-    // At most 2 stats share the top row; anything beyond that gets its own
-    // full-width row instead of a 3rd (or 4th) column squeezed into the
-    // same ~140dp -- see this function's own docstring for why. In
-    // practice topStats never exceeds 3 (money/social/coursework), so
-    // fullWidthStats never holds more than 1 item today, but this reads
-    // correctly regardless of how many are actually present.
-    val rowStats = topStats.take(2)
-    val fullWidthStats = topStats.drop(2)
+    if (cells.isEmpty()) return
     Row(
         modifier = GlanceModifier
             .fillMaxSize()
             .cornerRadius(COMBO_OUTER_RADIUS)
             .background(ColorProvider(COMBO_BG)),
     ) {
-        Column(modifier = GlanceModifier.fillMaxSize().defaultWeight()) {
-            if (rowStats.isNotEmpty()) {
-                Row(modifier = GlanceModifier.fillMaxWidth().defaultWeight()) {
-                    rowStats.forEachIndexed { index, stat ->
-                        if (index > 0) ComboTileDivider()
-                        ComboStatTile(stat, scale, GlanceModifier.fillMaxSize().defaultWeight())
-                    }
-                }
-            }
-            // Same MONEY_SOLO_BG as the row above -- needs its own seam for
-            // the same reason ComboTileDivider exists between adjacent
-            // tiles, just horizontal instead of vertical.
-            fullWidthStats.forEach { stat ->
-                if (rowStats.isNotEmpty()) ComboTileDividerHorizontal()
-                ComboStatTile(stat, scale, GlanceModifier.fillMaxWidth().defaultWeight())
-            }
-            if (temperatureF != null) {
-                WeatherCard(
-                    temperatureF, w?.highF ?: state.weatherHighF,
-                    w?.lowF ?: state.weatherLowF, w?.condition ?: state.weatherCondition,
-                    scale, modifier = GlanceModifier.fillMaxSize().defaultWeight(),
-                    cornerRadiusDp = 0.dp)
+        when (layout) {
+            ComboLayout.COMPACT_2X2 -> ComboColumn(cells.take(2), state, temperatureF, highF, lowF, condition, scale)
+            ComboLayout.MEDIUM_3X2 -> ComboTwoColumn(cells.take(3), state, temperatureF, highF, lowF, condition, scale,
+                leftCount = 2)
+            ComboLayout.WIDE_4X2 -> ComboTwoColumn(cells.take(4), state, temperatureF, highF, lowF, condition, scale,
+                leftCount = 2)
+            ComboLayout.TALL_4X3 -> {
+                val eventCell = cells.firstOrNull { it.section == WidgetSection.NOTABLE_EVENTS }
+                val priorityCells = cells.filter { it.section != WidgetSection.NOTABLE_EVENTS }
+                ComboTallGrid(priorityCells, eventCell, state, temperatureF, highF, lowF, condition, scale)
             }
         }
-        // Left half's stat rows and ComboEventsTile now share the same
-        // MONEY_SOLO_BG background (see ComboEventsTile's own doc for why
-        // it dropped the old MONEY_TILE_OK_BG green tint) -- without this
-        // seam, coursework's row and the events quadrant would visually
-        // merge into one shape at their shared edge, the same problem
-        // ComboTileDivider already solves between adjacent stat tiles.
+    }
+}
+
+@Composable
+private fun RowScope.ComboTwoColumn(
+    cells: List<ComboCell>, state: BriefingState, temperatureF: Int?, highF: Int?, lowF: Int?, condition: String?,
+    scale: Float, leftCount: Int,
+) {
+    val left = cells.take(leftCount)
+    val right = cells.drop(leftCount)
+    ComboColumn(left, state, temperatureF, highF, lowF, condition, scale, GlanceModifier.fillMaxSize().defaultWeight())
+    if (right.isNotEmpty()) {
         ComboTileDivider()
-        ComboEventsTile(state.notableEvents, scale, modifier = GlanceModifier.fillMaxSize().defaultWeight())
+        ComboColumn(right, state, temperatureF, highF, lowF, condition, scale, GlanceModifier.fillMaxSize().defaultWeight())
+    }
+}
+
+@Composable
+private fun RowScope.ComboTallGrid(
+    cells: List<ComboCell>, state: BriefingState, temperatureF: Int?, highF: Int?, lowF: Int?, condition: String?,
+    scale: Float, modifier: GlanceModifier = GlanceModifier.fillMaxSize().defaultWeight(),
+) {
+    val rows = cells.take(6).chunked(2)
+    Column(modifier = modifier) {
+        rows.forEachIndexed { index, rowCells ->
+            if (index > 0) ComboTileDividerHorizontal()
+            ComboRow(rowCells, state, temperatureF, highF, lowF, condition, scale)
+        }
+    }
+}
+
+@Composable
+private fun RowScope.ComboTallGrid(
+    cells: List<ComboCell>, eventCell: ComboCell?, state: BriefingState, temperatureF: Int?, highF: Int?,
+    lowF: Int?, condition: String?,
+    scale: Float,
+) {
+    if (eventCell == null) {
+        ComboTallGrid(cells, state, temperatureF, highF, lowF, condition, scale)
+        return
+    }
+
+    val topCells = cells.take(2)
+    val lowerCells = cells.drop(2).take(2)
+    Column(modifier = GlanceModifier.fillMaxSize().defaultWeight()) {
+        if (topCells.isNotEmpty()) {
+            ComboRow(topCells, state, temperatureF, highF, lowF, condition, scale)
+            ComboTileDividerHorizontal()
+        }
+        Row(modifier = GlanceModifier.fillMaxWidth().defaultWeight()) {
+            if (lowerCells.isNotEmpty()) {
+                ComboColumn(lowerCells, state, temperatureF, highF, lowF, condition, scale,
+                    modifier = GlanceModifier.fillMaxSize().defaultWeight())
+                ComboTileDivider()
+            }
+            ComboRenderCell(eventCell, state, temperatureF, highF, lowF, condition, scale,
+                GlanceModifier.fillMaxSize().defaultWeight())
+        }
+    }
+}
+
+@Composable
+private fun ColumnScope.ComboRow(
+    cells: List<ComboCell>, state: BriefingState, temperatureF: Int?, highF: Int?, lowF: Int?, condition: String?,
+    scale: Float, modifier: GlanceModifier = GlanceModifier.fillMaxWidth().defaultWeight(),
+) {
+    Row(modifier = modifier) {
+        cells.forEachIndexed { index, cell ->
+            if (index > 0) ComboTileDivider()
+            ComboRenderCell(cell, state, temperatureF, highF, lowF, condition, scale,
+                GlanceModifier.fillMaxSize().defaultWeight())
+        }
+    }
+}
+
+@Composable
+private fun RowScope.ComboColumn(
+    cells: List<ComboCell>, state: BriefingState, temperatureF: Int?, highF: Int?, lowF: Int?, condition: String?,
+    scale: Float, modifier: GlanceModifier = GlanceModifier.fillMaxSize().defaultWeight(),
+) {
+    ComboColumnContent(cells, state, temperatureF, highF, lowF, condition, scale, modifier)
+}
+
+@Composable
+private fun ColumnScope.ComboColumn(
+    cells: List<ComboCell>, state: BriefingState, temperatureF: Int?, highF: Int?, lowF: Int?, condition: String?,
+    scale: Float, modifier: GlanceModifier = GlanceModifier.fillMaxWidth().defaultWeight(),
+) {
+    ComboColumnContent(cells, state, temperatureF, highF, lowF, condition, scale, modifier)
+}
+
+@Composable
+private fun ComboColumnContent(
+    cells: List<ComboCell>, state: BriefingState, temperatureF: Int?, highF: Int?, lowF: Int?, condition: String?,
+    scale: Float, modifier: GlanceModifier,
+) {
+    Column(modifier = modifier) {
+        cells.forEachIndexed { index, cell ->
+            if (index > 0) ComboTileDividerHorizontal()
+            ComboRenderCell(cell, state, temperatureF, highF, lowF, condition, scale,
+                GlanceModifier.fillMaxWidth().defaultWeight())
+        }
+    }
+}
+
+@Composable
+private fun ComboRenderCell(
+    cell: ComboCell, state: BriefingState, temperatureF: Int?, highF: Int?, lowF: Int?, condition: String?,
+    scale: Float, modifier: GlanceModifier,
+) {
+    when (cell.section) {
+        WidgetSection.GYM_RING -> when {
+            cell.gymRing != null -> GymProgressCard(cell.gymRing, scale, modifier, cornerRadiusDp = 0.dp,
+                statusVerticalPaddingDp = 4.dp)
+            cell.gymCompleted != null && cell.gymTarget != null ->
+                GymFallbackProgressCard(cell.gymCompleted, cell.gymTarget, scale, modifier,
+                    cornerRadiusDp = 0.dp, statusVerticalPaddingDp = 4.dp)
+        }
+        WidgetSection.WEATHER -> temperatureF?.let {
+            WeatherCard(it, highF, lowF, condition, scale, modifier = modifier, cornerRadiusDp = 0.dp)
+        }
+        WidgetSection.NOTABLE_EVENTS -> ComboEventsTile(state.notableEvents, scale, modifier = modifier)
+        else -> cell.stat?.let { ComboStatTile(it, scale, modifier) }
     }
 }
 
@@ -1445,6 +1616,7 @@ private fun ComboStatTile(stat: SoloStatPresentation, scale: Float, modifier: Gl
         accent = stat.accent,
         scale = scale,
         modifier = modifier,
+        secondary = stat.secondary,
         cornerRadiusDp = 0.dp,
     )
 }
@@ -1575,6 +1747,34 @@ internal fun socialFocusItem(items: List<SocialItem>): SocialItem? {
         return unplanned.maxByOrNull { it.metric.daysSince }
     }
     return items.minByOrNull { it.metric.daysUntil ?: Int.MAX_VALUE }
+}
+
+internal fun socialStatPresentation(items: List<SocialItem>, compact: Boolean): SoloStatPresentation? {
+    if (items.isEmpty()) return null
+    if (compact || items.size == 1) return socialFocusItem(items)?.let(::socialStatPresentation)
+    val first = items[0]
+    val second = items[1]
+    val focus = socialFocusItem(items) ?: first
+    val planned = focus.metric.daysUntil != null
+    val accent = when {
+        planned -> MONEY_SOLO_OK_ACCENT
+        focus.metric.daysSince >= 7 -> MONEY_SOLO_WATCH_ACCENT
+        else -> MONEY_SOLO_OK_ACCENT
+    }
+    return SoloStatPresentation(
+        label = "SOCIAL",
+        value = socialCompactValue(first),
+        status = if (planned) "NEXT" else "AGO",
+        accent = accent,
+        secondary = socialCompactValue(second),
+    )
+}
+
+private fun socialCompactValue(item: SocialItem): String {
+    val metric = item.metric
+    val days = metric.daysUntil ?: metric.daysSince
+    val suffix = if (metric.daysUntil != null) "next" else "ago"
+    return "${item.label.take(1)} ${days}d $suffix"
 }
 
 @Composable
@@ -2077,47 +2277,170 @@ private fun GymBar(completed: Int, target: Int, scale: Float) {
 private const val BASE_GYM_RING_SIZE_DP = 48
 private const val BASE_GYM_RING_STROKE_DP = 5
 private const val BASE_GYM_RING_EMOJI_SP = 22f
+private const val GYM_PROGRESS_RING_BITMAP_PX = 96
+private const val GYM_PROGRESS_RING_STROKE_PX = 10f
 private val GYM_RING_RED = Color(0xFFB3261E)
 
 @Composable
 private fun SoloGymTile(gymRing: GymRing, scale: Float, modifier: GlanceModifier) {
-    val status = when {
-        gymRing.todayDone -> "DONE"
-        gymRing.color == "yellow" -> "TODAY"
-        gymRing.color == "red" -> "START"
-        else -> "OK TODAY"
-    }
-    SoloStatCard(
-        label = "GYM",
-        value = "${gymRing.gymLast7d}/${gymRing.gymTarget}",
-        status = status,
-        accent = gymAccent(gymRing.color),
-        scale = scale,
-        modifier = modifier,
-    )
+    GymProgressCard(gymRing, scale, modifier)
 }
 
 @Composable
 private fun SoloGymFallbackTile(completed: Int, target: Int, scale: Float, modifier: GlanceModifier) {
-    val color = when {
-        completed <= 0 -> "red"
-        completed >= target -> "green"
-        else -> "yellow"
-    }
-    SoloStatCard(
-        label = "GYM",
-        value = "$completed/$target",
-        status = "7 DAYS",
-        accent = gymAccent(color),
+    GymFallbackProgressCard(completed, target, scale, modifier)
+}
+
+internal fun gymStatPresentation(gymRing: GymRing): SoloStatPresentation {
+    val status = gymStatus(gymRing)
+    return SoloStatPresentation("GYM", "${gymRing.gymLast7d}/${gymRing.gymTarget}", status,
+        gymAccent(gymRing.color))
+}
+
+internal fun gymFallbackStatPresentation(completed: Int, target: Int): SoloStatPresentation {
+    val color = gymFallbackColor(completed, target)
+    return SoloStatPresentation("GYM", "$completed/$target", "7 DAYS", gymAccent(color))
+}
+
+private fun gymStatus(gymRing: GymRing): String = when {
+    gymRing.todayDone -> "DONE"
+    gymRing.color == "yellow" -> "TODAY"
+    gymRing.color == "red" -> "START"
+    else -> "OK TODAY"
+}
+
+private fun gymFallbackColor(completed: Int, target: Int): String = when {
+    completed <= 0 -> "red"
+    completed >= target -> "green"
+    else -> "yellow"
+}
+
+@Composable
+private fun GymProgressCard(
+    gymRing: GymRing,
+    scale: Float,
+    modifier: GlanceModifier,
+    cornerRadiusDp: Dp = 14.dp,
+    statusVerticalPaddingDp: Dp = 5.dp,
+) {
+    GymProgressCard(
+        completed = gymRing.gymLast7d,
+        target = gymRing.gymTarget,
+        fill = gymRing.fill,
+        color = gymRing.color,
+        needDescription = gymNeedDescription(gymRing.color),
         scale = scale,
         modifier = modifier,
+        cornerRadiusDp = cornerRadiusDp,
+        statusVerticalPaddingDp = statusVerticalPaddingDp,
     )
+}
+
+@Composable
+private fun GymFallbackProgressCard(
+    completed: Int,
+    target: Int,
+    scale: Float,
+    modifier: GlanceModifier,
+    cornerRadiusDp: Dp = 14.dp,
+    statusVerticalPaddingDp: Dp = 5.dp,
+) {
+    val fill = if (target > 0) (completed.toFloat() / target.toFloat()).coerceIn(0f, 1f) else 0f
+    GymProgressCard(
+        completed = completed,
+        target = target,
+        fill = fill,
+        color = "neutral",
+        needDescription = "today status unavailable",
+        scale = scale,
+        modifier = modifier,
+        cornerRadiusDp = cornerRadiusDp,
+        statusVerticalPaddingDp = statusVerticalPaddingDp,
+    )
+}
+
+@Composable
+private fun GymProgressCard(
+    completed: Int,
+    target: Int,
+    fill: Float,
+    color: String,
+    needDescription: String,
+    scale: Float,
+    modifier: GlanceModifier,
+    cornerRadiusDp: Dp,
+    statusVerticalPaddingDp: Dp,
+) {
+    val ringSizeDp = 56f * scale
+    val ringColor = gymRingColor(color)
+    val bitmap = renderGymRingBitmap(
+        sizePx = GYM_PROGRESS_RING_BITMAP_PX,
+        strokeWidthPx = GYM_PROGRESS_RING_STROKE_PX,
+        fill = fill,
+        trackColor = Color(0x33FFFFFF).toArgb(),
+        fillColor = ringColor.toArgb(),
+    )
+    Column(
+        modifier = modifier
+            .cornerRadius(cornerRadiusDp)
+            .background(ColorProvider(MONEY_SOLO_BG))
+            .padding(vertical = statusVerticalPaddingDp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalAlignment = Alignment.Top,
+    ) {
+        Spacer(modifier = GlanceModifier.defaultWeight())
+        Text(
+            text = "GYM",
+            maxLines = 1,
+            style = TextStyle(
+                fontWeight = FontWeight.Bold,
+                fontSize = (8f * scale).sp,
+                color = GlanceTheme.colors.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            ),
+            modifier = GlanceModifier.fillMaxWidth(),
+        )
+        Box(
+            modifier = GlanceModifier.size(ringSizeDp.dp).padding(top = 2.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Image(
+                provider = ImageProvider(bitmap),
+                contentDescription = "Gym $completed/$target, $needDescription",
+                modifier = GlanceModifier.fillMaxSize(),
+            )
+            Text(
+                text = "$completed/$target",
+                maxLines = 1,
+                style = TextStyle(
+                    fontWeight = FontWeight.Bold,
+                    fontSize = (15f * scale).sp,
+                    color = GlanceTheme.colors.onSurface,
+                    textAlign = TextAlign.Center,
+                ),
+            )
+        }
+        Spacer(modifier = GlanceModifier.defaultWeight())
+    }
 }
 
 private fun gymAccent(color: String): Color = when (color) {
     "green" -> MONEY_SOLO_OK_ACCENT
     "yellow" -> MONEY_SOLO_WATCH_ACCENT
     else -> MONEY_SOLO_RISK_ACCENT
+}
+
+private fun gymRingColor(color: String): Color = when (color) {
+    "green" -> COLOR_OK
+    "yellow" -> COLOR_WARN
+    "neutral" -> Color(0xFF9A9A9A)
+    else -> GYM_RING_RED
+}
+
+private fun gymNeedDescription(color: String): String = when (color) {
+    "yellow" -> "needs gym today"
+    "green" -> "no gym needed today"
+    else -> "gym drought"
 }
 
 /** Draws the ring as a bitmap via plain android.graphics.Canvas/Paint --
