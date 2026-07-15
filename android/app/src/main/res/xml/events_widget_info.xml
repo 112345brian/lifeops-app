@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Single-stat preset (notable events only): see NotableEventsSection in
+     BriefingWidget.kt. Collapses to the soonest event's title + weekday at
+     this preset's true 1x1 footprint, expands to a short capped list if
+     resized up to MEDIUM/LARGE. 40dp is the literal "70 x n - 30" formula
+     floor for n=1; see social_widget_info.xml's comment for why the
+     literal floor is used instead of a slightly-larger value that risked
+     rounding up to 2 cells in the picker on some launchers (confirmed
+     live-device 2026-07-14 for money/social). -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="40dp"
+    android:minHeight="40dp"
+    android:minResizeWidth="40dp"
+    android:minResizeHeight="40dp"
+    android:maxResizeWidth="280dp"
+    android:maxResizeHeight="250dp"
+    android:targetCellWidth="1"
+    android:targetCellHeight="1"
+    android:resizeMode="horizontal|vertical"
+    android:widgetCategory="home_screen"
+    android:updatePeriodMillis="1800000"
+    android:description="@string/widget_description_events"
+    android:initialLayout="@layout/widget_loading"
+    android:previewLayout="@layout/widget_preview_events"
+    android:configure="com.lifeops.briefing.WidgetConfigActivity"
+    android:widgetFeatures="reconfigurable" />

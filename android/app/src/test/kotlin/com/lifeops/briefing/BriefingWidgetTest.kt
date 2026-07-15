@@ -8,8 +8,12 @@ import androidx.glance.testing.unit.hasContentDescription
 import androidx.glance.testing.unit.hasText
 import com.lifeops.briefing.data.AttentionReason
 import com.lifeops.briefing.data.BriefingState
+import com.lifeops.briefing.data.GymRing
 import com.lifeops.briefing.data.NextTask
 import com.lifeops.briefing.data.NextTasksState
+import com.lifeops.briefing.data.NotableEvent
+import com.lifeops.briefing.data.TodayEvent
+import com.lifeops.briefing.data.WeatherInfo
 import com.lifeops.briefing.data.WidgetDisplayConfig
 import com.lifeops.briefing.data.WidgetSection
 import org.junit.Test
@@ -37,7 +41,7 @@ class BriefingWidgetTest {
     }
 
     @Test
-    fun singleStatGymPreset_stillShowsGymRingWhenResizedToItsSmallestDeclaredSize() = runGlanceAppWidgetUnitTest {
+    fun singleStatGymPreset_stillShowsGymCardWhenResizedToItsSmallestDeclaredSize() = runGlanceAppWidgetUnitTest {
         // Regression test for the exact bug reported 2026-07-13: a
         // single-stat preset widget (WidgetDisplayConfig.singleStat) could
         // be dragged onto the home screen but not actually resized down to
@@ -45,7 +49,7 @@ class BriefingWidgetTest {
         // its only content vanishing, because BriefingContent's SMALL
         // bucket used to hard-stop right after the attention badge. Updated
         // from the original 110x56dp to match gym_widget_info.xml's later
-        // bump to 120x120dp (2026-07-14, to stop the ring clipping against
+        // bump to 120x120dp (2026-07-14, to stop gym content clipping against
         // its own edge) -- this must track that XML's declared minimum, not
         // an arbitrary small size, or a real clipping regression at the
         // widget's true floor would pass silently.
@@ -60,7 +64,9 @@ class BriefingWidgetTest {
             }
         }
 
-        onNode(hasText("Gym 2/3 (7d)", true)).assertExists()
+        onNode(hasText("GYM", true)).assertExists()
+        onNode(hasText("2/3", true)).assertExists()
+        onNode(hasText("7 DAYS", true)).assertExists()
     }
 
     @Test
@@ -239,6 +245,83 @@ class BriefingWidgetTest {
     }
 
     @Test
+    fun weatherSection_prefersPhoneWeatherOverEverythingElse() = runGlanceAppWidgetUnitTest {
+        // 2026-07-15: weather now has three sources of decreasing freshness
+        // AND decreasing server-dependence -- phoneWeather (fetched
+        // directly from NOAA by this phone, see PhoneWeather.kt, ZERO
+        // server dependency) must win over both nextTasks.weather (server,
+        // ~15-min) and state's own weather fields (server, once/day), so
+        // the widget keeps updating even if the LifeOps server is down
+        // entirely ("if the server goes down, we'd want the widget to
+        // update regardless").
+        setAppWidgetSize(DpSize(250.dp, 200.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(temperatureF = 64, weatherHighF = 70, weatherLowF = 58,
+                        weatherCondition = "Sunny"),
+                    nextTasks = NextTasksState(tasks = emptyList(), weather = WeatherInfo(
+                        temperatureF = 71, highF = 80, lowF = 60, condition = "Cloudy")),
+                    phoneWeather = WeatherInfo(temperatureF = 68, highF = 75, lowF = 55, condition = "Clear"),
+                )
+            }
+        }
+
+        onNode(hasText("68", true)).assertExists()
+        onNode(hasText("↑75°", true)).assertExists()
+        onNode(hasText("↓55°", true)).assertExists()
+        onNode(hasText("Clear", true)).assertExists()
+        onNode(hasText("71", true)).assertDoesNotExist()
+        onNode(hasText("64", true)).assertDoesNotExist()
+    }
+
+    @Test
+    fun weatherSection_prefersLiveNextTasksWeatherOverStaleBriefingState() = runGlanceAppWidgetUnitTest {
+        // 2026-07-15: weather used to come ONLY from BriefingState, which
+        // only refreshes once/day inside run_briefing -- a widget checked
+        // mid-afternoon kept showing whatever NOAA said that morning.
+        // nextTasks.weather (refreshed ~every 15 min via NextTasksRefreshWorker,
+        // same pull as gym_ring) must win when both are present.
+        setAppWidgetSize(DpSize(250.dp, 200.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(temperatureF = 64, weatherHighF = 70, weatherLowF = 58,
+                        weatherCondition = "Sunny"),
+                    nextTasks = NextTasksState(tasks = emptyList(), weather = WeatherInfo(
+                        temperatureF = 71, highF = 80, lowF = 60, condition = "Cloudy")),
+                )
+            }
+        }
+
+        onNode(hasText("71", true)).assertExists()
+        onNode(hasText("↑80°", true)).assertExists()
+        onNode(hasText("↓60°", true)).assertExists()
+        onNode(hasText("Cloudy", true)).assertExists()
+        onNode(hasText("64", true)).assertDoesNotExist()
+    }
+
+    @Test
+    fun weatherSection_fallsBackToBriefingStateWhenNextTasksHasNoWeatherYet() = runGlanceAppWidgetUnitTest {
+        // A freshly-installed widget (or one whose next-tasks pull hasn't
+        // landed yet) must still show the once-daily briefing's weather
+        // rather than nothing at all.
+        setAppWidgetSize(DpSize(250.dp, 200.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(temperatureF = 64, weatherHighF = 70, weatherLowF = 58,
+                        weatherCondition = "Sunny"),
+                    nextTasks = NextTasksState.empty(),
+                )
+            }
+        }
+
+        onNode(hasText("64", true)).assertExists()
+        onNode(hasText("Sunny", true)).assertExists()
+    }
+
+    @Test
     fun sleepTile_showsFormattedDuration() = runGlanceAppWidgetUnitTest {
         setAppWidgetSize(DpSize(250.dp, 200.dp))
         provideComposable {
@@ -411,7 +494,7 @@ class BriefingWidgetTest {
                     state = BriefingState(date = "2026-07-13", text = null),
                     nextTasks = NextTasksState(
                         tasks = listOf(NextTask("1", "Only task", null)),
-                        events = listOf(com.lifeops.briefing.data.TodayEvent("Papa's BBQ", null)),
+                        events = listOf(TodayEvent("Papa's BBQ", null)),
                     ),
                 )
             }
@@ -420,6 +503,217 @@ class BriefingWidgetTest {
         onNode(hasText("No briefing yet", true)).assertExists()
         onNode(hasText("Only task", true)).assertExists()
         onNode(hasText("Papa's BBQ", true)).assertExists()
+    }
+
+    private val sixEvents = (1..6).map { TodayEvent("Event $it", null) }
+    private val sixNotable = (1..6).map { NotableEvent("Notable $it", "2026-07-1$it", "Saturday") }
+
+    @Test
+    fun todayEvents_showsOverflowIndicatorWhenTruncated() = runGlanceAppWidgetUnitTest {
+        // 2026-07-15: EventsSection used to render every event unconditionally
+        // with NO height-awareness at all -- confirmed as the exact gap
+        // UP_NEXT's earlier fix (2026-07-13) never covered. Now capped at
+        // EVENTS_HARD_CEILING (5) even with plenty of height, same as
+        // today_events_input's own server-side n=5 cap, and the cut is
+        // labeled rather than silent.
+        setAppWidgetSize(DpSize(250.dp, 400.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(state = fullState, nextTasks = NextTasksState(tasks = emptyList(), events = sixEvents))
+            }
+        }
+
+        onNode(hasText("Event 5", true)).assertExists()
+        onNode(hasText("Event 6", true)).assertDoesNotExist()
+        onNode(hasText("+1 more", true)).assertExists()
+    }
+
+    @Test
+    fun multipleDynamicListsTogether_stillLeaveRoomForTheFreshnessLine() = runGlanceAppWidgetUnitTest {
+        // The actual regression this whole allocator exists to fix: TODAY_EVENTS,
+        // NOTABLE_EVENTS, and UP_NEXT enabled TOGETHER at a height that's
+        // comfortable for any ONE of them alone must not let them jointly
+        // assume they each own the full extra height -- that would overflow
+        // past the widget's real placed size and clip the freshness line,
+        // even though the pre-2026-07-15 code (TODAY_EVENTS had no
+        // height-awareness, UP_NEXT computed its own budget in isolation)
+        // would have let exactly that happen.
+        setAppWidgetSize(DpSize(250.dp, 250.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(notableEvents = sixNotable),
+                    nextTasks = NextTasksState(tasks = eightTasks, events = sixEvents),
+                )
+            }
+        }
+
+        // Every enabled list still shows its guaranteed minimum...
+        onNode(hasText("Event 1", true)).assertExists()
+        onNode(hasText("Notable 1", true)).assertExists()
+        onNode(hasText("Task 1", true)).assertExists()
+        // ...but the freshness line -- the thing that silently vanished
+        // before this fix -- is still there too, at the base LARGE height
+        // where there's no real extra room to share around at all.
+        onNode(hasText("just now", true)).assertExists()
+    }
+
+    @Test
+    fun notableEvents_soloCompact_showsOnlyTheSoonestEventAsASoloStatCard() = runGlanceAppWidgetUnitTest {
+        // The "LifeOps Events" single-stat preset at its true small footprint:
+        // NotableEventsSection collapses to just the soonest event, mirroring
+        // WeatherCard's own compact-at-small pattern, rather than trying to
+        // cram a list into a 1x1 tile -- and (2026-07-15) renders it via the
+        // same SoloStatCard shape every other solo preset (Money/Coursework/
+        // Sleep/Social) already uses: label "EVENTS", the title as the big
+        // value, a 3-letter weekday as the status-bar word.
+        setAppWidgetSize(DpSize(120.dp, 90.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(notableEvents = listOf(
+                        NotableEvent("Haircut", "2026-07-16", "Thursday"),
+                        NotableEvent("Dentist", "2026-07-20", "Monday"),
+                    )),
+                    nextTasks = NextTasksState.empty(),
+                    config = WidgetDisplayConfig.singleStat(WidgetSection.NOTABLE_EVENTS),
+                )
+            }
+        }
+
+        onNode(hasText("EVENTS", true)).assertExists()
+        onNode(hasText("Haircut", true)).assertExists()
+        onNode(hasText("THU", true)).assertExists()
+        onNode(hasText("Dentist", true)).assertDoesNotExist()
+    }
+
+    @Test
+    fun notableEvents_soloAtLargerSize_showsFullListAsChips() = runGlanceAppWidgetUnitTest {
+        // At MEDIUM/LARGE the solo preset switches to a capped list of
+        // chips -- same rounded, tinted-background shape SocialTile/StatTile
+        // already use in the full combo widget, not plain unstyled text.
+        setAppWidgetSize(DpSize(250.dp, 250.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(notableEvents = listOf(
+                        NotableEvent("Haircut", "2026-07-16", "Thursday", start = "2026-07-16T10:00:00"),
+                        NotableEvent("Dentist", "2026-07-20", "Monday", start = "2026-07-20T14:30:00"),
+                    )),
+                    nextTasks = NextTasksState.empty(),
+                    config = WidgetDisplayConfig.singleStat(WidgetSection.NOTABLE_EVENTS),
+                )
+            }
+        }
+
+        // Day, time, and title are three separate Text nodes now (see
+        // NotableEventLine's doc -- each needs its own fixed-width column
+        // for real cross-row alignment, which one combined string can't
+        // give them), not one combined "Thu 10:00 AM Haircut" node.
+        onNode(hasText("Thu", true)).assertExists()
+        onNode(hasText("10:00 AM", true)).assertExists()
+        onNode(hasText("Haircut", true)).assertExists()
+        onNode(hasText("Mon", true)).assertExists()
+        onNode(hasText("2:30 PM", true)).assertExists()
+        onNode(hasText("Dentist", true)).assertExists()
+    }
+
+    @Test
+    fun notableEvents_soloCompact_emptyList_showsExplicitEmptyState() = runGlanceAppWidgetUnitTest {
+        // A genuinely empty upcoming-events list (most weeks have zero
+        // one-off events) is a normal result, not a loading/error state --
+        // the standalone "LifeOps Events" widget must say so instead of
+        // rendering as a permanent blank box (confirmed 2026-07-15: "what
+        // if we don't have any events there? ... this widget should be
+        // dynamic").
+        setAppWidgetSize(DpSize(120.dp, 90.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(notableEvents = emptyList()),
+                    nextTasks = NextTasksState.empty(),
+                    config = WidgetDisplayConfig.singleStat(WidgetSection.NOTABLE_EVENTS),
+                )
+            }
+        }
+
+        onNode(hasText("EVENTS", true)).assertExists()
+        onNode(hasText("None", true)).assertExists()
+        onNode(hasText("CLEAR", true)).assertExists()
+    }
+
+    @Test
+    fun notableEvents_soloAtLargerSize_emptyList_showsExplicitEmptyState() = runGlanceAppWidgetUnitTest {
+        setAppWidgetSize(DpSize(250.dp, 250.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(notableEvents = emptyList()),
+                    nextTasks = NextTasksState.empty(),
+                    config = WidgetDisplayConfig.singleStat(WidgetSection.NOTABLE_EVENTS),
+                )
+            }
+        }
+
+        onNode(hasText("Coming up", true)).assertExists()
+        onNode(hasText("Nothing scheduled", true)).assertExists()
+    }
+
+    @Test
+    fun comboGrid_emptyNotableEvents_showsExplicitEmptyStateNotABlankQuadrant() = runGlanceAppWidgetUnitTest {
+        // 280x220dp -- matches combo_widget_info.xml's actual declared
+        // default size (bumped from 150dp tall to fit the 3-row stat/
+        // coursework/weather stack, see that file's own comment).
+        setAppWidgetSize(DpSize(280.dp, 220.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(notableEvents = emptyList()),
+                    nextTasks = NextTasksState.empty(),
+                    config = WidgetDisplayConfig.comboGrid(),
+                )
+            }
+        }
+
+        onNode(hasText("Nothing scheduled", true)).assertExists()
+    }
+
+    @Test
+    fun comboGrid_allThreeStatsPresent_moneyAndSocialShareRowCourseworkGetsItsOwn() = runGlanceAppWidgetUnitTest {
+        // Regression test for 2026-07-15's restructure: money/social/
+        // coursework used to all share one row (each ~1/3 width, forced
+        // down to a shrunk font to fit); coursework now gets its own
+        // full-width row instead, at the same font size every solo widget
+        // uses -- see ComboGridContent's own docstring and
+        // combo_widget_info.xml's comment.
+        setAppWidgetSize(DpSize(280.dp, 220.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(
+                        discretionaryDollars = -125, partnerDaysSince = 6, courseworkHoursNext7d = 4.1,
+                        // High/low deliberately distinct from the temp AND
+                        // each other -- "64" as a hasText(substring=true)
+                        // needle would otherwise ambiguously match more than
+                        // one node (e.g. a low of 64 inside "↓64°") and
+                        // onNode() throws on more than one match.
+                        temperatureF = 64, weatherHighF = 92, weatherLowF = 58, weatherCondition = "Sunny",
+                    ),
+                    nextTasks = NextTasksState.empty(),
+                    config = WidgetDisplayConfig.comboGrid(),
+                )
+            }
+        }
+
+        onNode(hasText("SPEND", true)).assertExists()
+        onNode(hasText("-$125", true)).assertExists()
+        onNode(hasText("PARTNER", true)).assertExists()
+        onNode(hasText("COURSEWORK", true)).assertExists()
+        onNode(hasText("4.1h", true)).assertExists()
+        onNode(hasText("64", true)).assertExists()
+        // The old combo-specific abbreviation, dropped once coursework got
+        // its own full-width row and no longer needed to fit ~1/3 of it.
+        onNode(hasText("CLASS", true)).assertDoesNotExist()
     }
 
     @Test
@@ -470,8 +764,29 @@ class BriefingWidgetTest {
         }
 
         onNode(hasText("6.5h", true)).assertDoesNotExist()
-        // Gym stays visible -- only coursework was hidden.
+        // Gym stays visible in the full widget's compact row -- only coursework was hidden.
         onNode(hasText("Gym 2/3 (7d)", true)).assertExists()
+    }
+
+    @Test
+    fun singleStatGymPreset_usesTodayStatusFromLiveGymRing() = runGlanceAppWidgetUnitTest {
+        setAppWidgetSize(DpSize(120.dp, 120.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState,
+                    nextTasks = NextTasksState(
+                        tasks = emptyList(),
+                        gymRing = GymRing(fill = 0.5f, color = "yellow", gymLast7d = 2, gymTarget = 4),
+                    ),
+                    config = WidgetDisplayConfig.singleStat(WidgetSection.GYM_RING),
+                )
+            }
+        }
+
+        onNode(hasText("GYM", true)).assertExists()
+        onNode(hasText("2/4", true)).assertExists()
+        onNode(hasText("TODAY", true)).assertExists()
     }
 
     @Test
@@ -568,7 +883,8 @@ class BriefingWidgetTest {
         // Even a widget tall enough for the height heuristic to allow more,
         // and a user override asking for way more than that, must never
         // exceed Glance's hard 10-direct-children-per-container limit (the
-        // "Up next" Column holds a header + N rows -- see MAX_TASKS_HARD_CEILING).
+        // "Up next" Column holds a header + N rows + (when truncated) an
+        // OverflowIndicator -- see MAX_TASKS_HARD_CEILING, 8 so 1+8+1=10).
         setAppWidgetSize(DpSize(250.dp, 2000.dp))
         val fifteenTasks = (1..15).map { NextTask(id = "$it", title = "Task $it", start = null) }
         provideComposable {
@@ -581,8 +897,8 @@ class BriefingWidgetTest {
             }
         }
 
-        onNode(hasText("Task 9", true)).assertExists()
-        onNode(hasText("Task 10", true)).assertDoesNotExist()
+        onNode(hasText("Task 8", true)).assertExists()
+        onNode(hasText("Task 9", true)).assertDoesNotExist()
     }
 
     @Test

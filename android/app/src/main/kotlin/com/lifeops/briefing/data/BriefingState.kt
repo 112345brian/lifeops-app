@@ -10,6 +10,20 @@ import org.json.JSONObject
  * the glyph-level signal. */
 data class AttentionReason(val domain: String, val severity: String)
 
+/** One entry from the server's deterministic notable_events.py -- an
+ * infrequent/one-off calendar event worth a heads-up, upcoming in the
+ * rolling next-7-days window (NOT a fixed calendar week -- see
+ * notable_events.upcoming_notable_events's docstring), as opposed to
+ * TodayEvent (every timed event happening today regardless of how often
+ * it recurs). [date] is an ISO
+ * calendar date ("2026-07-18"); [weekday] is already spelled out
+ * server-side ("Saturday") so the widget never needs its own date-math.
+ * [start] is the raw startTime timestamp (same field TodayEvent already
+ * carries) -- nullable since older/malformed server responses may not have
+ * it; the widget falls back to day-only when it's absent rather than
+ * hiding the event. */
+data class NotableEvent(val title: String, val date: String, val weekday: String, val start: String? = null)
+
 /** In-memory shape of one briefing snapshot -- what BriefingReceiver parses
  * each ntfy "briefing-data" push into, and what the widget UI renders.
  * Persisted as JSON (see toJson/fromJson) under WidgetKeys.BRIEFING_JSON. */
@@ -35,6 +49,7 @@ data class BriefingState(
     val attentionLabel: String? = null,
     val attentionHeadline: String? = null,
     val reasons: List<AttentionReason> = emptyList(),
+    val notableEvents: List<NotableEvent> = emptyList(),
 ) {
     fun toJson(): String = JSONObject().apply {
         put("date", date)
@@ -62,6 +77,16 @@ data class BriefingState(
                 put(JSONObject().apply {
                     put("domain", r.domain)
                     put("severity", r.severity)
+                })
+            }
+        })
+        put("notableEvents", JSONArray().apply {
+            notableEvents.forEach { e ->
+                put(JSONObject().apply {
+                    put("title", e.title)
+                    put("date", e.date)
+                    put("weekday", e.weekday)
+                    put("start", e.start)
                 })
             }
         })
@@ -101,6 +126,15 @@ data class BriefingState(
             }
         }
 
+        private fun parseNotableEvents(arr: JSONArray?): List<NotableEvent> {
+            if (arr == null) return emptyList()
+            return (0 until arr.length()).map { i ->
+                val e = arr.getJSONObject(i)
+                NotableEvent(title = e.optString("title"), date = e.optString("date"),
+                    weekday = e.optString("weekday"), start = e.optStringOrNull("start"))
+            }
+        }
+
         fun fromJson(raw: String): BriefingState {
             val o = JSONObject(raw)
             return BriefingState(
@@ -125,6 +159,7 @@ data class BriefingState(
                 attentionLabel = o.optStringOrNull("attentionLabel"),
                 attentionHeadline = o.optStringOrNull("attentionHeadline"),
                 reasons = parseReasons(o.optJSONArray("reasons")),
+                notableEvents = parseNotableEvents(o.optJSONArray("notableEvents")),
             )
         }
 
@@ -157,6 +192,7 @@ data class BriefingState(
                 attentionLabel = attention.optStringOrNull("label"),
                 attentionHeadline = attention.optStringOrNull("headline"),
                 reasons = parseReasons(attention.optJSONArray("reasons")),
+                notableEvents = parseNotableEvents(facts.optJSONArray("notable_events")),
             )
         }
     }

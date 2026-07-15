@@ -29,6 +29,8 @@ object WidgetPresets {
         WeatherWidgetReceiver::class.java to WidgetDisplayConfig.singleStat(WidgetSection.WEATHER),
         SleepWidgetReceiver::class.java to WidgetDisplayConfig.singleStat(WidgetSection.SLEEP_TILE),
         SocialWidgetReceiver::class.java to WidgetDisplayConfig.singleStat(WidgetSection.SOCIAL),
+        EventsWidgetReceiver::class.java to WidgetDisplayConfig.singleStat(WidgetSection.NOTABLE_EVENTS),
+        ComboWidgetReceiver::class.java to WidgetDisplayConfig.comboGrid(),
     )
 
     fun defaultConfigFor(receiverClassName: String?): WidgetDisplayConfig =

@@ -38,12 +38,14 @@ import androidx.glance.layout.Box
 import androidx.glance.layout.Column
 import androidx.glance.layout.Row
 import androidx.glance.layout.Spacer
+import androidx.glance.layout.fillMaxHeight
 import androidx.glance.layout.fillMaxSize
 import androidx.glance.layout.fillMaxWidth
 import androidx.glance.layout.height
 import androidx.glance.layout.padding
 import androidx.glance.layout.size
 import androidx.glance.layout.width
+import androidx.glance.text.FontFamily
 import androidx.glance.text.FontWeight
 import androidx.glance.text.Text
 import androidx.glance.text.TextAlign
@@ -54,7 +56,9 @@ import com.lifeops.briefing.data.BriefingState
 import com.lifeops.briefing.data.GymRing
 import com.lifeops.briefing.data.NextTask
 import com.lifeops.briefing.data.NextTasksState
+import com.lifeops.briefing.data.NotableEvent
 import com.lifeops.briefing.data.TodayEvent
+import com.lifeops.briefing.data.WeatherInfo
 import com.lifeops.briefing.data.WidgetDisplayConfig
 import com.lifeops.briefing.data.WidgetSection
 import java.time.LocalDateTime
@@ -155,8 +159,14 @@ class BriefingWidget : GlanceAppWidget() {
                 fallbackConfig
             }
 
+            // Plain SharedPreferences read (not the per-GlanceId Preferences
+            // DataStore above) -- see PhoneWeather.kt: this is a global,
+            // phone-wide cache, not per-widget-instance state, written
+            // independently of whether the panel is configured at all.
+            val phoneWeather = readCachedPhoneWeather(context)
+
             GlanceTheme {
-                BriefingContent(briefing, nextTasks, config)
+                BriefingContent(briefing, nextTasks, config, phoneWeather = phoneWeather)
             }
         }
     }
@@ -198,8 +208,11 @@ internal val TILE_SECTIONS = setOf(
  * single-preset Weather/Social widget actually shrink to Android's real
  * minimum footprint instead of being stuck at a 150dp MEDIUM floor
  * (confirmed 2026-07-13: user wanted these resizable down like every
- * other single-stat preset). */
-private val SMALL_BUCKET_ALLOWED = TILE_SECTIONS + WidgetSection.SOCIAL + WidgetSection.WEATHER
+ * other single-stat preset). NOTABLE_EVENTS joins them for the same reason:
+ * its own composable ([NotableEventsSection]) collapses to a single
+ * "soonest event" line at SMALL, mirroring [WeatherCard]'s self-managed
+ * compact sizing rather than needing a separate gate here. */
+private val SMALL_BUCKET_ALLOWED = TILE_SECTIONS + WidgetSection.SOCIAL + WidgetSection.WEATHER + WidgetSection.NOTABLE_EVENTS
 
 /** Collapses a config's visible section order into render units: a
  * contiguous run of [TILE_SECTIONS] becomes one group (rendered as one
@@ -238,7 +251,16 @@ internal fun BriefingContent(
     state: BriefingState,
     nextTasks: NextTasksState,
     config: WidgetDisplayConfig = WidgetDisplayConfig.default(),
+    // The phone's own directly-fetched NOAA reading (see PhoneWeather.kt) --
+    // independent of the server entirely, so this is now the PRIMARY weather
+    // source; nextTasks.weather (server, ~15-min refresh) and state's own
+    // weather fields (server, once/day) are progressively staler fallbacks.
+    phoneWeather: WeatherInfo? = null,
 ) {
+    if (config.comboGrid) {
+        ComboGridContent(state, nextTasks, config.scale, phoneWeather)
+        return
+    }
     val bucket = bucketFor(LocalSize.current)
     // Hide-filtered first, THEN check what's first -- a hidden section ahead
     // of SEVERITY_DOTS in the raw sectionOrder must not defeat the
@@ -334,6 +356,37 @@ internal fun BriefingContent(
             )
         }
 
+        // Shared height budget across every dynamic (unboundedly-sized) list
+        // section enabled in THIS instance -- see allocateDynamicListCounts's
+        // docstring for why this must be computed ONCE, jointly, rather than
+        // each section (as TODAY_EVENTS/NOTABLE_EVENTS/UP_NEXT each
+        // independently would) assuming it alone owns all the extra height.
+        // NOTABLE_EVENTS also participates when solo at MEDIUM+ (its own
+        // dedicated "LifeOps Events" preset, not sharing room with anything
+        // else) -- not at SMALL, where NotableEventsSection collapses to a
+        // single compact line with no list/budget involved at all.
+        val heightDp = LocalSize.current.height.value.toInt()
+        val dynamicSpecs = buildList {
+            if (bucket == WidgetSizeBucket.LARGE && WidgetSection.TODAY_EVENTS in renderableOrder &&
+                nextTasks.events.isNotEmpty()) {
+                add(DynamicListSpec(WidgetSection.TODAY_EVENTS, nextTasks.events.size,
+                    EVENT_ROW_HEIGHT_DP, MIN_EVENTS_SHOWN, EVENTS_HARD_CEILING))
+            }
+            if (WidgetSection.NOTABLE_EVENTS in renderableOrder && state.notableEvents.isNotEmpty() &&
+                (bucket == WidgetSizeBucket.LARGE || (solo && bucket != WidgetSizeBucket.SMALL))) {
+                add(DynamicListSpec(WidgetSection.NOTABLE_EVENTS, state.notableEvents.size,
+                    EVENT_ROW_HEIGHT_DP, MIN_EVENTS_SHOWN, EVENTS_HARD_CEILING))
+            }
+            if (bucket == WidgetSizeBucket.LARGE && WidgetSection.UP_NEXT in renderableOrder &&
+                nextTasks.tasks.isNotEmpty()) {
+                val ceiling = listOfNotNull(config.maxTasksOverride, MAX_TASKS_HARD_CEILING).min()
+                add(DynamicListSpec(WidgetSection.UP_NEXT, nextTasks.tasks.size,
+                    TASK_ROW_HEIGHT_DP, MIN_TASKS_SHOWN, ceiling))
+            }
+        }
+        val dynamicListCounts = allocateDynamicListCounts(
+            heightDp, dynamicSpecs, reserveForStaleIndicator = state.text != null)
+
         for (group in groupSectionsForRendering(renderableOrder)) {
             if (group.size > 1) {
                 TileRow(group, state, nextTasks.gymRing, config.scale)
@@ -350,16 +403,37 @@ internal fun BriefingContent(
                 }
                 WidgetSection.TODAY_EVENTS ->
                     if (bucket == WidgetSizeBucket.LARGE && nextTasks.events.isNotEmpty()) {
-                        EventsSection(nextTasks.events)
+                        EventsSection(nextTasks.events,
+                            dynamicListCounts[WidgetSection.TODAY_EVENTS] ?: MIN_EVENTS_SHOWN)
+                    }
+                WidgetSection.NOTABLE_EVENTS ->
+                    // No isNotEmpty() gate -- NotableEventsSection renders
+                    // its own empty state now (see its doc), so an empty
+                    // list still shows "Nothing scheduled"/"None" instead of
+                    // this branch skipping the section (and the standalone
+                    // "LifeOps Events" solo preset rendering nothing at all).
+                    if (bucket == WidgetSizeBucket.LARGE || solo) {
+                        NotableEventsSection(state.notableEvents,
+                            dynamicListCounts[WidgetSection.NOTABLE_EVENTS] ?: MIN_EVENTS_SHOWN, config.scale)
                     }
                 WidgetSection.UP_NEXT ->
                     if (bucket == WidgetSizeBucket.LARGE && nextTasks.tasks.isNotEmpty()) {
-                        val heightDp = LocalSize.current.height.value.toInt()
                         UpNextSection(nextTasks.tasks,
-                            effectiveMaxTasks(heightDp, config.maxTasksOverride, reserveForStaleIndicator = state.text != null))
+                            dynamicListCounts[WidgetSection.UP_NEXT] ?: MIN_TASKS_SHOWN)
                     }
-                WidgetSection.WEATHER ->
-                    if (state.temperatureF != null) {
+                WidgetSection.WEATHER -> {
+                    // Priority: phoneWeather (fetched directly from NOAA by
+                    // THIS phone -- zero server dependency, see PhoneWeather.kt)
+                    // > nextTasks.weather (server, refreshed ~every 15 min,
+                    // same pull as gym_ring) > state's own weather fields
+                    // (server, only ever refreshed once/day inside
+                    // run_briefing). Each is a progressively staler/more
+                    // server-dependent fallback for the one before it -- so
+                    // weather still updates even if the LifeOps server is
+                    // down entirely (2026-07-15).
+                    val w = phoneWeather ?: nextTasks.weather
+                    val temperatureF = w?.temperatureF ?: state.temperatureF
+                    if (temperatureF != null) {
                         // fillMaxSize() when solo (this card IS the entire
                         // widget) so the blue background actually fills the
                         // real placed area instead of just wrapping its own
@@ -368,9 +442,13 @@ internal fun BriefingContent(
                         // filled out to 2x1 as you can"); a plain top margin
                         // otherwise, when it's sharing the widget with a
                         // badge/other sections above it.
-                        WeatherCard(state, config.scale,
+                        WeatherCard(
+                            temperatureF, w?.highF ?: state.weatherHighF,
+                            w?.lowF ?: state.weatherLowF, w?.condition ?: state.weatherCondition,
+                            config.scale,
                             modifier = if (solo) GlanceModifier.fillMaxSize() else GlanceModifier.padding(top = 4.dp))
                     }
+                }
                 WidgetSection.SOCIAL ->
                     if (state.partnerDaysSince != null || state.friendDaysSince != null) {
                         // Stacked only for the standalone "LifeOps Social"
@@ -413,46 +491,98 @@ internal val TEXT_GATED_SECTIONS = setOf(
 )
 
 private const val LARGE_BASE_HEIGHT_DP = 250
-private const val TASK_ROW_HEIGHT_DP = 34
-private const val MIN_TASKS_SHOWN = 3
+internal const val TASK_ROW_HEIGHT_DP = 34
+internal const val MIN_TASKS_SHOWN = 3
+internal const val EVENT_ROW_HEIGHT_DP = 24  // plain single-line Text, no checkbox -- shorter than a task row
+internal const val MIN_EVENTS_SHOWN = 2
+internal const val EVENTS_HARD_CEILING = 5  // matches today_events_input(n=5)'s own server-side cap
 
 // Glance/RemoteViews has no scrolling Column -- content past the widget's
 // actual placed height just gets silently clipped, not scrolled. Reserved
-// so the freshness line ("as of 2m ago") always has room below the task
-// list instead of being the first thing clipped off as maxTasksForHeight
-// greedily fills every extra dp with more task rows (confirmed 2026-07-13:
-// resizing to fit more tasks pushed the freshness line off the bottom).
-private const val STALE_INDICATOR_RESERVED_DP = 20
+// so the freshness line ("as of 2m ago") always has room below whatever
+// dynamic lists are enabled, instead of being the first thing clipped off as
+// they greedily fill every extra dp with more rows (confirmed 2026-07-13,
+// for UP_NEXT specifically: resizing to fit more tasks pushed the freshness
+// line off the bottom). See allocateDynamicListCounts's docstring for why
+// this reservation is now shared across every enabled dynamic section
+// instead of computed once per section independently.
+internal const val STALE_INDICATOR_RESERVED_DP = 20
 
-// The "Up next" container holds a header Text plus N NextTaskRows as direct
-// children (N+1 total) -- Glance's hard 10-direct-children-per-container
-// limit (see the note above AttentionHeader) means an unclamped user
-// override could reproduce the exact silent-crash bug already fixed once
-// this session. 9 leaves room for the header.
-private const val MAX_TASKS_HARD_CEILING = 9
+// Glance's hard 10-direct-children-per-container limit (see the note above
+// AttentionHeader) means an unclamped user override -- or an unclamped
+// allocation here -- could reproduce the exact silent-crash bug already
+// fixed once this session. UpNextSection's Column holds a header Text plus
+// up to this many NextTaskRows plus (since OverflowIndicator was added)
+// possibly one more trailing Text when tasks.size exceeds this ceiling, so
+// 8 leaves room for both the header AND that overflow line (1 + 8 + 1 = 10)
+// -- 9 would let a real overflow case reach 11 children and reproduce the
+// same silent crash.
+internal const val MAX_TASKS_HARD_CEILING = 8
 
-/** Rough estimate of how many "Up next" rows fit past the base ~250dp LARGE
- * layout -- not a real measurement (Glance/RemoteViews has no layout-
- * measurement API), just enough to make a widget placed taller than 4x4
- * actually use the extra room instead of sitting on a fixed 3-task list
- * with dead space below it. STALE_INDICATOR_RESERVED_DP is subtracted
- * before dividing into rows so growth never spends 100% of the extra
- * height on tasks alone -- but only when [reserveForStaleIndicator] is
- * true; StaleIndicator itself never draws when state.text is null, so
- * reserving room for it unconditionally would cost a task row's worth of
- * height for a line that was never going to render (confirmed
- * 2026-07-13). */
-private fun maxTasksForHeight(heightDp: Int, reserveForStaleIndicator: Boolean): Int {
+/** One dynamic, unboundedly-sized list section that can appear in a single
+ * widget instance: TODAY_EVENTS, NOTABLE_EVENTS, and UP_NEXT are all
+ * variable-length lists whose row count should grow with the widget's
+ * placed height, same idea 2026-07-13's UP_NEXT-only fix introduced. */
+internal data class DynamicListSpec(
+    val section: WidgetSection,
+    val itemCount: Int,
+    val rowHeightDp: Int,
+    val minShown: Int,
+    val hardCeiling: Int,
+)
+
+/** Splits the height remaining after LARGE_BASE_HEIGHT_DP + (the freshness
+ * line's reservation, if it'll render) across every ENABLED dynamic list
+ * section in this instance -- NOT per-section independently, which is what
+ * this replaces (the pre-2026-07-15 effectiveMaxTasks/maxTasksForHeight
+ * only ever existed for UP_NEXT; TODAY_EVENTS/EventsSection had NO
+ * height-awareness at all, so it could already silently clip the freshness
+ * line on its own with enough events, the very bug UP_NEXT's fix addressed
+ * -- confirmed by re-reading EventsSection's original unconditional `for
+ * (event in events)` loop). If two or three of these are enabled in the
+ * same instance, letting each independently assume it owns ALL the extra
+ * height would let them jointly overflow the widget's real placed size even
+ * though any single one alone would have fit.
+ *
+ * Not a real layout measurement (Glance/RemoteViews has none) -- a rough
+ * heuristic like the one it replaces, just no longer scoped to a single
+ * section. Guarantees each enabled section's minShown first (never fewer,
+ * regardless of how tight it gets), then divides whatever's left one row at
+ * a time across sections in order (cheaper and more predictable than a
+ * single proportional division, which would round awkwardly), clamped to
+ * each section's own hardCeiling and its actual itemCount. */
+internal fun allocateDynamicListCounts(
+    heightDp: Int,
+    specs: List<DynamicListSpec>,
+    reserveForStaleIndicator: Boolean,
+): Map<WidgetSection, Int> {
+    if (specs.isEmpty()) return emptyMap()
     val reserved = if (reserveForStaleIndicator) STALE_INDICATOR_RESERVED_DP else 0
-    val extraDp = (heightDp - LARGE_BASE_HEIGHT_DP - reserved).coerceAtLeast(0)
-    return MIN_TASKS_SHOWN + extraDp / TASK_ROW_HEIGHT_DP
-}
+    // LARGE_BASE_HEIGHT_DP already accounts for a section's own minShown
+    // rows fitting within the base layout (that's what "base" means) -- do
+    // NOT also subtract minShown*rowHeightDp here, or every section's
+    // minimum gets paid for twice (once implicitly via LARGE_BASE_HEIGHT_DP,
+    // once explicitly here), starving the shared pool of extra rows that
+    // heightDp actually has room for.
+    var extraDp = (heightDp - LARGE_BASE_HEIGHT_DP - reserved).coerceAtLeast(0)
 
-/** Combines the placed-size heuristic with the user's explicit override
- * (if any) -- clamp, don't replace: a user ceiling still can't exceed what
- * actually fits height-wise, nor Glance's hard container-child limit. */
-private fun effectiveMaxTasks(heightDp: Int, maxTasksOverride: Int?, reserveForStaleIndicator: Boolean): Int {
-    return listOfNotNull(maxTasksForHeight(heightDp, reserveForStaleIndicator), maxTasksOverride, MAX_TASKS_HARD_CEILING).min()
+    // minShown is a target, not a guarantee that overrides a tighter
+    // hardCeiling/itemCount -- e.g. a user's maxTasksOverride below
+    // MIN_TASKS_SHOWN must still win.
+    val counts = specs.associate { it.section to minOf(it.minShown, it.hardCeiling, it.itemCount) }.toMutableMap()
+    var progressed = true
+    while (extraDp > 0 && progressed) {
+        progressed = false
+        for (spec in specs) {
+            val current = counts.getValue(spec.section)
+            if (extraDp < spec.rowHeightDp) continue
+            if (current >= spec.hardCeiling || current >= spec.itemCount) continue
+            counts[spec.section] = current + 1
+            extraDp -= spec.rowHeightDp
+            progressed = true
+        }
+    }
+    return counts.mapValues { (section, count) -> count.coerceAtMost(specs.first { it.section == section }.itemCount) }
 }
 
 /** Shared with GymBar's on/off-target color and StaleIndicator's warning
@@ -461,6 +591,13 @@ private fun effectiveMaxTasks(heightDp: Int, maxTasksOverride: Int?, reserveForS
  * independently-typed hex literals that could silently drift apart. */
 private val COLOR_OK = Color(0xFF276B5E)
 private val COLOR_WARN = Color(0xFFA8641F)
+
+internal data class SoloStatPresentation(
+    val label: String,
+    val value: String,
+    val status: String,
+    val accent: Color,
+)
 
 private const val BASE_BADGE_FONT_SP = 14f
 
@@ -630,17 +767,41 @@ private const val BASE_TILE_VALUE_SP = 18f
  * icon-first visual language instead of a plain "$340" text run. Rounded
  * corners match MoneyTile's shape so the two read as one family of tile.
  * Emoji and value sit side by side (not stacked) so the tile reads as one
- * line, matching MoneyTile's single-line height in the shared TileRow. */
+ * line, matching MoneyTile's single-line height in the shared TileRow.
+ *
+ * [severity], when non-null, tints the background the same
+ * risk/watch/ok-green [MONEY_TILE_RISK_BG]/[MONEY_TILE_WATCH_BG]/
+ * [MONEY_TILE_OK_BG] language [MoneyTile] already uses in this same shared
+ * row -- until 2026-07-15 Coursework/Sleep rendered here as a permanently
+ * neutral gray tile regardless of severity (Coursework's own severity was
+ * even computed by [TileRow] and then silently discarded, never reaching
+ * this composable at all), so Money was the only tile in the row whose
+ * color ever told you anything, which is exactly the "coursework/social's
+ * plain emoji+number StatTiles" inconsistency [SeverityValueTile]'s own
+ * docstring already called out for the combo grid -- it just never got
+ * fixed here, in the main widget's actual default shared row (confirmed
+ * 2026-07-15: "why doesn't each individual section have the same UX
+ * conventions"). Null (the default) keeps the plain neutral look for
+ * anything with no severity signal to show, same "no data, no false signal"
+ * reasoning [SocialTile] already uses for its own transparent/neutral
+ * fallback. */
 @Composable
 private fun StatTile(
     emoji: String, value: String, scale: Float, modifier: GlanceModifier = GlanceModifier,
     horizontalAlignment: Alignment.Horizontal = Alignment.Start,
     emojiSp: Float = BASE_TILE_EMOJI_SP, valueSp: Float = BASE_TILE_VALUE_SP, tilePadding: Dp = 6.dp,
+    severity: String? = null,
 ) {
+    val bg = when (severity) {
+        null -> GlanceTheme.colors.surfaceVariant
+        "risk", "fucked" -> ColorProvider(MONEY_TILE_RISK_BG)
+        "watch" -> ColorProvider(MONEY_TILE_WATCH_BG)
+        else -> ColorProvider(MONEY_TILE_OK_BG)
+    }
     Row(
         modifier = modifier
             .cornerRadius(10.dp)
-            .background(GlanceTheme.colors.surfaceVariant)
+            .background(bg)
             .padding(tilePadding),
         horizontalAlignment = horizontalAlignment,
         verticalAlignment = Alignment.CenterVertically,
@@ -655,13 +816,13 @@ private fun StatTile(
     }
 }
 
-private val MONEY_TILE_OK_BG = Color(0x4D276B5E)
-private val MONEY_TILE_WATCH_BG = Color(0x4DA8641F)
-private val MONEY_TILE_RISK_BG = Color(0x4DB3261E)
-private val MONEY_SOLO_BG = Color(0xFF171A20)
-private val MONEY_SOLO_OK_ACCENT = Color(0xFF52B69A)
-private val MONEY_SOLO_WATCH_ACCENT = Color(0xFFFFB74D)
-private val MONEY_SOLO_RISK_ACCENT = Color(0xFFFF6B6B)
+internal val MONEY_TILE_OK_BG = Color(0x4D276B5E)
+internal val MONEY_TILE_WATCH_BG = Color(0x4DA8641F)
+internal val MONEY_TILE_RISK_BG = Color(0x4DB3261E)
+internal val MONEY_SOLO_BG = Color(0xFF171A20)
+internal val MONEY_SOLO_OK_ACCENT = Color(0xFF52B69A)
+internal val MONEY_SOLO_WATCH_ACCENT = Color(0xFFFFB74D)
+internal val MONEY_SOLO_RISK_ACCENT = Color(0xFFFF6B6B)
 private const val BASE_MONEY_FONT_SP = 22f
 // Used only for the standalone "LifeOps Money" solo preset -- its widget-
 // info XML declares the literal 40dp sizing-formula floor for n=1 (the one
@@ -671,13 +832,57 @@ private const val BASE_MONEY_FONT_SP = 22f
 // font without clipping (confirmed 2026-07-14).
 private const val MONEY_SOLO_FONT_SP = 13f
 
-/** No glyph, no label -- just the dollar figure, big and bold, since it's
- * the one number where the amount itself IS the message. Background color
- * carries the same money severity attention.compute() already decided --
- * green when fine, transparent yellow when the buffer's thin, red when
- * discretionary has gone negative -- looked up from state.reasons rather
- * than re-deriving the <0/<100 thresholds here, so the widget can never
- * disagree with the engine that owns severity. */
+/** No glyph, no label -- just a value, big and bold, on a background tinted
+ * by [severity] (green/amber/red translucent overlay) -- the shape
+ * MoneyTile originated as (the amount itself IS the message for a money
+ * figure) and now shared by every tile in [ComboGridContent] so
+ * money/coursework/social read as one consistent family of card in that
+ * merged 2x2 layout, rather than money's colored card sitting next to
+ * coursework/social's plain emoji+number StatTiles (confirmed 2026-07-15:
+ * user wants all three to visually match money's severity-colored style,
+ * not the neutral StatTile look). */
+@Composable
+private fun SeverityValueTile(
+    value: String, severity: String?, scale: Float, modifier: GlanceModifier = GlanceModifier,
+    horizontalAlignment: Alignment.Horizontal = Alignment.Start,
+    verticalAlignment: Alignment.Vertical = Alignment.Top,
+    fontSp: Float = BASE_MONEY_FONT_SP,
+    tilePadding: Dp = 6.dp,
+    // 0.dp from ComboGridContent -- see its docstring for why an internal
+    // cell boundary must NOT be independently rounded (rounded corners
+    // meeting rounded corners at a shared edge leaves a small gap there,
+    // exposing whatever's behind the widget -- confirmed 2026-07-15: "there
+    // aren't fuckass transparency parts, right?"). Every OTHER caller (the
+    // shared TileRow on the full widget, where tiles have a real Spacer gap
+    // between them) keeps the normal rounded-card look.
+    cornerRadiusDp: Dp = 10.dp,
+) {
+    val bg = when (severity) {
+        "risk", "fucked" -> MONEY_TILE_RISK_BG
+        "watch" -> MONEY_TILE_WATCH_BG
+        else -> MONEY_TILE_OK_BG
+    }
+    Column(
+        modifier = modifier
+            .cornerRadius(cornerRadiusDp)
+            .background(ColorProvider(bg))
+            .padding(tilePadding),
+        horizontalAlignment = horizontalAlignment,
+        verticalAlignment = verticalAlignment,
+    ) {
+        Text(
+            text = value,
+            style = TextStyle(fontWeight = FontWeight.Bold, fontSize = (fontSp * scale).sp,
+                color = GlanceTheme.colors.onSurface),
+        )
+    }
+}
+
+/** Background color carries the same money severity attention.compute()
+ * already decided -- green when fine, transparent yellow when the buffer's
+ * thin, red when discretionary has gone negative -- looked up from
+ * state.reasons rather than re-deriving the <0/<100 thresholds here, so the
+ * widget can never disagree with the engine that owns severity. */
 @Composable
 private fun MoneyTile(
     dollars: Int, severity: String?, scale: Float, modifier: GlanceModifier = GlanceModifier,
@@ -686,30 +891,14 @@ private fun MoneyTile(
     fontSp: Float = BASE_MONEY_FONT_SP,
     tilePadding: Dp = 6.dp,
     soloStyle: Boolean = false,
+    cornerRadiusDp: Dp = 10.dp,
 ) {
     if (soloStyle) {
         SoloMoneyTile(dollars, severity, scale, modifier)
         return
     }
-    val bg = when (severity) {
-        "risk", "fucked" -> MONEY_TILE_RISK_BG
-        "watch" -> MONEY_TILE_WATCH_BG
-        else -> MONEY_TILE_OK_BG
-    }
-    Column(
-        modifier = modifier
-            .cornerRadius(10.dp)
-            .background(ColorProvider(bg))
-            .padding(tilePadding),
-        horizontalAlignment = horizontalAlignment,
-        verticalAlignment = verticalAlignment,
-    ) {
-        Text(
-            text = formatMoney(dollars),
-            style = TextStyle(fontWeight = FontWeight.Bold, fontSize = (fontSp * scale).sp,
-                color = GlanceTheme.colors.onSurface),
-        )
-    }
+    SeverityValueTile(formatMoney(dollars), severity, scale, modifier,
+        horizontalAlignment, verticalAlignment, fontSp, tilePadding, cornerRadiusDp)
 }
 
 /** Shared skeleton for every "solo" single-stat card (label / big value /
@@ -728,14 +917,23 @@ private fun MoneyTile(
  * value like "-$160" never wraps into two lines on the actual home
  * screen. */
 @Composable
-private fun SoloStatCard(label: String, value: String, status: String, accent: Color, scale: Float, modifier: GlanceModifier) {
-    val labelSp = 8f
-    val valueSp = 22f
-    val statusSp = 9f
-
+private fun SoloStatCard(
+    label: String, value: String, status: String, accent: Color, scale: Float, modifier: GlanceModifier,
+    labelSp: Float = 8f,
+    valueSp: Float = 22f,
+    statusSp: Float = 9f,
+    // 0.dp from ComboGridContent -- see SeverityValueTile's cornerRadiusDp
+    // doc for why an internal cell boundary must stay flat, not rounded.
+    cornerRadiusDp: Dp = 14.dp,
+    // Tighter than the default 5.dp in ComboGridContent's combo tiles --
+    // each one is only ~1/3 the width AND a fraction of the height of a
+    // real solo widget, so the same absolute padding used a
+    // disproportionate share of the available vertical room.
+    statusVerticalPaddingDp: Dp = 5.dp,
+) {
     Column(
         modifier = modifier
-            .cornerRadius(14.dp)
+            .cornerRadius(cornerRadiusDp)
             .background(ColorProvider(MONEY_SOLO_BG)),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalAlignment = Alignment.Top,
@@ -774,7 +972,7 @@ private fun SoloStatCard(label: String, value: String, status: String, accent: C
             modifier = GlanceModifier
                 .fillMaxWidth()
                 .background(ColorProvider(accent))
-                .padding(vertical = 5.dp),
+                .padding(vertical = statusVerticalPaddingDp),
             contentAlignment = Alignment.Center,
         ) {
             Text(
@@ -793,7 +991,19 @@ private fun SoloStatCard(label: String, value: String, status: String, accent: C
 }
 
 @Composable
-private fun SoloMoneyTile(dollars: Int, severity: String?, scale: Float, modifier: GlanceModifier) {
+private fun SoloMoneyTile(
+    dollars: Int, severity: String?, scale: Float, modifier: GlanceModifier,
+    labelSp: Float = 8f, valueSp: Float = 22f, statusSp: Float = 9f,
+    cornerRadiusDp: Dp = 14.dp, statusVerticalPaddingDp: Dp = 5.dp,
+) {
+    val stat = moneyStatPresentation(dollars, severity)
+    SoloStatCard(label = stat.label, value = stat.value, status = stat.status,
+        accent = stat.accent, scale = scale, modifier = modifier,
+        labelSp = labelSp, valueSp = valueSp, statusSp = statusSp,
+        cornerRadiusDp = cornerRadiusDp, statusVerticalPaddingDp = statusVerticalPaddingDp)
+}
+
+internal fun moneyStatPresentation(dollars: Int, severity: String?): SoloStatPresentation {
     val isNegative = dollars < 0
     val status = when {
         isNegative -> "OVER"
@@ -806,11 +1016,68 @@ private fun SoloMoneyTile(dollars: Int, severity: String?, scale: Float, modifie
         severity == "watch" -> MONEY_SOLO_WATCH_ACCENT
         else -> MONEY_SOLO_OK_ACCENT
     }
-    SoloStatCard(label = "SPEND", value = formatMoney(dollars), status = status,
-        accent = accent, scale = scale, modifier = modifier)
+    return SoloStatPresentation("SPEND", formatMoney(dollars), status, accent)
 }
 
 internal fun formatMoney(dollars: Int): String = if (dollars < 0) "-$${-dollars}" else "$$dollars"
+
+/** Standalone "LifeOps Coursework" preset: same SoloStatCard shape Money
+ * and Social's solo tiles already use (dark card, label + big value +
+ * colored status bar), instead of the plain neutral emoji+number StatTile
+ * this used to share with the standalone Sleep preset (confirmed
+ * 2026-07-15: user wants all the standalone single-stat widgets to match).
+ * severity comes from the same attention.compute() "coursework" domain
+ * MoneyTile already reads for its own severity, so this can't disagree with
+ * the engine that owns it. */
+@Composable
+private fun SoloCourseworkTile(
+    hours: Double, severity: String?, scale: Float, modifier: GlanceModifier,
+    labelSp: Float = 8f, valueSp: Float = 22f, statusSp: Float = 9f,
+    cornerRadiusDp: Dp = 14.dp, statusVerticalPaddingDp: Dp = 5.dp,
+) {
+    val stat = courseworkStatPresentation(hours, severity)
+    SoloStatCard(label = stat.label, value = stat.value, status = stat.status,
+        accent = stat.accent, scale = scale, modifier = modifier,
+        labelSp = labelSp, valueSp = valueSp, statusSp = statusSp,
+        cornerRadiusDp = cornerRadiusDp, statusVerticalPaddingDp = statusVerticalPaddingDp)
+}
+
+internal fun courseworkStatPresentation(hours: Double, severity: String?): SoloStatPresentation {
+    val status = when (severity) {
+        "risk", "fucked" -> "HEAVY"
+        "watch" -> "WATCH"
+        else -> "LOAD"
+    }
+    val accent = when (severity) {
+        "risk", "fucked" -> MONEY_SOLO_RISK_ACCENT
+        "watch" -> MONEY_SOLO_WATCH_ACCENT
+        else -> MONEY_SOLO_OK_ACCENT
+    }
+    return SoloStatPresentation("COURSEWORK", "${hours}h", status, accent)
+}
+
+// Mirrors lifeops/config.py's SLEEP_OK_MIN (330 minutes -- "min minutes of
+// real sleep to count 'rested'") rather than inventing a separate
+// threshold here: sleep has no attention.compute() domain of its own (no
+// backend-computed severity ever reaches BriefingState for it, unlike
+// money/coursework), so this is the same "reuse an existing, deliberate
+// threshold instead of guessing a new one" approach used for social's
+// derived severity.
+private const val SLEEP_OK_MIN = 330
+
+internal fun sleepSeverity(minutes: Int): String = if (minutes < SLEEP_OK_MIN) "watch" else "ok"
+
+/** Standalone "LifeOps Sleep" preset -- see [SoloCourseworkTile]'s
+ * docstring for why this now uses SoloStatCard instead of the plain
+ * StatTile it used to share with Coursework's solo widget. */
+@Composable
+private fun SoloSleepTile(minutes: Int, scale: Float, modifier: GlanceModifier) {
+    val severity = sleepSeverity(minutes)
+    val status = if (severity == "watch") "LOW" else "SLEEP"
+    val accent = if (severity == "watch") MONEY_SOLO_WATCH_ACCENT else MONEY_SOLO_OK_ACCENT
+    SoloStatCard(label = "SLEEP", value = formatSleepDuration(minutes), status = status,
+        accent = accent, scale = scale, modifier = modifier)
+}
 
 /** Wraps a lone TileRow (e.g. a single-stat preset like "LifeOps Gym")
  * so it fills and centers in the widget's actual placed space instead of
@@ -850,6 +1117,8 @@ private fun TileRow(
     sections: List<WidgetSection>, state: BriefingState, gymRing: GymRing?, scale: Float, expand: Boolean = false,
 ) {
     val moneySeverity = state.reasons.firstOrNull { it.domain == "money" }?.severity
+    val courseworkSeverity = state.reasons.firstOrNull { it.domain == "coursework" }?.severity
+    val sleepSev = state.sleepMinutes?.let(::sleepSeverity)
     val hasGym = WidgetSection.GYM_RING in sections &&
         (gymRing != null || (state.gymLast7d != null && state.gymTarget != null))
     val hasMoney = WidgetSection.MONEY_TILE in sections && state.discretionaryDollars != null
@@ -879,12 +1148,20 @@ private fun TileRow(
                 WidgetSection.GYM_RING -> when {
                     gymRing != null -> {
                         if (addedFirst) Spacer(modifier = GlanceModifier.width(6.dp))
-                        GymRingIndicator(gymRing, scale, solo = expand)
+                        if (expand) {
+                            SoloGymTile(gymRing, scale, modifier = tileWidth)
+                        } else {
+                            GymRingIndicator(gymRing, scale)
+                        }
                         true
                     }
                     state.gymLast7d != null && state.gymTarget != null -> {
                         if (addedFirst) Spacer(modifier = GlanceModifier.width(6.dp))
-                        GymBar(state.gymLast7d, state.gymTarget, scale)
+                        if (expand) {
+                            SoloGymFallbackTile(state.gymLast7d, state.gymTarget, scale, modifier = tileWidth)
+                        } else {
+                            GymBar(state.gymLast7d, state.gymTarget, scale)
+                        }
                         true
                     }
                     else -> false
@@ -900,14 +1177,22 @@ private fun TileRow(
                 } else false
                 WidgetSection.COURSEWORK_TILE -> if (state.courseworkHoursNext7d != null) {
                     if (addedFirst) Spacer(modifier = GlanceModifier.width(6.dp))
-                    StatTile("📚", "${state.courseworkHoursNext7d}h", scale,
-                        modifier = tileWidth, horizontalAlignment = tileAlignment)
+                    if (expand) {
+                        SoloCourseworkTile(state.courseworkHoursNext7d, courseworkSeverity, scale, modifier = tileWidth)
+                    } else {
+                        StatTile("📚", "${state.courseworkHoursNext7d}h", scale,
+                            modifier = tileWidth, horizontalAlignment = tileAlignment, severity = courseworkSeverity)
+                    }
                     true
                 } else false
                 WidgetSection.SLEEP_TILE -> if (state.sleepMinutes != null) {
                     if (addedFirst) Spacer(modifier = GlanceModifier.width(6.dp))
-                    StatTile("😴", formatSleepDuration(state.sleepMinutes), scale,
-                        modifier = tileWidth, horizontalAlignment = tileAlignment)
+                    if (expand) {
+                        SoloSleepTile(state.sleepMinutes, scale, modifier = tileWidth)
+                    } else {
+                        StatTile("😴", formatSleepDuration(state.sleepMinutes), scale,
+                            modifier = tileWidth, horizontalAlignment = tileAlignment, severity = sleepSev)
+                    }
                     true
                 } else false
                 else -> false
@@ -915,6 +1200,283 @@ private fun TileRow(
             if (rendered) addedFirst = true
         }
     }
+}
+
+/** The "LifeOps Combo" preset (see [WidgetDisplayConfig.comboGrid]): one
+ * 2x2 widget instance merging money/social/coursework into a single
+ * equispaced, gapless top row and weather into a gapless bottom row.
+ * Placing four separate single-stat widgets side by side on the launcher
+ * always leaves the launcher's own inter-widget grid gaps between them;
+ * this is one continuous Glance surface instead, so there's no gap to
+ * eliminate in the first place. No outer padding, no Spacer between any of
+ * the four pieces -- each GlanceModifier.defaultWeight() split (three
+ * equal columns on top, two equal rows overall) is what makes them
+ * equispaced, not a fixed width/height. A missing figure (e.g. no social
+ * data configured) just leaves that column's slot empty rather than
+ * collapsing the row, matching how every other section already treats
+ * absent data. */
+// Used by ComboEventsTile's list rows/empty-state text, not the stat tiles
+// (those switched to SoloStatCard's own plain defaults -- see
+// ComboGridContent's docstring) -- the events quadrant is still a genuinely
+// dense agenda list (day + time + title on one line), so it keeps its own
+// smaller size independent of the stat tiles' sizing.
+internal const val COMBO_TILE_VALUE_SP = 14f
+
+/** [SocialMetric.severity], translated to the same "ok"/"watch"/"risk"
+ * vocabulary state.reasons uses for money/coursework -- social has no
+ * attention.compute() domain of its own (see DOT_DOMAIN_ORDER), so this is
+ * the closest equivalent derived from data already on hand rather than
+ * inventing a new backend severity concept just for one tile's color. Reads
+ * [SocialMetric.severity] rather than re-deriving the daysUntil/daysSince
+ * thresholds here, so this can't disagree with [SocialMetric.bgColor]'s own
+ * judgment about the same metric. */
+internal fun socialSeverity(metric: SocialMetric): String = metric.severity
+
+internal const val COMBO_EVENTS_SHOWN = 3
+
+// Sized down from an unstyled default Text (what NotableEventsSection's own
+// "Coming up" header uses, fine at a solo widget's full width) -- at the
+// combo grid's ~1/4-widget quadrant, an unstyled default-size header
+// competed too much with COMBO_TILE_VALUE_SP's row text for the same small
+// footprint.
+internal const val COMBO_EVENTS_HEADER_SP = 11f
+
+/** Occupies the entire right 2x2 half of the widget's 4x2 footprint (see
+ * combo_widget_info.xml). A notable event is a list item (day/time/title),
+ * not a single stat -- it can't take the label/value/status-bar
+ * [SoloStatCard] shape the left half's three tiles now use (see
+ * ComboGridContent), so this stays its own flat agenda-list card instead,
+ * same as the standalone "LifeOps Events" preset's list path
+ * ([NotableEventsSection]) rather than its solo/compact
+ * [SoloNotableEventTile] card. Background is the same neutral [MONEY_SOLO_BG]
+ * every stat tile in this grid now uses, NOT [MONEY_TILE_OK_BG] (a former
+ * version of this tile used that "ok"-severity green as a whole-card tint) --
+ * a notable event has no severity dimension at all (informational, not "at
+ * risk"), and painting the entire quadrant in the same green this app uses
+ * to mean "money/coursework is fine" reads as a false status signal, not a
+ * neutral one, exactly the "color as accent, not a full-bleed surface"
+ * mistake android/CLAUDE.md's money-widget section already warns against
+ * (confirmed 2026-07-15: "why is the upcoming events green"). Leads with a
+ * "Coming up" header -- SAME text/weight/color NotableEventsSection's own
+ * list-view header uses, just resized for this smaller footprint -- rather
+ * than the old header-less version, whose single centered "Nothing
+ * upcoming" line had nothing to visually anchor it and read as adrift in a
+ * mostly-empty quadrant with no indication of what it even was (confirmed
+ * 2026-07-15 UI audit: this was the one piece of the combo grid with no
+ * label at all, when every OTHER quadrant -- SPEND/FRIENDS/CLASS -- has
+ * one). Every state (empty or populated) now stacks top-down under that
+ * header instead of centering, matching NotableEventsSection's own
+ * Column(verticalAlignment = Top) shape for the identical data. Each row is
+ * [NotableEventLine] -- see its doc for why day/time are their own
+ * fixed-width columns, not just leading text. */
+@Composable
+private fun ComboEventsTile(events: List<NotableEvent>, scale: Float, modifier: GlanceModifier = GlanceModifier) {
+    Column(
+        // Flat, not rounded -- see ComboGridContent's docstring: this tile
+        // is an internal cell of ONE outer rounded/opaque card, not its own
+        // floating card, so it must butt seamlessly against its neighbors.
+        // Start-aligned, not centered -- a list of lines reads as a list
+        // when their left edges line up (how every other list in this app,
+        // and every real agenda widget, does it); centering multi-line text
+        // is the one thing that made this look like an odd one out
+        // (confirmed 2026-07-15).
+        modifier = modifier
+            .background(ColorProvider(MONEY_SOLO_BG))
+            .padding(8.dp),
+        horizontalAlignment = Alignment.Start,
+        verticalAlignment = Alignment.Top,
+    ) {
+        Text(
+            text = "Coming up",
+            maxLines = 1,
+            style = TextStyle(fontWeight = FontWeight.Bold, fontSize = (COMBO_EVENTS_HEADER_SP * scale).sp,
+                color = GlanceTheme.colors.onSurface),
+        )
+        // Always renders the card (background/padding above), even when
+        // empty -- a genuinely empty upcoming-events list is a normal,
+        // common result (most weeks have zero one-off events), not a
+        // loading/error state, so this quadrant should say so rather than
+        // leave a blank hole in an otherwise-solid 4x2 card (confirmed
+        // 2026-07-15: "what if we don't have any events there? ... this
+        // widget should be dynamic").
+        if (events.isEmpty()) {
+            Text(
+                text = "Nothing scheduled",
+                maxLines = 1,
+                modifier = GlanceModifier.padding(top = 4.dp),
+                style = TextStyle(fontSize = (COMBO_TILE_VALUE_SP * scale).sp,
+                    color = GlanceTheme.colors.onSurfaceVariant),
+            )
+        } else {
+            val toShow = events.take(COMBO_EVENTS_SHOWN)
+            toShow.forEach { event ->
+                NotableEventLine(event, scale, COMBO_TILE_VALUE_SP, modifier = GlanceModifier.padding(top = 4.dp))
+            }
+            OverflowIndicator(events.size - toShow.size)
+        }
+    }
+}
+
+// Same solid dark backdrop the family's SoloStatCard already uses
+// (MONEY_SOLO_BG) -- reused here as the ONE opaque background behind the
+// entire combo grid, not a new color, so this reads as the same visual
+// family rather than an arbitrary new dark.
+internal val COMBO_BG = MONEY_SOLO_BG
+internal val COMBO_OUTER_RADIUS = 16.dp
+
+/** 4x3 footprint (see combo_widget_info.xml): the left 2x3 half stacks
+ * [money|social] (2-wide, only when 2+ stats are present) over coursework
+ * (full-width) over weather (full-width); the right 2x3 half is
+ * [ComboEventsTile]. No Spacer between any of the pieces, AND every
+ * individual tile inside is flat (cornerRadiusDp = 0.dp) -- only the OUTER
+ * edge of this whole Row is rounded/opaque ([COMBO_BG]/[COMBO_OUTER_RADIUS]),
+ * and Glance clips its children to that shape. Each tile independently
+ * rounding its own corners (the family's normal look when tiles have a real
+ * gap between them, e.g. the shared TileRow on the full widget) would leave
+ * a small lens-shaped gap wherever two rounded corners meet edge-to-edge,
+ * showing whatever's behind the widget through it -- and with no background
+ * at all on the old version of this Row, that gap was the transparent
+ * widget canvas itself, not just a seam (confirmed 2026-07-15: "there
+ * aren't fuckass transparency parts, right? it looks like a single solid
+ * block with sections?" -- it didn't, until this fix). This is what
+ * actually makes it read as one solid card divided into sections, not five
+ * floating chips.
+ *
+ * Until 2026-07-15 all three stats (money/social/coursework) shared ONE row
+ * across the left half's full width -- each tile got only ~1/3 of ~140dp
+ * (~47dp), forcing COMBO_LABEL_SP/COMBO_TILE_VALUE_SP/COMBO_STATUS_SP down
+ * to 6f/14f/6f just to avoid clipping, well below [SoloStatCard]'s own
+ * 8f/22f/9f defaults every solo widget uses at a comparable or smaller
+ * footprint. That's the opposite of how real per-metric widgets handle
+ * space pressure -- Shopify's own postmortems on both platforms describe
+ * REDUCING the metric count per row as space shrinks (Android's smallest
+ * widget shows exactly one metric; iOS's smallest shows two), not shrinking
+ * text to force more into the same row. [topStats] now only ever puts 2
+ * items across one row ([rowStats]); a 3rd spills onto its own full-width
+ * row ([fullWidthStats]), and [ComboStatTile] uses [SoloStatCard]'s plain
+ * defaults -- no more combo-specific shrunk constants at all (confirmed
+ * 2026-07-15 UI audit: "the columns are really skinny... it should be
+ * LEGIBLE"). combo_widget_info.xml's minHeight grew from the n=2 to the n=3
+ * sizing tier to give the now-3-row left half enough vertical room to
+ * match. */
+@Composable
+private fun ComboGridContent(
+    state: BriefingState, nextTasks: NextTasksState, scale: Float, phoneWeather: WeatherInfo? = null,
+) {
+    // Same "phoneWeather > nextTasks.weather > state" priority as
+    // BriefingContent's own WEATHER branch -- see WeatherCard's docstring.
+    val w = phoneWeather ?: nextTasks.weather
+    val temperatureF = w?.temperatureF ?: state.temperatureF
+    val moneySeverity = state.reasons.firstOrNull { it.domain == "money" }?.severity
+    val courseworkSeverity = state.reasons.firstOrNull { it.domain == "coursework" }?.severity
+    val socialItem = socialFocusItem(
+        listOfNotNull(
+            state.partnerDaysSince?.let { SocialItem("💜", "PARTNER", SocialMetric(it, state.partnerDaysUntil)) },
+            state.friendDaysSince?.let { SocialItem("👥", "FRIENDS", SocialMetric(it, state.friendDaysUntil)) },
+        )
+    )
+    // Fixed order (money, social, coursework) same as before -- only the
+    // grouping into rows below changed, not which stats exist or their
+    // priority when one's missing.
+    val topStats = buildList {
+        state.discretionaryDollars?.let { add(moneyStatPresentation(it, moneySeverity)) }
+        socialItem?.let { add(socialStatPresentation(it)) }
+        state.courseworkHoursNext7d?.let { add(courseworkStatPresentation(it, courseworkSeverity)) }
+    }
+    // At most 2 stats share the top row; anything beyond that gets its own
+    // full-width row instead of a 3rd (or 4th) column squeezed into the
+    // same ~140dp -- see this function's own docstring for why. In
+    // practice topStats never exceeds 3 (money/social/coursework), so
+    // fullWidthStats never holds more than 1 item today, but this reads
+    // correctly regardless of how many are actually present.
+    val rowStats = topStats.take(2)
+    val fullWidthStats = topStats.drop(2)
+    Row(
+        modifier = GlanceModifier
+            .fillMaxSize()
+            .cornerRadius(COMBO_OUTER_RADIUS)
+            .background(ColorProvider(COMBO_BG)),
+    ) {
+        Column(modifier = GlanceModifier.fillMaxSize().defaultWeight()) {
+            if (rowStats.isNotEmpty()) {
+                Row(modifier = GlanceModifier.fillMaxWidth().defaultWeight()) {
+                    rowStats.forEachIndexed { index, stat ->
+                        if (index > 0) ComboTileDivider()
+                        ComboStatTile(stat, scale, GlanceModifier.fillMaxSize().defaultWeight())
+                    }
+                }
+            }
+            // Same MONEY_SOLO_BG as the row above -- needs its own seam for
+            // the same reason ComboTileDivider exists between adjacent
+            // tiles, just horizontal instead of vertical.
+            fullWidthStats.forEach { stat ->
+                if (rowStats.isNotEmpty()) ComboTileDividerHorizontal()
+                ComboStatTile(stat, scale, GlanceModifier.fillMaxWidth().defaultWeight())
+            }
+            if (temperatureF != null) {
+                WeatherCard(
+                    temperatureF, w?.highF ?: state.weatherHighF,
+                    w?.lowF ?: state.weatherLowF, w?.condition ?: state.weatherCondition,
+                    scale, modifier = GlanceModifier.fillMaxSize().defaultWeight(),
+                    cornerRadiusDp = 0.dp)
+            }
+        }
+        // Left half's stat rows and ComboEventsTile now share the same
+        // MONEY_SOLO_BG background (see ComboEventsTile's own doc for why
+        // it dropped the old MONEY_TILE_OK_BG green tint) -- without this
+        // seam, coursework's row and the events quadrant would visually
+        // merge into one shape at their shared edge, the same problem
+        // ComboTileDivider already solves between adjacent stat tiles.
+        ComboTileDivider()
+        ComboEventsTile(state.notableEvents, scale, modifier = GlanceModifier.fillMaxSize().defaultWeight())
+    }
+}
+
+// No sizing overrides -- SoloStatCard's own defaults (8f/22f/9f/5.dp),
+// literally identical typography to every solo widget's own tile, now that
+// a combo stat tile gets a genuine ~1 or ~2-column-wide share of the left
+// half instead of a forced 3rd-of-a-row (see ComboGridContent's docstring).
+@Composable
+private fun ComboStatTile(stat: SoloStatPresentation, scale: Float, modifier: GlanceModifier) {
+    SoloStatCard(
+        label = stat.label,
+        value = stat.value,
+        status = stat.status,
+        accent = stat.accent,
+        scale = scale,
+        modifier = modifier,
+        cornerRadiusDp = 0.dp,
+    )
+}
+
+// A hairline seam between adjacent combo tiles -- NOT a transparent Spacer
+// gap (see ComboGridContent's own docstring on why those were banned: they
+// exposed the widget's transparent canvas before COMBO_BG existed). This is
+// itself opaque/colored, so it reads as a deliberate divider between two
+// SoloStatCard-shaped tiles that now share the same solid MONEY_SOLO_BG
+// background as their card body (unlike the old SeverityValueTile tiles,
+// which each carried their own tinted background and so didn't need a seam
+// to read as separate pieces).
+internal val COMBO_DIVIDER_COLOR = Color(0x33FFFFFF)
+
+@Composable
+private fun ComboTileDividerHorizontal() {
+    Spacer(
+        modifier = GlanceModifier
+            .fillMaxWidth()
+            .height(1.dp)
+            .background(ColorProvider(COMBO_DIVIDER_COLOR)),
+    )
+}
+
+@Composable
+private fun ComboTileDivider() {
+    Spacer(
+        modifier = GlanceModifier
+            .fillMaxHeight()
+            .width(1.dp)
+            .background(ColorProvider(COMBO_DIVIDER_COLOR)),
+    )
 }
 
 /** "6h42m" / "6h" -- matches the compact, no-decimal style every other
@@ -926,20 +1488,29 @@ internal fun formatSleepDuration(minutes: Int): String {
     return if (m == 0) "${h}h" else "${h}h${m}m"
 }
 
-private data class SocialMetric(val daysSince: Int, val daysUntil: Int?) {
+internal data class SocialMetric(val daysSince: Int, val daysUntil: Int?) {
     val fullLabel: String =
         daysUntil?.let { "${daysSince}d ago · ${it}d next" } ?: "${daysSince}d ago"
     val compactLabel: String =
         daysUntil?.let { "${daysSince}d/${it}d" } ?: "${daysSince}d"
-    val bgColor: Color
+    // Single source of truth for social's planned/overdue/neutral judgment --
+    // bgColor and ComboGridContent's socialSeverity() (via [severity]) both
+    // read this instead of each re-deriving the daysUntil/daysSince>=7
+    // thresholds independently, so the two can't silently drift apart.
+    val severity: String
         get() = when {
-            daysUntil != null -> Color(0x4D276B5E)
-            daysSince >= 7 -> Color(0x4DA8641F)
-            else -> Color(0x00000000)
+            daysUntil != null -> "ok"
+            daysSince >= 7 -> "watch"
+            else -> "ok"
+        }
+    val bgColor: Color
+        get() = when (severity) {
+            "watch" -> Color(0x4DA8641F)
+            else -> if (daysUntil != null) Color(0x4D276B5E) else Color(0x00000000)
         }
 }
 
-private data class SocialItem(val emoji: String, val label: String, val metric: SocialMetric)
+internal data class SocialItem(val emoji: String, val label: String, val metric: SocialMetric)
 
 /** "Xd ago" / "Yd next" social cadence cards -- two independent
  * figures (social_input tracks them separately, same as PARTNER_TASK vs.
@@ -997,7 +1568,7 @@ private fun SocialSection(state: BriefingState, scale: Float, stacked: Boolean =
     }
 }
 
-private fun socialFocusItem(items: List<SocialItem>): SocialItem? {
+internal fun socialFocusItem(items: List<SocialItem>): SocialItem? {
     if (items.isEmpty()) return null
     val unplanned = items.filter { it.metric.daysUntil == null }
     if (unplanned.isNotEmpty()) {
@@ -1041,7 +1612,19 @@ private fun SocialTile(
 }
 
 @Composable
-private fun SocialFocusTile(item: SocialItem, scale: Float, modifier: GlanceModifier = GlanceModifier) {
+private fun SocialFocusTile(
+    item: SocialItem, scale: Float, modifier: GlanceModifier = GlanceModifier,
+    labelSp: Float = 8f, valueSp: Float = 22f, statusSp: Float = 9f,
+    cornerRadiusDp: Dp = 14.dp, statusVerticalPaddingDp: Dp = 5.dp,
+) {
+    val stat = socialStatPresentation(item)
+    SoloStatCard(label = stat.label, value = stat.value, status = stat.status,
+        accent = stat.accent, scale = scale, modifier = modifier,
+        labelSp = labelSp, valueSp = valueSp, statusSp = statusSp,
+        cornerRadiusDp = cornerRadiusDp, statusVerticalPaddingDp = statusVerticalPaddingDp)
+}
+
+internal fun socialStatPresentation(item: SocialItem): SoloStatPresentation {
     val metric = item.metric
     val planned = metric.daysUntil != null
     val accent = when {
@@ -1051,8 +1634,7 @@ private fun SocialFocusTile(item: SocialItem, scale: Float, modifier: GlanceModi
     }
     val value = if (planned) "${metric.daysUntil}d" else "${metric.daysSince}d"
     val status = if (planned) "NEXT" else "AGO"
-    SoloStatCard(label = item.label, value = value, status = status,
-        accent = accent, scale = scale, modifier = modifier)
+    return SoloStatPresentation(item.label, value, status, accent)
 }
 
 // Matches the app's one established accent blue (the web panel's
@@ -1129,10 +1711,24 @@ internal fun weatherEmoji(condition: String?): String {
  * 2026-07-13: "research what is idiomatic" / "fix all that shit"). The
  * threshold matches bucketFor's own SMALL cutoff (MEDIUM_SIZE.height) so
  * this never disagrees with the rest of BriefingContent about what counts
- * as small. */
+ * as small.
+ *
+ * Takes plain values, not a BriefingState, so the caller can feed it from
+ * whichever source is actually fresh -- see BriefingContent's WEATHER
+ * branch: NextTasksState.weather (refreshed ~every 15 min, same pull as
+ * gym_ring) is preferred over BriefingState's own weather fields (stale
+ * until the once-daily briefing runs again). Before 2026-07-15 this only
+ * ever read BriefingState, so a widget checked mid-afternoon still showed
+ * whatever NOAA said that morning. */
 @Composable
-private fun WeatherCard(state: BriefingState, scale: Float, modifier: GlanceModifier = GlanceModifier) {
-    val temp = state.temperatureF ?: return
+private fun WeatherCard(
+    temperatureF: Int?, weatherHighF: Int?, weatherLowF: Int?, weatherCondition: String?,
+    scale: Float, modifier: GlanceModifier = GlanceModifier,
+    // 0.dp from ComboGridContent -- see SeverityValueTile's cornerRadiusDp
+    // doc for why an internal cell boundary must stay flat, not rounded.
+    cornerRadiusDp: Dp = 12.dp,
+) {
+    val temp = temperatureF ?: return
     val compact = LocalSize.current.height < MEDIUM_SIZE.height
     val tempSp = if (compact) COMPACT_WEATHER_TEMP_SP else BASE_WEATHER_TEMP_SP
     val unitSp = if (compact) COMPACT_WEATHER_UNIT_SP else BASE_WEATHER_UNIT_SP
@@ -1146,7 +1742,7 @@ private fun WeatherCard(state: BriefingState, scale: Float, modifier: GlanceModi
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .cornerRadius(12.dp)
+            .cornerRadius(cornerRadiusDp)
             .background(ColorProvider(WEATHER_BG))
             .padding(cardPadding),
         verticalAlignment = Alignment.CenterVertically,
@@ -1191,14 +1787,14 @@ private fun WeatherCard(state: BriefingState, scale: Float, modifier: GlanceModi
             // differ (confirmed 2026-07-13, live device: high/low visibly
             // mismatched size).
             Row {
-                state.weatherHighF?.let {
+                weatherHighF?.let {
                     Text(text = "↑$it°", style = TextStyle(fontSize = (hiloSp * scale).sp,
                         color = ColorProvider(Color.White)))
                 }
-                if (state.weatherHighF != null && state.weatherLowF != null) {
+                if (weatherHighF != null && weatherLowF != null) {
                     Spacer(modifier = GlanceModifier.width(hiloGap))
                 }
-                state.weatherLowF?.let {
+                weatherLowF?.let {
                     Text(text = "↓$it°", style = TextStyle(fontSize = (hiloSp * scale).sp,
                         color = ColorProvider(Color.White)))
                 }
@@ -1229,9 +1825,9 @@ private fun WeatherCard(state: BriefingState, scale: Float, modifier: GlanceModi
             modifier = if (compact) GlanceModifier.defaultWeight() else GlanceModifier,
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text(text = weatherEmoji(state.weatherCondition),
+            Text(text = weatherEmoji(weatherCondition),
                 style = TextStyle(fontSize = (iconSp * scale).sp))
-            state.weatherCondition?.let {
+            weatherCondition?.let {
                 Text(text = it, maxLines = 1, style = TextStyle(fontSize = (conditionSp * scale).sp,
                     color = ColorProvider(Color.White), textAlign = TextAlign.Center))
             }
@@ -1239,16 +1835,38 @@ private fun WeatherCard(state: BriefingState, scale: Float, modifier: GlanceModi
     }
 }
 
+/** Trailing "+N more" line for a truncated list -- so a cap (whether from
+ * allocateDynamicListCounts's height budget or a server-side hard cap like
+ * EVENTS_HARD_CEILING) is always VISIBLE as a cap, not indistinguishable
+ * from "that's everything." A silent cut, even a correctly height-aware
+ * one, still looks like a complete list unless it says otherwise. */
+@Composable
+private fun OverflowIndicator(hiddenCount: Int) {
+    if (hiddenCount <= 0) return
+    Text(
+        text = "+$hiddenCount more",
+        style = TextStyle(color = GlanceTheme.colors.onSurfaceVariant),
+    )
+}
+
 /** Today's real calendar events -- shown above "Up next" and independent of
  * the LLM-generated briefing text, since a $0 family event or anything not
  * framed as "at risk" would otherwise never surface (confirmed 2026-07-12:
  * a same-day BBQ went unmentioned because it wasn't a risk/deadline). This
  * is the deterministic "don't forget you have an obligation" line, not
- * advisory. */
+ * advisory.
+ *
+ * [maxShown] comes from allocateDynamicListCounts (shared across every
+ * dynamic list enabled in this instance) rather than showing every event
+ * unconditionally -- until 2026-07-15 this rendered the full list with NO
+ * height-awareness at all, meaning enough events could already silently
+ * push the freshness line off the bottom on their own, independent of
+ * whatever fix UP_NEXT had received. */
 @Composable
-private fun EventsSection(events: List<TodayEvent>) {
+private fun EventsSection(events: List<TodayEvent>, maxShown: Int) {
+    val toShow = events.take(maxShown)
     Column(modifier = GlanceModifier.padding(top = 8.dp)) {
-        for (event in events) {
+        for (event in toShow) {
             Text(
                 text = formatEventLine(event),
                 style = TextStyle(
@@ -1257,6 +1875,7 @@ private fun EventsSection(events: List<TodayEvent>) {
                 ),
             )
         }
+        OverflowIndicator(events.size - toShow.size)
     }
 }
 
@@ -1274,6 +1893,112 @@ private fun UpNextSection(tasks: List<NextTask>, maxTasks: Int) {
         for (task in tasksToShow) {
             NextTaskRow(task)
         }
+        OverflowIndicator(tasks.size - tasksToShow.size)
+    }
+}
+
+/** Upcoming, deterministic, infrequent/one-off calendar events (see
+ * server-side notable_events.py's rolling-next-7-days window, NOT a fixed
+ * calendar week) -- a haircut every 5 weeks, a doctor's appointment, a BBQ,
+ * as opposed to [EventsSection]'s "every timed event TODAY regardless of
+ * recurrence." Single composable branching on [LocalSize.current], matching
+ * [WeatherCard]'s pattern (see the Android conventions doc: one composable
+ * per section, not duplicated per-bucket copies) -- collapses to just the
+ * soonest event at small sizes (the "LifeOps Events" solo preset's
+ * 1x1/2x1 footprint), shows the fuller (height-budgeted) list otherwise.
+ * [maxShown] is only consulted in the list path; it comes from
+ * allocateDynamicListCounts, shared with TODAY_EVENTS/UP_NEXT so all three
+ * can't jointly overflow the widget.
+ *
+ * Renders an explicit empty state, rather than nothing at all, when
+ * [events] is empty -- unlike money/weather/social (whose null fields only
+ * ever mean "hasn't fetched yet," a transient bootstrap state), a genuinely
+ * empty upcoming-events list is a normal, common, VALID result (most weeks
+ * have zero one-off events), so the standalone "LifeOps Events" widget
+ * previously just rendered as a permanent blank box whenever that was true
+ * -- not a bug in the data, but a real gap in the widget (confirmed
+ * 2026-07-15: "what if we don't have any events there? ... this widget
+ * should be dynamic"). */
+@Composable
+private fun NotableEventsSection(events: List<NotableEvent>, maxShown: Int, scale: Float) {
+    val compact = LocalSize.current.height < MEDIUM_SIZE.height
+    if (events.isEmpty()) {
+        if (compact) {
+            SoloStatCard(label = "EVENTS", value = "None", status = "CLEAR",
+                accent = MONEY_SOLO_OK_ACCENT, scale = scale, modifier = GlanceModifier.fillMaxSize())
+        } else {
+            Column(modifier = GlanceModifier.padding(top = 8.dp)) {
+                Text(
+                    text = "Coming up",
+                    style = TextStyle(fontWeight = FontWeight.Bold, color = GlanceTheme.colors.onSurface),
+                )
+                Text(
+                    text = "Nothing scheduled",
+                    style = TextStyle(color = GlanceTheme.colors.onSurfaceVariant),
+                )
+            }
+        }
+        return
+    }
+    if (compact) {
+        // Same dark card/label/value/status-bar shape every other solo
+        // single-stat preset now uses (SoloMoneyTile, SoloCourseworkTile,
+        // SoloSleepTile, SocialFocusTile) -- until this change, this was
+        // the one solo preset still rendering as plain unstyled Text,
+        // inconsistent with the rest of the family (2026-07-15: "make the
+        // ux of the unusual events consistent with the vibe for the other
+        // widgets").
+        SoloNotableEventTile(events.first(), scale, modifier = GlanceModifier.fillMaxSize())
+        return
+    }
+    val toShow = events.take(maxShown)
+    Column(modifier = GlanceModifier.padding(top = 8.dp)) {
+        Text(
+            text = "Coming up",
+            style = TextStyle(fontWeight = FontWeight.Bold, color = GlanceTheme.colors.onSurface),
+        )
+        for (event in toShow) {
+            NotableEventChip(event, scale, modifier = GlanceModifier.fillMaxWidth().padding(top = 4.dp))
+        }
+        OverflowIndicator(events.size - toShow.size)
+    }
+}
+
+// No severity dimension for a notable event (it's informational, not "at
+// risk" like money/coursework) -- always the neutral/OK accent, same as
+// SocialFocusTile's own "planned" (days-until known) case.
+@Composable
+private fun SoloNotableEventTile(event: NotableEvent, scale: Float, modifier: GlanceModifier) {
+    SoloStatCard(
+        label = "EVENTS",
+        value = event.title,
+        status = event.weekday.take(3).uppercase(),
+        accent = MONEY_SOLO_OK_ACCENT,
+        scale = scale,
+        modifier = modifier,
+    )
+}
+
+// Same rounded, tinted-background chip shape SocialTile/StatTile already
+// use for the full combo widget's shared-row content, so a notable event
+// reads as one consistent family of tile with the rest of the widget
+// rather than a plain unstyled text line sitting next to them.
+@Composable
+private fun NotableEventChip(event: NotableEvent, scale: Float, modifier: GlanceModifier = GlanceModifier) {
+    Row(
+        modifier = modifier
+            .cornerRadius(10.dp)
+            .background(GlanceTheme.colors.surfaceVariant)
+            .padding(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(text = "📅", style = TextStyle(fontSize = (17f * scale).sp))
+        Spacer(modifier = GlanceModifier.width(4.dp))
+        // NotableEventLine (day/time in their own fixed-width columns, then
+        // title) -- same reasoning as ComboEventsTile: this is also a
+        // stacked list (NotableEventsSection renders several of these), so
+        // it has the identical alignment need.
+        NotableEventLine(event, scale, 15f)
     }
 }
 
@@ -1353,6 +2078,47 @@ private const val BASE_GYM_RING_SIZE_DP = 48
 private const val BASE_GYM_RING_STROKE_DP = 5
 private const val BASE_GYM_RING_EMOJI_SP = 22f
 private val GYM_RING_RED = Color(0xFFB3261E)
+
+@Composable
+private fun SoloGymTile(gymRing: GymRing, scale: Float, modifier: GlanceModifier) {
+    val status = when {
+        gymRing.todayDone -> "DONE"
+        gymRing.color == "yellow" -> "TODAY"
+        gymRing.color == "red" -> "START"
+        else -> "OK TODAY"
+    }
+    SoloStatCard(
+        label = "GYM",
+        value = "${gymRing.gymLast7d}/${gymRing.gymTarget}",
+        status = status,
+        accent = gymAccent(gymRing.color),
+        scale = scale,
+        modifier = modifier,
+    )
+}
+
+@Composable
+private fun SoloGymFallbackTile(completed: Int, target: Int, scale: Float, modifier: GlanceModifier) {
+    val color = when {
+        completed <= 0 -> "red"
+        completed >= target -> "green"
+        else -> "yellow"
+    }
+    SoloStatCard(
+        label = "GYM",
+        value = "$completed/$target",
+        status = "7 DAYS",
+        accent = gymAccent(color),
+        scale = scale,
+        modifier = modifier,
+    )
+}
+
+private fun gymAccent(color: String): Color = when (color) {
+    "green" -> MONEY_SOLO_OK_ACCENT
+    "yellow" -> MONEY_SOLO_WATCH_ACCENT
+    else -> MONEY_SOLO_RISK_ACCENT
+}
 
 /** Draws the ring as a bitmap via plain android.graphics.Canvas/Paint --
  * Glance has no native arc/canvas composable, so this is the standard
@@ -1524,6 +2290,68 @@ private fun formatEventLine(event: TodayEvent): String {
         }
     }
     return if (time != null) "${event.title} @ $time" else event.title
+}
+
+/** 3-letter day abbreviation, the first of the two "when" pieces -- kept
+ * separate from [notableEventTime] (rather than one combined "Thu 6:00 PM"
+ * string) so callers render each in its OWN fixed-width column. That's the
+ * only way to get real pixel alignment down a scrollable list with a
+ * proportional font: matching character COUNT at the same string index
+ * ("Thu "/"Fri "/"Sat " are all 4 characters) still doesn't guarantee the
+ * same x-coordinate once rendered, since a proportional font's glyphs
+ * aren't equal-width (confirmed 2026-07-15 research: real agenda/calendar
+ * widgets, and tabular/monospaced-figure typography generally, solve
+ * exactly this by giving numeric/date columns their own fixed width
+ * rather than relying on character count within one string). */
+internal fun notableEventDay(event: NotableEvent): String = event.weekday.take(3)
+
+/** "6:00 PM", or null if [event]'s start is missing/unparseable -- same
+ * "show it anyway rather than drop it" reasoning as formatEventLine. */
+internal fun notableEventTime(event: NotableEvent): String? = event.start?.let {
+    try {
+        LocalDateTime.parse(it).format(EVENT_TIME_FORMAT)
+    } catch (e: DateTimeParseException) {
+        null
+    }
+}
+
+// Fixed sub-column widths for [NotableEventLine] -- see notableEventDay's
+// doc for why these need to be real layout columns, not just consistent
+// character counts. Not a real measurement (Glance/RemoteViews has no
+// layout-measurement API, same caveat as maxTasksForHeight elsewhere in
+// this file) -- just wide enough for "Sat"/"12:00 PM" at each caller's
+// font size without starving the title column.
+private const val NOTABLE_EVENT_DAY_WIDTH_DP = 26
+private const val NOTABLE_EVENT_TIME_WIDTH_DP = 54
+
+/** Shared by [ComboEventsTile] and [NotableEventChip]: day column, then
+ * time column (both fixed-width, [FontFamily.Monospace] so the digits
+ * themselves are equal-width too -- the same tabular-figure technique real
+ * UIs use for numeric columns, since Glance's TextStyle has no
+ * font-feature-settings/tabular-nums support to reach for directly), then
+ * the title filling the rest of the row. Time-leading (day+time before
+ * title) matches how real agenda/calendar widgets convey a scannable "when"
+ * list -- not [formatEventLine]'s trailing "@ time" (that convention fits
+ * TODAY_EVENTS, a same-day list where a bare time is enough; NOTABLE_EVENTS
+ * spans this whole week, so it needs a day too). */
+@Composable
+private fun NotableEventLine(event: NotableEvent, scale: Float, fontSp: Float, modifier: GlanceModifier = GlanceModifier) {
+    val monospaceStyle = TextStyle(fontWeight = FontWeight.Bold, fontSize = (fontSp * scale).sp,
+        fontFamily = FontFamily.Monospace, color = GlanceTheme.colors.onSurface)
+    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
+        Text(text = notableEventDay(event), maxLines = 1, style = monospaceStyle,
+            modifier = GlanceModifier.width((NOTABLE_EVENT_DAY_WIDTH_DP * scale).dp))
+        notableEventTime(event)?.let { time ->
+            Text(text = time, maxLines = 1, style = monospaceStyle,
+                modifier = GlanceModifier.width((NOTABLE_EVENT_TIME_WIDTH_DP * scale).dp))
+        }
+        Text(
+            text = event.title,
+            maxLines = 1,
+            style = TextStyle(fontWeight = FontWeight.Bold, fontSize = (fontSp * scale).sp,
+                color = GlanceTheme.colors.onSurface),
+        )
+    }
 }
 
 /** Coarse "Xm/Xh/Xd ago" label from an epoch-millis timestamp to now. */

@@ -7,6 +7,12 @@ change matter more here than semver strictness.
 ## [1.18.0] — 2026-07-15
 
 ### Added
+- **LifeOps Combo widget now follows the same widget design system as the
+  standalone cards.** The combo preset uses the shared solo-card
+  label/value/status/accent model for money, social, and coursework
+  instead of duplicating one-off presentation logic, and its setup preview
+  now consumes the same presentation data as the real Glance widget so the
+  two surfaces do not drift.
 - **Weather now follows your phone's actual location, and no longer
   depends on the LifeOps server being reachable at all.** Previously
   `weather.py` only ever ran once/day (inside the morning briefing) at a

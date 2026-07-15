@@ -60,6 +60,8 @@ class CourseworkWidgetReceiver : BaseBriefingWidgetReceiver()
 class WeatherWidgetReceiver : BaseBriefingWidgetReceiver()
 class SleepWidgetReceiver : BaseBriefingWidgetReceiver()
 class SocialWidgetReceiver : BaseBriefingWidgetReceiver()
+class EventsWidgetReceiver : BaseBriefingWidgetReceiver()
+class ComboWidgetReceiver : BaseBriefingWidgetReceiver()
 
 private fun totalWidgetInstanceCount(context: Context): Int {
     val manager = AppWidgetManager.getInstance(context)

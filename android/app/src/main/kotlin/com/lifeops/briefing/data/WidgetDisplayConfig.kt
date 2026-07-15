@@ -14,6 +14,11 @@ import org.json.JSONObject
 enum class WidgetSection {
     SEVERITY_DOTS, GYM_RING, MONEY_TILE, COURSEWORK_TILE,
     BRIEFING_PARAGRAPH, TODAY_EVENTS, UP_NEXT, WEATHER, SLEEP_TILE, SOCIAL,
+    // Upcoming (rolling next-7-days, NOT a fixed calendar week), deterministic,
+    // infrequent/one-off calendar events (see server-side notable_events.py) --
+    // distinct from TODAY_EVENTS, which is every timed event happening TODAY
+    // regardless of how often it recurs.
+    NOTABLE_EVENTS,
 }
 
 /** Per-widget-instance display customization -- which sections show, in what
@@ -40,11 +45,19 @@ data class WidgetDisplayConfig(
         WidgetSection.WEATHER,
         WidgetSection.SOCIAL,
         WidgetSection.TODAY_EVENTS,
+        WidgetSection.NOTABLE_EVENTS,
         WidgetSection.UP_NEXT,
     ),
     val hiddenSections: Set<WidgetSection> = emptySet(),
     val scale: Float = 1.0f,
     val maxTasksOverride: Int? = null,
+    // True only for the "LifeOps Combo" preset (see [comboGrid]) -- tells
+    // BriefingContent to skip the normal section-order/TileRow rendering
+    // entirely and render the dedicated gapless 2x2 ComboGridContent
+    // instead. hiddenSections/sectionOrder are still populated by
+    // [comboGrid] for consistency with WidgetConfigActivity's toggles, but
+    // ComboGridContent ignores them -- this flag is checked first.
+    val comboGrid: Boolean = false,
 ) {
     fun toJson(): String = JSONObject().apply {
         put("sectionOrder", JSONArray().apply {
@@ -55,6 +68,7 @@ data class WidgetDisplayConfig(
         })
         put("scale", scale.toDouble())
         put("maxTasksOverride", maxTasksOverride)
+        put("comboGrid", comboGrid)
     }.toString()
 
     companion object {
@@ -74,6 +88,26 @@ data class WidgetDisplayConfig(
          * the full widget uses. */
         fun singleStat(section: WidgetSection): WidgetDisplayConfig = WidgetDisplayConfig(
             hiddenSections = WidgetSection.entries.filter { it != section }.toSet(),
+        )
+
+        /** Starting config for the "LifeOps Combo" preset: a single 4x2
+         * widget instance whose left 2x2 half merges money/social/coursework
+         * (equispaced, gapless top row) and weather (gapless bottom row),
+         * and whose right 2x2 half is notable events, all as one continuous
+         * surface instead of five separate single-stat widgets placed side
+         * by side (which always have the launcher's own grid gaps between
+         * them). hiddenSections mirrors what's actually shown so the
+         * configure screen's toggles don't look inconsistent with this
+         * preset, even though rendering itself branches on [comboGrid]
+         * before ever consulting sectionOrder/hiddenSections. */
+        private val COMBO_GRID_SECTIONS = setOf(
+            WidgetSection.MONEY_TILE, WidgetSection.SOCIAL, WidgetSection.COURSEWORK_TILE,
+            WidgetSection.WEATHER, WidgetSection.NOTABLE_EVENTS,
+        )
+
+        fun comboGrid(): WidgetDisplayConfig = WidgetDisplayConfig(
+            hiddenSections = WidgetSection.entries.filter { it !in COMBO_GRID_SECTIONS }.toSet(),
+            comboGrid = true,
         )
 
         /** Unknown/removed enum values (e.g. an older or newer app version's
@@ -109,6 +143,7 @@ data class WidgetDisplayConfig(
                 } else {
                     o.optInt("maxTasksOverride", -1).takeIf { it > 0 }
                 },
+                comboGrid = o.optBoolean("comboGrid", false),
             )
         }
     }

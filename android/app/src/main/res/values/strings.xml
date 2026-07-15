@@ -7,6 +7,8 @@
     <string name="widget_name_weather">LifeOps Weather</string>
     <string name="widget_name_sleep">LifeOps Sleep</string>
     <string name="widget_name_social">LifeOps Social</string>
+    <string name="widget_name_events">LifeOps Events</string>
+    <string name="widget_name_combo">LifeOps Combo</string>
     <string name="widget_description_briefing">Status, stats, schedule, and next tasks from LifeOps.</string>
     <string name="widget_description_gym">Gym progress from LifeOps.</string>
     <string name="widget_description_money">Discretionary budget from LifeOps.</string>
@@ -14,6 +16,8 @@
     <string name="widget_description_weather">Current weather from LifeOps.</string>
     <string name="widget_description_sleep">Recent sleep duration from LifeOps.</string>
     <string name="widget_description_social">Partner and friend follow-up timing from LifeOps.</string>
+    <string name="widget_description_events">Upcoming notable one-off events from LifeOps.</string>
+    <string name="widget_description_combo">Discretionary budget, social, coursework, weather, and notable events from LifeOps in one gapless 4x2 widget.</string>
     <string name="widget_preview_briefing_status">◆ WATCH</string>
     <string name="widget_preview_briefing_text">Briefing: handle the important task first, then protect the next block.</string>
     <string name="widget_preview_up_next">Up next: submit assignment · gym · budget check</string>
@@ -25,4 +29,6 @@
     <string name="widget_preview_friends">5d friends</string>
     <string name="widget_preview_weather_temp">72°</string>
     <string name="widget_preview_weather_condition">☀ Sunny</string>
+    <string name="widget_preview_events_title">Haircut</string>
+    <string name="widget_preview_events_weekday">Thursday</string>
 </resources>

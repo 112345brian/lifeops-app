@@ -140,6 +140,30 @@
                 android:resource="@xml/social_widget_info" />
         </receiver>
 
+        <receiver
+            android:name=".EventsWidgetReceiver"
+            android:exported="true"
+            android:label="@string/widget_name_events">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/events_widget_info" />
+        </receiver>
+
+        <receiver
+            android:name=".ComboWidgetReceiver"
+            android:exported="true"
+            android:label="@string/widget_name_combo">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/combo_widget_info" />
+        </receiver>
+
         <!-- Receives the daily briefing via Firebase Cloud Messaging:
              reliable even when the app is stopped, unlike a manifest
              broadcast receiver for a third-party implicit broadcast. -->

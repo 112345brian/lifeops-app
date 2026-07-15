@@ -27,7 +27,7 @@ class WidgetDisplayConfigTest {
                 WidgetSection.SEVERITY_DOTS, WidgetSection.BRIEFING_PARAGRAPH,
                 WidgetSection.GYM_RING, WidgetSection.MONEY_TILE, WidgetSection.COURSEWORK_TILE,
                 WidgetSection.SLEEP_TILE, WidgetSection.WEATHER, WidgetSection.SOCIAL,
-                WidgetSection.TODAY_EVENTS, WidgetSection.UP_NEXT,
+                WidgetSection.TODAY_EVENTS, WidgetSection.NOTABLE_EVENTS, WidgetSection.UP_NEXT,
             ),
             config.sectionOrder,
         )
@@ -45,7 +45,7 @@ class WidgetDisplayConfigTest {
                 WidgetSection.UP_NEXT, WidgetSection.SEVERITY_DOTS, WidgetSection.GYM_RING,
                 WidgetSection.MONEY_TILE, WidgetSection.COURSEWORK_TILE, WidgetSection.WEATHER,
                 WidgetSection.SLEEP_TILE, WidgetSection.SOCIAL,
-                WidgetSection.BRIEFING_PARAGRAPH, WidgetSection.TODAY_EVENTS,
+                WidgetSection.BRIEFING_PARAGRAPH, WidgetSection.TODAY_EVENTS, WidgetSection.NOTABLE_EVENTS,
             ),
             hiddenSections = setOf(WidgetSection.SEVERITY_DOTS, WidgetSection.TODAY_EVENTS),
             scale = 1.2f,

@@ -92,6 +92,42 @@ class BriefingStateTest {
     }
 
     @Test
+    fun parsesNotableEventsAndRoundTripsThroughJson() {
+        // Matches notable_events.this_weeks_notable_events's own
+        // {title, date, weekday} shape (see the Python module) --
+        // "weekday" is spelled out server-side so the widget never needs
+        // its own date math.
+        val raw = """{
+            "date":"2026-07-15",
+            "text":"All clear.",
+            "facts":{"notable_events":[
+                {"title":"Haircut","date":"2026-07-18","weekday":"Saturday"},
+                {"title":"Dentist","date":"2026-07-20","weekday":"Monday"}
+            ]}
+        }"""
+
+        val state = BriefingState.fromApiResponse(raw, 1L)
+
+        assertEquals(
+            listOf(
+                NotableEvent("Haircut", "2026-07-18", "Saturday"),
+                NotableEvent("Dentist", "2026-07-20", "Monday"),
+            ),
+            state.notableEvents,
+        )
+        assertEquals(state, BriefingState.fromJson(state.toJson()))
+    }
+
+    @Test
+    fun notableEventsIsEmptyWhenAbsentFromResponse() {
+        val raw = """{"date":"2026-07-15", "text":"All clear.", "facts":{}}"""
+
+        val state = BriefingState.fromApiResponse(raw, 1L)
+
+        assertEquals(emptyList<NotableEvent>(), state.notableEvents)
+    }
+
+    @Test
     fun weatherFieldsAreNullWhenExplicitJsonNull() {
         // Python sends explicit JSON null for every weather_* fact when the
         // NWS API is unconfigured/unreachable -- must read back as null,
