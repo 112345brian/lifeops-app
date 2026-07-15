@@ -4,6 +4,26 @@ Notable changes, newest first. Personal project, versioned simply (see
 `VERSION` / `lifeops.__version__`) — dates and the reasoning behind each
 change matter more here than semver strictness.
 
+## [1.17.1] — 2026-07-14
+
+### Fixed
+- High-effort code review of the v1.17.0 batch (cross-confirmed by 5
+  independent finder passes) surfaced and fixed: the social lock-in
+  mechanism (converting a completed "Plan X" task into a real scheduled
+  hangout) had been deleted with nothing replacing it -- completing
+  "Plan Partner time"/"Plan Friends" silently did nothing, forever, and
+  the orphaned tentative placeholder kept satisfying the weekly cadence
+  check so it was never re-proposed either. Restored. Also fixed:
+  `PROPOSE_AHEAD_DAYS <= 3` (user-editable via Settings) silently emptied
+  the weekly hangout-proposal candidate window with no error; the
+  wind-down task pruning pass hardcoded "Tue" independently of
+  `gym_engine`'s own configurable exempt-weekday rule; a redundant
+  FlowSavvy API call in `social_input` that already had a per-tick cache
+  available; a missing CSS accent for the social summary card's "ok"
+  tone; and (Android) `SoloMoneyTile`/`SocialFocusTile` were ~50 lines of
+  hand-copied identical composables, consolidated into one shared
+  `SoloStatCard`.
+
 ## [1.17.0] — 2026-07-14
 
 ### Changed
