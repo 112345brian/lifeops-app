@@ -149,6 +149,40 @@ def test_gym_ring_now_red_after_a_week_with_no_sessions(tmp_path, monkeypatch):
     assert ring == {"fill": 0.0, "color": "red", "gym_last_7d": 0, "gym_target": 4, "today_done": False}
 
 
+class _FakePaginatedFlowSavvy:
+    """Splits itemType="event" across multiple pages via nextPageToken, the
+    way the real FlowSavvy API does on an account with more events than fit
+    in one page -- reproduces the 2026-07-14 bug where _all_events_cached
+    made a single unpaginated call and silently never saw anything past
+    page 1 (on a real account, that meant every event less than ~a year
+    old, including same-day friend/partner hangouts, was invisible)."""
+
+    def __init__(self, pages):
+        self._pages = pages
+
+    def list_items(self, **kwargs):
+        if kwargs.get("itemType") != "event":
+            return {"items": []}
+        idx = 0
+        token = kwargs.get("pageToken")
+        if token is not None:
+            idx = int(token)
+        items = self._pages[idx]
+        next_token = str(idx + 1) if idx + 1 < len(self._pages) else None
+        return {"items": items, "nextPageToken": next_token}
+
+
+def test_all_events_cached_pages_through_every_result(monkeypatch):
+    monkeypatch.setattr(gather, "_ALL_EVENTS_CACHE", {})
+    old_page = [{"id": "1", "title": "Ancient event"}]
+    new_page = [{"id": "2", "title": "Chloe", "notes": "type: friends"}]
+    fs = _FakePaginatedFlowSavvy([old_page, new_page])
+
+    events = gather._all_events_cached(fs)
+
+    assert events == old_page + new_page
+
+
 class _FakeSpendFlowSavvy:
     """calendar_events maps calendarId -> its events; list_items with no
     calendarId returns the union across every calendar (mirrors the real

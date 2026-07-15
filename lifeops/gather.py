@@ -443,11 +443,30 @@ def today_events_input(fs, now, n=5, schedule_items=None):
 _ALL_EVENTS_CACHE = {}
 
 def _all_events_cached(fs):
+    """A single unpaginated call only returns the API's default page (items
+    ordered by id ascending) -- on an account with a large Google Calendar
+    import behind it, that page never reaches the present day, so every
+    caller silently saw only ancient events (confirmed 2026-07-14: a friend
+    hangout event created same-day was invisible to social_input's "next
+    hangout" detection because it was far past page 1). Page through
+    nextPageToken until exhausted; the 50-page cap is only a runaway-loop
+    backstop, not an expected limit."""
     if "events" not in _ALL_EVENTS_CACHE:
+        events = []
         try:
-            _ALL_EVENTS_CACHE["events"] = fs.list_items(itemType="event").get("items", [])
+            page_token = None
+            for _ in range(50):
+                params = {"itemType": "event", "limit": 200}
+                if page_token:
+                    params["pageToken"] = page_token
+                resp = fs.list_items(**params)
+                events.extend(resp.get("items", []))
+                page_token = resp.get("nextPageToken")
+                if not page_token:
+                    break
         except Exception:
-            _ALL_EVENTS_CACHE["events"] = []
+            pass
+        _ALL_EVENTS_CACHE["events"] = events
     return _ALL_EVENTS_CACHE["events"]
 
 def spend_input(fs, yn, now):
