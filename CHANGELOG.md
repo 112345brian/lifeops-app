@@ -4,6 +4,13 @@ Notable changes, newest first. Personal project, versioned simply (see
 `VERSION` / `lifeops.__version__`) — dates and the reasoning behind each
 change matter more here than semver strictness.
 
+## [1.18.5] — 2026-07-15
+
+### Changed
+- **New widget instances default to the larger legible text scale.** Widget
+  display config now has an explicit `DEFAULT_SCALE` of `1.3x`, and JSON
+  payloads without a saved scale fall back to that value instead of `1.0x`.
+
 ## [1.18.4] — 2026-07-15
 
 ### Changed
