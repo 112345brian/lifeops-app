@@ -1,56 +1,75 @@
 {% extends "base.html" %}
 {% block content %}
 
-<div class="card section" id="attention" style="border-left:5px solid var(--{{ 'md-error' if attention.state in ['risk', 'fucked'] else 'md-primary' }});">
-  <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;">
+<div class="ops-stack section">
+<div class="card ops-hero {{ 'ops-hero-risk' if attention.state in ['risk', 'fucked'] else '' }}" id="attention">
+  <div class="ops-hero-head">
     <div>
-      <div class="card-title">Attention</div>
-      <div style="font-size:22px;font-weight:800;">{{ attention.symbol }} {{ attention.label }}</div>
+      <div class="ops-state-label">Attention</div>
+      <div class="ops-state-value">{{ attention.symbol }} {{ attention.label }}</div>
     </div>
-    <div style="font-size:14px;max-width:34rem;">{{ attention.headline }}</div>
+    <div class="ops-headline">{{ attention.headline }}</div>
   </div>
   {% if attention.reasons %}
-  <div class="divider"></div>
+  <div class="ops-reasons">
   {% for reason in attention.reasons %}
-  <div class="hist-row" style="align-items:flex-start;">
+  <div class="ops-reason">
     <span class="badge {{ 'badge-off' if reason.severity in ['risk', 'fucked'] else 'badge-on' }}">{{ reason.domain }}</span>
     <span><b>{{ reason.title }}</b><br><span class="muted">{{ reason.recommended_action }}</span></span>
   </div>
   {% endfor %}
+  </div>
   {% endif %}
 </div>
 
 {% if briefing %}
 <!-- ── Today's briefing (run_briefing) ── -->
-<div class="card section" id="briefing">
+<div class="card" id="briefing">
   <div class="card-title">☀️ Today's briefing</div>
-  <div style="font-size:14px;line-height:1.5;">{{ briefing.text }}</div>
+  <div class="briefing-text">{{ briefing.text }}</div>
   {% if briefing.facts %}
-  <div class="gym-note" style="margin-top:.5rem;">
-    {% if briefing.facts.due_today %}<b>Due today:</b> {{ briefing.facts.due_today|join(', ') }}. {% endif %}
-    <b>Next 7d coursework:</b> ~{{ briefing.facts.coursework_hours_next_7d }}h ·
-    <b>Gym:</b> {{ briefing.facts.gym_last_7d }}/{{ briefing.facts.gym_target }} (7d){% if briefing.facts.discretionary_dollars is not none %} ·
-    <b>Discretionary:</b> ${{ briefing.facts.discretionary_dollars }}{% endif %}
+  <div class="kpi-grid">
+    {% if briefing.facts.due_today %}
+    <div class="kpi">
+      <div class="kpi-label">Due today</div>
+      <div class="kpi-value">{{ briefing.facts.due_today|join(', ') }}</div>
+    </div>
+    {% endif %}
+    <div class="kpi">
+      <div class="kpi-label">Coursework</div>
+      <div class="kpi-value">~{{ briefing.facts.coursework_hours_next_7d }}h next 7d</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Gym</div>
+      <div class="kpi-value">{{ briefing.facts.gym_last_7d }}/{{ briefing.facts.gym_target }} trailing 7d</div>
+    </div>
+    {% if briefing.facts.discretionary_dollars is not none %}
+    <div class="kpi">
+      <div class="kpi-label">Discretionary</div>
+      <div class="kpi-value">${{ briefing.facts.discretionary_dollars }}</div>
+    </div>
+    {% endif %}
   </div>
   {% endif %}
 </div>
 {% endif %}
+</div>
 
 {% if cashflow %}
 <!-- ── Cash-flow projection (run_cashflow; panel-only, no notifications) ── -->
-<div class="card section" id="cashflow"{% if cashflow.dips_below_zero %} style="border:1px solid var(--md-error);"{% endif %}>
+<div class="card section {{ 'card-risk' if cashflow.dips_below_zero else '' }}" id="cashflow">
   <div class="card-title">📈 Discretionary projection
     <span class="muted" style="text-transform:none;font-weight:400;font-size:10px">
       — next 4 weeks · start ${{ cashflow.start_balance }}
     </span>
   </div>
   {% for w in cashflow.weeks %}
-  <div class="hist-row" style="align-items:center;gap:.5rem;">
-    <span class="hist-ts" style="min-width:3.5rem;">wk {{ w.week }}</span>
-    <span style="flex:1;height:10px;border-radius:5px;background:var(--md-surface-container-high);overflow:hidden;">
-      <span style="display:block;height:100%;width:{{ w.bar_pct }}%;background:{{ 'var(--md-error)' if w.negative else 'var(--green)' }};"></span>
+  <div class="progress-row">
+    <span class="hist-ts">wk {{ w.week }}</span>
+    <span class="progress-track">
+      <span class="progress-fill {{ 'progress-fill-risk' if w.negative else '' }}" style="--pct: {{ w.bar_pct }}%;"></span>
     </span>
-    <span style="min-width:4rem;text-align:right;{% if w.negative %}color:var(--md-error);{% endif %}">${{ w.balance }}</span>
+    <span class="money-value {{ 'money-value-risk' if w.negative else '' }}">${{ w.balance }}</span>
     {% if w.spent %}<span class="hist-meta">−${{ w.spent }}</span>{% endif %}
   </div>
   {% endfor %}
@@ -67,23 +86,14 @@
 <div class="card section" id="upcoming-events">
   <div class="card-title">📅 Upcoming events</div>
   {% for e in cashflow.events %}
-  <div class="hist-row" style="align-items:center;gap:.5rem;">
-    <span class="hist-ts" style="min-width:4.5rem;">{{ e.days_until }}d</span>
-    <span style="flex:1;">{{ e.label }}</span>
+  <div class="event-row">
+    <span class="hist-ts">{{ e.days_until }}d</span>
+    <span>{{ e.label }}</span>
     {% if e.cost %}<span class="hist-meta">${{ e.cost }}</span>{% endif %}
   </div>
   {% endfor %}
 </div>
 {% endif %}
-
-<!-- ── Stat pills ── -->
-<div class="stats-row">
-  <div class="stat-pill">
-    <span>🏋️</span>
-    <span class="num">{{ gym_stats.this_week }}</span>
-    <span class="lbl">gym this week</span>
-  </div>
-</div>
 
 <!-- ── Two-col grid: Domains + Reference ── -->
 <div class="grid-2 section">

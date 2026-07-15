@@ -4,6 +4,16 @@ Notable changes, newest first. Personal project, versioned simply (see
 `VERSION` / `lifeops.__version__`) — dates and the reasoning behind each
 change matter more here than semver strictness.
 
+## [1.18.4] — 2026-07-15
+
+### Changed
+- **Panel Home now uses a denser command surface.** Attention and briefing
+  are grouped at the top, briefing facts render as KPI chips, and cashflow
+  and event rows use shared layout classes instead of one-off inline styling.
+- **Panel navigation is stickier and easier to scan on mobile.** The page
+  nav stays visible while scrolling and uses a translucent surface so the
+  operational pages remain easier to move between.
+
 ## [1.18.3] — 2026-07-15
 
 ### Changed

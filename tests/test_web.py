@@ -117,6 +117,39 @@ def test_recurring_page_shows_flowsavvy_outage_instead_of_500(monkeypatch):
     assert "FlowSavvy is unavailable" in response.text
 
 
+def test_home_panel_uses_command_surface_classes(monkeypatch):
+    monkeypatch.setattr(config, "WEB_TOKEN", "")
+    monkeypatch.setattr(web, "FlowSavvy", lambda: (_ for _ in ()).throw(AssertionError("network client")))
+
+    response = TestClient(web.app).get("/")
+
+    assert response.status_code == 200
+    assert 'class="card ops-hero' in response.text
+    assert 'class="ops-headline"' in response.text
+
+
+def test_home_briefing_renders_kpi_grid(monkeypatch):
+    monkeypatch.setattr(config, "WEB_TOKEN", "")
+    monkeypatch.setattr(web, "_today_briefing", lambda: {
+        "text": "Briefing text.",
+        "facts": {
+            "due_today": ["Paper"],
+            "coursework_hours_next_7d": 4.5,
+            "gym_last_7d": 2,
+            "gym_target": 4,
+            "discretionary_dollars": 80,
+        },
+    })
+    monkeypatch.setattr(web, "FlowSavvy", lambda: (_ for _ in ()).throw(AssertionError("network client")))
+
+    response = TestClient(web.app).get("/")
+
+    assert response.status_code == 200
+    assert 'class="kpi-grid"' in response.text
+    assert "Coursework" in response.text
+    assert "Discretionary" in response.text
+
+
 # ── Actions API ──────────────────────────────────────────────────────────
 
 @pytest.fixture
