@@ -6,8 +6,8 @@ day once you already know about it -- only genuinely NEW risk gets called
 out, worded directly from the data ("Finish X by Thursday 5pm") rather than
 run through an LLM that might phrase it vaguely or restate a number.
 """
-import datetime, json, os
-from . import history
+import datetime
+from . import state_store
 
 # Prune surfaced-item records once their due date is this far in the past --
 # bounds file growth. If the exact same title+due somehow recurs after that
@@ -17,23 +17,15 @@ _STALE_DAYS = 30
 
 
 def _alerted_file():
-    # A function, not a module-level constant -- history.ROOT is
-    # monkeypatched per-test (see fcm.py's _token_file for the same
-    # pattern).
-    return os.path.join(history.ROOT, "logs", "deadline_alerts_sent.json")
+    return state_store.logs_path("deadline_alerts_sent.json")
 
 
 def _load_alerted():
-    try:
-        return json.load(open(_alerted_file(), encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+    return state_store.load_json(_alerted_file(), default={}, require_type=dict)
 
 
 def _save_alerted(data):
-    path = _alerted_file()
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    json.dump(data, open(path, "w", encoding="utf-8"))
+    state_store.save_json_atomic(_alerted_file(), data)
 
 
 def _key(title, due_dt):

@@ -4,9 +4,9 @@ Each function takes structured facts and returns a structured decision — never
 free-roaming. Used for the genuinely subjective slivers (e.g. categorizing a
 novel payee). Everything deterministic lives in the engines, not here.
 """
-import json, os, time
+import json, time
 from anthropic import Anthropic
-from . import config, history
+from . import config, state_store
 
 _client = None
 def _c():
@@ -21,10 +21,7 @@ def _c():
 
 
 def _usage_log_file():
-    # A function, not a module-level constant -- history.ROOT is
-    # monkeypatched per-test (see fcm.py's _token_file for the same
-    # pattern).
-    return os.path.join(history.ROOT, "logs", "llm_usage.jsonl")
+    return state_store.logs_path("llm_usage.jsonl")
 
 
 def _log_usage(fn_name, model, msg):
@@ -39,13 +36,11 @@ def _log_usage(fn_name, model, msg):
         if usage is None:
             return
         path = _usage_log_file()
-        os.makedirs(os.path.dirname(path), exist_ok=True)
         line = json.dumps({
             "ts": time.time(), "fn": fn_name, "model": model,
             "input_tokens": usage.input_tokens, "output_tokens": usage.output_tokens,
         })
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
+        state_store.append_line(path, line)
     except Exception:
         pass  # cost visibility is a nice-to-have, never worth failing the actual call over
 
@@ -118,4 +113,4 @@ def weekly_digest(facts):
 # been carved out to deterministic code -- see risk_tracking.py/
 # notable_events.py). Not worth the cost, latency, or hallucination surface
 # for a call whose real output was "restate this string, but sound more
-# chief-of-staff about it." See runner.py's run_briefing/_compose_briefing_text.
+# chief-of-staff about it." See briefing_service.build/compose_text.

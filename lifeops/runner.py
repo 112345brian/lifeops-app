@@ -6,8 +6,9 @@ The LLM (lifeops.llm) is touched only for the judgment slivers.
 Run:  python -m lifeops.runner          # all wired domains
       python -m lifeops.runner gym      # one domain
 """
-import sys, os, re, io, json, datetime, contextlib, hashlib, requests
-from . import config, ntfy, notify, gather, lock, history, adherence, actions, attention, fcm
+import sys, os, re, io, json, datetime, contextlib, requests
+from . import config, ntfy, notify, gather, lock, history, adherence, actions, fcm
+from . import briefing_service, push_state, state_store
 from .flowsavvy import FlowSavvy
 from .ynab import YNAB
 from .engines import gym_engine, ynab_engine
@@ -21,15 +22,7 @@ _PRIO = {"urgent": "urgent", "high": "high", "none": "default"}
 _CANVAS_FLOOD_MAX = 8
 
 def _save_json_atomic(path, data):
-    """Write via a temp file + os.replace so a kill/crash mid-write (pythonw
-    under a task-scheduler timeout, no different) can't leave a truncated or
-    empty state file -- the exact failure mode behind canvas_state.json
-    going missing twice (2026-07-03, 2026-07-06) and canvas sync silently
-    re-extracting the whole course from scratch each time."""
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f)
-    os.replace(tmp, path)
+    state_store.save_json_atomic(path, data)
 
 def _logged_create(fs, domain, op="created", **kwargs):
     """fs.create_task + an audit-log entry ("LifeOps added X"), returning the
@@ -259,7 +252,7 @@ def ingest(fs, now):
     _save_json_atomic(sp, st)
 
 def _push_ack_state_file(msg_type):
-    return os.path.join(history.ROOT, "logs", f"push_ack_{msg_type}.json")
+    return push_state.state_file(msg_type)
 
 def _load_push_ack_state(sp):
     """Returns the parsed state dict, or None if missing/corrupt/not a dict
@@ -267,12 +260,7 @@ def _load_push_ack_state(sp):
     _mark_push_acked in particular runs inside ingest()'s per-message loop,
     where an uncaught exception would also drop the rest of that poll
     batch's ntfy_ts/handled_ntfy_msg_ids persistence)."""
-    try:
-        with open(sp, encoding="utf-8") as f:
-            state = json.load(f)
-    except Exception:
-        return None
-    return state if isinstance(state, dict) else None
+    return state_store.load_json(sp, default=None, require_type=dict)
 
 def _push_with_ack(msg_type, snapshot, push_fn):
     """Push-until-confirmed wrapper around an FCM send. messaging.send()
@@ -303,27 +291,14 @@ def _push_with_ack(msg_type, snapshot, push_fn):
     "don't do wasted round-trips on a fixed schedule" philosophy as spend/
     canvas being excluded from the tick tier elsewhere in this file governs
     the content-unchanged half of this check."""
-    version = hashlib.sha1(json.dumps(snapshot, sort_keys=True).encode()).hexdigest()[:16]
-    sp = _push_ack_state_file(msg_type)
-    state = _load_push_ack_state(sp)
-    if state and state.get("version") == version and state.get("acked"):
-        return
-    sent = push_fn(version)
-    if not sent:
-        return
-    os.makedirs(os.path.dirname(sp), exist_ok=True)
-    _save_json_atomic(sp, {"version": version, "acked": False})
+    return push_state.push_with_ack(msg_type, snapshot, push_fn)
 
 def _mark_push_acked(msg_type, version):
     """Called from ingest()'s ack:<type>:<version> signal handler. Only
     updates state if `version` matches the currently-tracked push -- an ack
     for a superseded version (e.g. the phone was slow to respond and a
     newer snapshot already went out) must not mark the NEW one acked."""
-    sp = _push_ack_state_file(msg_type)
-    state = _load_push_ack_state(sp)
-    if state and state.get("version") == version:
-        state["acked"] = True
-        _save_json_atomic(sp, state)
+    push_state.mark_acked(msg_type, version)
 
 def push_next_tasks(fs, now, args):
     """Pushes a fresh next-tasks + today's-events snapshot via FCM -- the
@@ -822,205 +797,20 @@ def run_briefing(fs, yn, now):
     dwindling budget shows up proactively instead of only when you go looking.
     Inspired by Motion's deadline-risk surfacing + Sunsama's morning plan.
 
-    Fully deterministic, no LLM call -- attention.compute() already produces
-    a plain-English headline for the one genuinely-judgment-requiring part
-    (today's overall state), and everything else here (deadline phrasing,
-    notable events, a same-day $0 event) is a direct formatting of data the
-    engines already computed. There used to be an LLM synthesis step; it was
-    retired (2026-07-15) once its only remaining job was rephrasing
-    attention.headline in a slightly different voice -- not worth the cost,
-    latency, or hallucination surface for that."""
-    from .engines import load_engine
-    from . import risk_tracking, notable_events
-    today = now.date()
+    Fully deterministic, no LLM call -- see briefing_service.build for fact
+    assembly and text composition."""
+    briefing = briefing_service.build(fs, yn, now)
+    date, text, facts = briefing["date"], briefing["text"], briefing["facts"]
 
-    # coursework: at-risk items + due-today + total load in the next 7 days
-    # (reuse the homework watcher's own inputs so the two never disagree)
-    hw = gather.homework_input(fs, now)
-    # Deterministic, concrete "Finish X by Thursday 5pm" phrasing -- built
-    # straight from the same items load_engine.plan/deadline_risk already
-    # flag as at-risk (at_risk_assignments/deadline_crunch_item are the raw
-    # items behind those functions' own alert strings, so this can't
-    # disagree with them about what's actually at risk), with NO LLM
-    # involved. Only items never surfaced before are returned -- see
-    # risk_tracking.newly_at_risk's docstring for why an already-known
-    # at-risk/overdue item shouldn't get renarrated every single day.
-    at_risk_items = load_engine.at_risk_assignments(hw)
-    crunch_item = load_engine.deadline_crunch_item(gather.deadline_input(fs, now))
-    if crunch_item is not None:
-        at_risk_items = at_risk_items + [crunch_item]
-    # The FULL current at-risk set (every day, not deduped) -- attention.compute
-    # needs this to stay evergreen so an unresolved risk keeps showing up in
-    # its state/reasons on day 2, 3, etc., not just the day it was first
-    # noticed. newly_at_risk (below) is the deduped, display-ready subset.
-    coursework_at_risk = [a.get("title") or "" for a in at_risk_items]
-    newly_at_risk = risk_tracking.newly_at_risk(at_risk_items, now)
-    due_today = [a["title"] for a in hw if 0 <= a.get("due_in_h", 1e9) <= 24]
-    overdue = [{"title": a["title"], "due_in_h": a.get("due_in_h"),
-                "due": a.get("due_iso")}
-               for a in hw if a.get("due_in_h", 0) < 0 and a.get("remaining_min", 0) > 0]
-    load_7d_h = round(sum(a.get("remaining_min", 0) for a in hw
-                          if a.get("due_in_days", 99) <= 7) / 60.0, 1)
-
-    # gym: sessions in the trailing 7 days vs target, and whether trained
-    # today. Rolling, not calendar-week -- matches gym_input's own window
-    # (engines/gym_engine's actual scheduling decisions already reason in
-    # "≈N sessions in any trailing 7 days," specifically to avoid the
-    # Monday reset letting the count get gamed across the boundary). The
-    # briefing stat used to use a calendar week instead, which disagreed
-    # with how the system actually judges "healthy" cadence and could look
-    # arbitrarily bad/good purely based on which weekday it happened to be
-    # (confirmed 2026-07-12).
-    gym_ring = gather.gym_ring_now(fs, now)
-    gym_last_7d = gym_ring["gym_last_7d"]
-    trained_today = gym_ring["today_done"]
-
-    # money: discretionary_dollars is the balance net of ALL known upcoming
-    # event costs (what's healthy for planning, not the raw YNAB balance --
-    # see gather.spend_input's docstring); discretionary_today_dollars is
-    # just what's earmarked for today, so a mid-outing phone check doesn't
-    # read as "broke" over money reserved for next week + the nearest
-    # upcoming paid social events
+    _alert_once("briefing:" + date, text, click_anchor="#briefing")
     try:
-        sp = gather.spend_input(fs, yn, now)
-        fun_money = round(sp.get("net_fun_money", sp.get("fun_money", 0)))
-        today_budget = round(sp.get("today_budget", 0))
-        near = sorted(sp.get("events", []), key=lambda e: e.get("days_until", 99))[:2]
-        # No dollar figure in the label -- a calendar event is assumed
-        # already paid for; cost still feeds fun_money's margin math below,
-        # just never gets narrated (2026-07-12: user doesn't want ticket
-        # prices mentioned at all).
-        upcoming = [f"{e['label']} in {e['days_until']}d" for e in near]
-        # Anything happening TODAY (days_until 0) even if its cost is $0 or
-        # nothing else is at risk -- a $0 family event is exactly the kind
-        # of thing worth a mention, "nothing's on fire" shouldn't mean
-        # "nothing's happening." Deterministic, not top-2-truncated like
-        # `near` above, so a same-day event can't fall off that list.
-        today_event_names = [e["label"] for e in sp.get("events", []) if e.get("days_until") == 0]
-    except Exception:
-        fun_money, today_budget, upcoming, today_event_names = None, None, [], []
-
-    # weather: current temp + today's high/low + condition at WEATHER_LAT/LON
-    # (NOAA/NWS, no API key). None everywhere if unconfigured or unreachable
-    # -- see weather.current()'s docstring.
-    from . import weather
-    w = weather.current(now) or {}
-
-    # sleep: last night's real duration (watch data only -- see
-    # sleep_minutes_last_night's docstring for why the phone-sensor
-    # heuristic isn't reused for a displayed number). Wrapped like every
-    # other external/history-derived pull above -- a malformed history
-    # record (e.g. a "sleep_dur" event missing "ts") must not abort the
-    # entire daily briefing.
-    try:
-        sleep_min = gather.sleep_minutes_last_night(now)
-    except Exception:
-        sleep_min = None
-
-    # social: days since partner/friends were last actually seen (not just
-    # scheduled) -- reuses social_input's own tracking rather than
-    # re-deriving it, so this can never disagree with the hangout-nagging
-    # engine about what counts as "seen."
-    try:
-        social = gather.social_input(fs, now)
-        partner_days_since = social.get("partner_days")
-        friend_days_since = social.get("friend_days")
-        partner_days_until = social.get("partner_days_until")
-        friend_days_until = social.get("friend_days_until")
-    except Exception:
-        partner_days_since, friend_days_since = None, None
-        partner_days_until, friend_days_until = None, None
-
-    # upcoming notable events: deterministic, no LLM -- see
-    # notable_events.upcoming_notable_events's docstring. Wrapped like
-    # every other non-critical add-on above -- a FlowSavvy schedule fetch
-    # failure here must not take down the whole daily briefing. Logged
-    # (not just silently `[]`), unlike a plain empty result -- this is the
-    # one add-on above where "empty" and "the fetch broke" are otherwise
-    # genuinely indistinguishable to whoever's looking at the widget: an
-    # empty notable-events list is now rendered with an explicit "Nothing
-    # scheduled" / "Nothing upcoming" empty state (see BriefingWidget.kt),
-    # so a swallowed fetch failure would read as a confidently-empty week
-    # instead of an unknown one (confirmed 2026-07-15: "i'm freaked out
-    # that we're going to miss an event" -- a silent fetch failure
-    # masquerading as "genuinely nothing" is exactly that risk, not the
-    # ROUTINE_INTERVAL_DAYS threshold itself).
-    try:
-        schedule_items = gather._upcoming_schedule(fs, now)
-        # Signal 2 from notable_events.upcoming_notable_events's docstring:
-        # manually-curated titles only (config.ROUTINE_EVENT_TITLES) -- no
-        # longer cross-referenced against the chore-cycling task list. That
-        # cross-check was removed (2026-07-15): chores are always
-        # itemType=task and this function only ever considers
-        # itemType=event, so the two sets can't collide today, and the
-        # extra FlowSavvy API call it cost on every daily run was guarding
-        # against a collision with no evidence it ever happens.
-        known_routine = {t.lower() for t in config.ROUTINE_EVENT_TITLES}
-        notable = notable_events.upcoming_notable_events(schedule_items, now, known_routine)
-    except Exception as e:
-        print(f"[notable_events] fetch/compute failed, showing none this run: {e}")
-        notable = []
-
-    facts = {"date": today.isoformat(), "weekday": now.strftime("%A"),
-             "coursework_at_risk": coursework_at_risk,
-             "due_today": due_today,
-             "notable_events": notable,
-             "overdue": overdue,
-             "coursework_hours_next_7d": load_7d_h,
-             "gym_last_7d": gym_last_7d, "gym_target": 4,
-             "trained_today": trained_today, "gym_ring": gym_ring,
-             "discretionary_dollars": fun_money, "discretionary_today_dollars": today_budget,
-             "upcoming_paid_events": upcoming,
-             "temperature_f": w.get("temp_f"), "weather_high_f": w.get("high_f"),
-             "weather_low_f": w.get("low_f"), "weather_condition": w.get("condition"),
-             "sleep_minutes": sleep_min,
-             "partner_days_since": partner_days_since, "friend_days_since": friend_days_since,
-             "partner_days_until": partner_days_until, "friend_days_until": friend_days_until}
-    facts["attention"] = attention.compute(facts)
-
-    text = _compose_briefing_text(facts["attention"]["headline"], today_event_names,
-                                  newly_at_risk, notable)
-
-    # "#briefing" (not "briefing") -- panel_url() joins this straight onto
-    # the base path, and the briefing card lives on the Home page as an
-    # anchor, not its own route, so this needs the bare-path+anchor form.
-    _alert_once("briefing:" + today.isoformat(), text, click_anchor="#briefing")
-    # Second, silent push carrying the same {date, text, facts} the widget
-    # renders -- via FCM (not ntfy): a manifest-registered receiver for
-    # ntfy's implicit io.heckel.ntfy.MESSAGE_RECEIVED broadcast can't wake a
-    # stopped app on modern Android, so it was unreliable. FCM's delivery
-    # path is OS-privileged and wakes the app regardless. No-ops if the
-    # widget hasn't registered a device token yet. Retried on the next
-    # daily run if never acked -- see _push_with_ack.
-    try:
-        briefing_snapshot = {"date": today.isoformat(), "text": text, "facts": facts}
-        _push_with_ack("briefing", briefing_snapshot,
-                       lambda version: notify.push_briefing(today.isoformat(), text, facts, version))
+        _push_with_ack("briefing", briefing,
+                       lambda version: notify.push_briefing(date, text, facts, version))
     except Exception as e:
         print(f"[briefing] fcm send error: {e}")
-    # persist for the panel (survives the once/day ntfy dedup)
     bp = os.path.join(history.ROOT, "logs", "briefing.json")
-    os.makedirs(os.path.dirname(bp), exist_ok=True)
-    _save_json_atomic(bp, {"date": today.isoformat(), "text": text, "facts": facts})
+    _save_json_atomic(bp, briefing)
     print("[briefing] sent")
-
-def _compose_briefing_text(headline, today_event_names, newly_at_risk, notable):
-    """Builds the full briefing text with NO LLM involved -- see
-    run_briefing's docstring for why. `headline` is
-    attention.compute()'s own plain-English judgment for the day (already a
-    real sentence, not a fragment needing rephrasing); the rest are direct
-    formattings of data the engines already computed."""
-    sections = [headline]
-    today_names = {name.strip().lower() for name in today_event_names}
-    if today_event_names:
-        sections.append("Also today: " + ", ".join(today_event_names) + ".")
-    if newly_at_risk:
-        sections.append("\n".join(item["phrase"] for item in newly_at_risk))
-    notable = [e for e in notable if (e.get("title") or "").strip().lower() not in today_names]
-    if notable:
-        sections.append("Coming up: " + ", ".join(
-            f"{e['title']} ({e['weekday']})" for e in notable))
-    return "\n\n".join(sections)
 
 def run_deadlines(fs, yn, now):
     """Generalized deadline-risk watchdog (Motion-style) over ALL deadline-bearing

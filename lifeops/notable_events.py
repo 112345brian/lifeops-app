@@ -28,8 +28,8 @@ vs. notable is decided by three signals, checked in order of confidence:
      other reason). Distinct occurrences of "the same thing" are matched
      by exact title, same limitation as before.
 """
-import datetime, json, os
-from . import history
+import datetime
+from . import state_store
 
 # An event recurring faster than this is routine -- you don't need a
 # reminder for something that happens every week or more often. Anything
@@ -50,23 +50,15 @@ _HISTORY_DAYS = 180
 
 
 def _history_file():
-    # A function, not a module-level constant -- history.ROOT is
-    # monkeypatched per-test (see fcm.py's _token_file for the same
-    # pattern).
-    return os.path.join(history.ROOT, "logs", "event_frequency.json")
+    return state_store.logs_path("event_frequency.json")
 
 
 def _load_history():
-    try:
-        return json.load(open(_history_file(), encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+    return state_store.load_json(_history_file(), default={}, require_type=dict)
 
 
 def _save_history(data):
-    path = _history_file()
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    json.dump(data, open(path, "w", encoding="utf-8"))
+    state_store.save_json_atomic(_history_file(), data)
 
 
 def _record_occurrences(hist, schedule_items, today):

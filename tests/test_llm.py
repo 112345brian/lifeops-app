@@ -149,6 +149,7 @@ def test_usage_logging_failure_never_breaks_the_actual_call(tmp_path, monkeypatc
     take down the feature it's just observing."""
     _configure(monkeypatch, tmp_path)
     _install_fake_client(monkeypatch, '{"category": "Groceries"}')
-    monkeypatch.setattr(llm.os, "makedirs", lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
+    monkeypatch.setattr(llm.state_store, "append_line",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
 
     assert llm.categorize_unknown("Trader Joe's", 42.10, ["Groceries"]) == "Groceries"

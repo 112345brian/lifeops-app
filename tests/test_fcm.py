@@ -1,6 +1,8 @@
 import json
 import os
 
+import pytest
+
 from lifeops import config, fcm, history
 
 
@@ -82,7 +84,7 @@ def test_send_embeds_version_in_message_data_for_ack_round_trip(tmp_path, monkey
     monkeypatch.setattr(config, "FCM_SERVICE_ACCOUNT_FILE", str(fake_cred_file))
     monkeypatch.setattr(fcm, "_firebase_app", lambda: "fake-app")
 
-    import firebase_admin.messaging as messaging
+    messaging = pytest.importorskip("firebase_admin.messaging")
     sent = []
     monkeypatch.setattr(messaging, "send", lambda message, app: sent.append(message))
 

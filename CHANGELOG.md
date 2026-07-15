@@ -4,6 +4,29 @@ Notable changes, newest first. Personal project, versioned simply (see
 `VERSION` / `lifeops.__version__`) — dates and the reasoning behind each
 change matter more here than semver strictness.
 
+## [1.18.3] — 2026-07-15
+
+### Changed
+- **Briefing construction moved out of `runner.py`.** New
+  `briefing_service.py` owns deterministic fact assembly and text
+  formatting, leaving `run_briefing()` to orchestrate alerting, FCM push,
+  and persistence.
+- **FCM push ack state moved into a dedicated helper.** New
+  `push_state.py` owns version hashing, ack persistence, and retry/skip
+  behavior while `runner.py` keeps compatibility wrappers for existing
+  signal handling and tests.
+- **JSON state persistence now has one shared helper.** New
+  `state_store.py` centralizes log-path resolution, corruption-tolerant
+  loading, atomic JSON writes, and JSONL-style appends; notable events,
+  deadline-risk tracking, LLM usage logging, and runner state writes now
+  use it.
+
+### Fixed
+- **The full test suite no longer fails solely because Firebase Admin is not
+  installed locally.** The FCM message-shape integration test now skips
+  cleanly when `firebase_admin` is unavailable, while requirements still
+  declare the dependency for real installs.
+
 ## [1.18.2] — 2026-07-15
 
 ### Added

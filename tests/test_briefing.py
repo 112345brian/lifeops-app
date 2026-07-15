@@ -8,7 +8,7 @@ docstring), alerts once/day, and persists it for the panel.
 import datetime, json, os
 import pytest
 
-from lifeops import runner, history, gather
+from lifeops import briefing_service, runner, history, gather
 
 NOW = datetime.datetime(2026, 7, 8, 8, 0, 0)   # Wed morning
 
@@ -126,3 +126,22 @@ def test_briefing_dedupes_same_day_event_between_today_and_notable_sections(sand
     text = _briefing_file(tmp)["text"]
     assert "Also today: Family BBQ." in text
     assert "Coming up: Family BBQ" not in text
+
+
+def test_compose_text_is_a_pure_briefing_formatter():
+    text = briefing_service.compose_text(
+        "Headline.",
+        ["Family BBQ"],
+        [{"phrase": 'Finish "M08 Paper" by Thursday 9:00am'}],
+        [
+            {"title": "Family BBQ", "weekday": "Wednesday"},
+            {"title": "Haircut", "weekday": "Saturday"},
+        ],
+    )
+
+    assert text == (
+        "Headline.\n\n"
+        "Also today: Family BBQ.\n\n"
+        'Finish "M08 Paper" by Thursday 9:00am\n\n'
+        "Coming up: Haircut (Saturday)"
+    )
