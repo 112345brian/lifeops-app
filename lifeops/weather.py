@@ -1,12 +1,14 @@
 """NOAA/NWS weather -- free, no-API-key REST API at api.weather.gov.
 
-WEATHER_LAT/WEATHER_LON (.env) pick the forecast location. Unset = the
-feature no-ops everywhere it's read (current() returns None), same
+Forecast location is the Android widget's last-reported phone GPS fix
+(location.get_location(), see location.py) when one is on file and not
+stale; otherwise the static WEATHER_LAT/WEATHER_LON (.env). Both unset =
+the feature no-ops everywhere it's read (current() returns None), same
 "blank = disabled" convention as PANEL_URL/WEB_TOKEN in config.py.
 """
 import json, os
 import requests
-from . import config, history
+from . import config, history, location
 
 _TIMEOUT = 10
 
@@ -45,16 +47,25 @@ def _save_grid_cache(data):
     json.dump(data, open(path, "w", encoding="utf-8"))
 
 
-def _forecast_urls():
+def _resolve_location():
+    """(lat, lon) strings from the phone's last-reported fix if one is on
+    file and fresh, else the static WEATHER_LAT/WEATHER_LON, else None."""
+    return location.get_location() or (
+        (config.WEATHER_LAT, config.WEATHER_LON) if config.WEATHER_LAT and config.WEATHER_LON else None
+    )
+
+
+def _forecast_urls(lat, lon):
     """The /points/{lat},{lon} -> forecast URL mapping is static for a fixed
     location, so it's cached to disk after the first lookup instead of
-    hitting NWS's /points endpoint on every briefing run. Returns
-    (hourly_url, daily_url)."""
-    cache_key = f"{config.WEATHER_LAT},{config.WEATHER_LON}"
+    hitting NWS's /points endpoint on every briefing run. Keyed by lat/lon,
+    so a phone location update naturally busts the cache and re-resolves
+    the new grid cell. Returns (hourly_url, daily_url)."""
+    cache_key = f"{lat},{lon}"
     cache = _load_grid_cache()
     if cache.get("key") == cache_key and cache.get("hourly") and cache.get("daily"):
         return cache["hourly"], cache["daily"]
-    points = _get(f"https://api.weather.gov/points/{config.WEATHER_LAT},{config.WEATHER_LON}")
+    points = _get(f"https://api.weather.gov/points/{lat},{lon}")
     props = points["properties"]
     hourly, daily = props["forecastHourly"], props["forecast"]
     _save_grid_cache({"key": cache_key, "hourly": hourly, "daily": daily})
@@ -82,16 +93,17 @@ def _today_high_low(daily_periods, today_date):
 
 
 def current(now):
-    """Current conditions at WEATHER_LAT/WEATHER_LON: {"temp_f", "high_f",
-    "low_f", "condition"}, or None if unconfigured or the NWS API is
-    unreachable -- best-effort, same as every other external-data pull in
-    gather.py (a weather outage must not take down the whole briefing).
-    [now] is only used to pin "today" for the high/low lookup -- see
-    _today_high_low."""
-    if not config.WEATHER_LAT or not config.WEATHER_LON:
+    """Current conditions at the resolved location (see _resolve_location):
+    {"temp_f", "high_f", "low_f", "condition"}, or None if unconfigured or
+    the NWS API is unreachable -- best-effort, same as every other
+    external-data pull in gather.py (a weather outage must not take down
+    the whole briefing). [now] is only used to pin "today" for the
+    high/low lookup -- see _today_high_low."""
+    resolved = _resolve_location()
+    if not resolved:
         return None
     try:
-        hourly_url, daily_url = _forecast_urls()
+        hourly_url, daily_url = _forecast_urls(*resolved)
         hourly = _get(hourly_url)["properties"]["periods"]
         daily = _get(daily_url)["properties"]["periods"]
         now_period = hourly[0]

@@ -61,4 +61,50 @@ class NextTasksStateTest {
 
         assertEquals(null, state.gymRing)
     }
+
+    @Test
+    fun parsesWeatherFromApiResponseAndRoundTripsThroughJson() {
+        // Matches weather.current()'s {temp_f, high_f, low_f, condition}
+        // shape, carried under the "weather" key -- moved here (2026-07-15)
+        // so the widget's temperature refreshes on the same ~15-min pull as
+        // gym_ring, not just once/day via BriefingState.
+        val raw = """{
+            "tasks": [], "events": [],
+            "weather": {"temperature_f": 71, "high_f": 80, "low_f": 60, "condition": "Cloudy"}
+        }"""
+
+        val state = NextTasksState.fromApiResponse(raw, 1L)
+
+        assertEquals(WeatherInfo(temperatureF = 71, highF = 80, lowF = 60, condition = "Cloudy"), state.weather)
+        assertEquals(state, NextTasksState.fromJson(state.toJson()))
+    }
+
+    @Test
+    fun weatherIsNullWhenAbsentOrExplicitlyNullInResponse() {
+        // weather.current() returns None -- not a shape with null fields --
+        // when unconfigured or NWS is unreachable; the server sends that as
+        // a literal JSON null, and Python's json module always writes
+        // explicit nulls for None rather than omitting the key.
+        val absent = NextTasksState.fromApiResponse("""{"tasks": [], "events": []}""", 1L)
+        val explicitNull = NextTasksState.fromApiResponse(
+            """{"tasks": [], "events": [], "weather": null}""", 1L)
+
+        assertEquals(null, absent.weather)
+        assertEquals(null, explicitNull.weather)
+    }
+
+    @Test
+    fun weatherFieldsAreNullWhenIndividuallyExplicitJsonNull() {
+        // A partial NWS response (e.g. no high/low for today yet) still
+        // parses to a real WeatherInfo, just with those specific fields
+        // null -- distinct from the whole "weather" key being absent/null.
+        val raw = """{
+            "tasks": [], "events": [],
+            "weather": {"temperature_f": 71, "high_f": null, "low_f": null, "condition": null}
+        }"""
+
+        val state = NextTasksState.fromApiResponse(raw, 1L)
+
+        assertEquals(WeatherInfo(temperatureF = 71, highF = null, lowF = null, condition = null), state.weather)
+    }
 }

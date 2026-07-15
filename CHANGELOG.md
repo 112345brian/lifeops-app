@@ -4,6 +4,33 @@ Notable changes, newest first. Personal project, versioned simply (see
 `VERSION` / `lifeops.__version__`) — dates and the reasoning behind each
 change matter more here than semver strictness.
 
+## [1.18.0] — 2026-07-15
+
+### Added
+- **Weather now follows your phone's actual location, and no longer
+  depends on the LifeOps server being reachable at all.** Previously
+  `weather.py` only ever ran once/day (inside the morning briefing) at a
+  fixed `WEATHER_LAT`/`WEATHER_LON`, so a widget checked mid-afternoon
+  showed a stale morning temperature, and any weather refresh required the
+  PC to be on and reachable. Now:
+  - The Android widget reports the phone's GPS location a few times a day
+    (`LocationReporter.kt`, piggybacked on the existing periodic worker —
+    a one-shot fix, not continuous tracking) to a new `POST /api/location`
+    endpoint; `weather.py` prefers that over the static config when it's
+    on file and fresh (`location.py`), falling back to the static
+    `WEATHER_LAT`/`WEATHER_LON` otherwise.
+  - `GET /api/next-tasks` (already polled every ~15 min by the widget, the
+    same pull as the gym ring) now also returns live weather, so the
+    temperature refreshes far more often than once/day even when
+    everything still goes through the server.
+  - The phone can now fetch weather directly from NOAA/NWS itself
+    (`PhoneWeather.kt`), reusing the same public, no-API-key
+    `api.weather.gov` endpoints and grid-cell caching `weather.py` uses —
+    with zero dependency on the LifeOps server. This is the primary
+    source; the server-provided values above are progressively staler
+    fallbacks for when the phone hasn't fetched yet (e.g. no location
+    permission granted).
+
 ## [1.17.1] — 2026-07-14
 
 ### Fixed

@@ -12,7 +12,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, File
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup, escape
-from . import config, history, gather, actions, lock, fcm
+from . import config, history, gather, actions, lock, fcm, location, weather
 from .flowsavvy import FlowSavvy
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -687,11 +687,22 @@ def _tasks_and_events(fs, now, n):
     round trip, reused by both /api/next-tasks and the completion endpoint.
     Deliberately does NOT catch exceptions -- see gather._upcoming_schedule's
     own docstring on why a genuine fetch failure must propagate rather than
-    return a false-empty result. Callers decide how to surface that."""
+    return a false-empty result. Callers decide how to surface that.
+
+    weather is included here (not just in the once-daily briefing facts) so
+    the widget's temperature refreshes on the same ~15-min cadence as
+    gym_ring, via NextTasksRefreshWorker's existing periodic pull -- before
+    this, weather.current() was only ever called once/day inside
+    run_briefing, so a widget checked mid-afternoon still showed whatever
+    NOAA said that morning (confirmed 2026-07-15: "that would only happen
+    with server inconsistency" -- it wasn't inconsistency, it was staleness).
+    weather.current() is already best-effort (returns None on any failure),
+    so no extra try/except needed here."""
     schedule_items = gather._upcoming_schedule(fs, now)
     return {"tasks": gather.next_tasks_input(fs, now, n, schedule_items=schedule_items),
             "events": gather.today_events_input(fs, now, schedule_items=schedule_items),
-            "gym_ring": gather.gym_ring_now(fs, now)}
+            "gym_ring": gather.gym_ring_now(fs, now),
+            "weather": weather.current(now)}
 
 @app.get("/api/next-tasks")
 def api_next_tasks(n: int = 8):
@@ -789,6 +800,26 @@ async def api_register_fcm_token(request: Request):
         raise HTTPException(400, "expected a JSON object")
     if not fcm.register_token(body.get("fcm_token")):
         raise HTTPException(400, "fcm_token required (string, 10-4096 chars)")
+    return JSONResponse({"ok": True})
+
+@app.post("/api/location")
+async def api_location(request: Request):
+    """The widget POSTs the phone's last GPS fix here a few times a day
+    (piggybacked on NextTasksRefreshWorker's existing periodic cycle, not a
+    continuous background track) so weather.py can forecast for wherever
+    the user actually is instead of a fixed WEATHER_LAT/WEATHER_LON.
+    Direct, Tailscale-gated path only -- unlike the FCM token, a stale
+    location just means weather.py falls back to the static config value
+    (see location.get_location), so there's no ntfy relay fallback needed
+    here. Single-user app -- one location on file, last write wins."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "malformed JSON body")
+    if not isinstance(body, dict):
+        raise HTTPException(400, "expected a JSON object")
+    if not location.set_location(body.get("lat"), body.get("lon")):
+        raise HTTPException(400, "lat/lon required (numeric, valid coordinates)")
     return JSONResponse({"ok": True})
 
 @app.post("/history/undo")

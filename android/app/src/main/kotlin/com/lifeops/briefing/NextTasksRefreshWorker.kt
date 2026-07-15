@@ -61,11 +61,23 @@ class NextTasksRefreshWorker(
         // scheduling a dedicated timer for it.
         revertExpiredPendingCompletions(applicationContext)
 
+        // Both best-effort and self-gated (see LocationReporter/PhoneWeather's
+        // own MIN_INTERVAL_MS) -- piggybacked on this worker's cadence rather
+        // than a dedicated timer. Deliberately run BEFORE the baseUrl/token
+        // check below: neither needs the panel configured or reachable at
+        // all (PhoneWeather talks to NOAA directly), so gating them behind
+        // "is the server set up" would defeat the entire point of moving
+        // weather off the server in the first place (2026-07-15: "if the
+        // server goes down, we'd want the widget to update regardless").
+        reportLocationIfDue(applicationContext)
+        reportWeatherIfDue(applicationContext)
+
         val baseUrl = WidgetConfigStore.getBaseUrl(applicationContext)
         val token = WidgetConfigStore.getToken(applicationContext)
 
         if (baseUrl == null || token == null) {
-            // Not configured yet -- nothing to do.
+            // Not configured yet -- nothing left to do (next-tasks/briefing
+            // pulls do need the panel).
             return@withContext Result.success()
         }
 

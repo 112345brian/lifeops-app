@@ -34,4 +34,29 @@ object WidgetKeys {
     const val CONFIG_PREFS_NAME = "lifeops_widget_config"
     const val KEY_BASE_URL = "base_url" // e.g. "https://my-tailscale-host:8765" -- no trailing slash
     const val KEY_TOKEN = "token" // WEB_TOKEN value, appended as ?token= on next-tasks calls
+
+    // Separate, unencrypted app-level SharedPreferences for LocationReporter's
+    // report-cadence gate -- just a timestamp, not a credential, so it
+    // doesn't need CONFIG_PREFS_NAME's EncryptedSharedPreferences machinery.
+    const val LOCATION_PREFS_NAME = "lifeops_location_gate"
+    const val KEY_LAST_LOCATION_REPORT_AT = "last_location_report_at" // epoch millis, 0 = never
+    // The phone's own last GPS fix, persisted here regardless of whether the
+    // panel is configured/reachable -- PhoneWeather.kt reads these directly
+    // so its NOAA fetch has zero server dependency. Absent = no fix yet.
+    const val KEY_LAST_LAT = "last_lat"
+    const val KEY_LAST_LON = "last_lon"
+
+    // Separate app-level SharedPreferences for PhoneWeather's own fetch-cadence
+    // gate and cached result -- kept apart from LOCATION_PREFS_NAME since it's
+    // a conceptually distinct cache (NOAA grid/forecast), not a location gate.
+    const val WEATHER_PREFS_NAME = "lifeops_phone_weather"
+    const val KEY_LAST_WEATHER_FETCH_AT = "last_weather_fetch_at" // epoch millis, 0 = never
+    const val KEY_WEATHER_GRID_KEY = "weather_grid_key" // "<lat>,<lon>" the cached URLs below were resolved for
+    const val KEY_WEATHER_HOURLY_URL = "weather_hourly_url"
+    const val KEY_WEATHER_DAILY_URL = "weather_daily_url"
+    const val KEY_WEATHER_TEMP_F = "weather_temp_f"
+    const val KEY_WEATHER_HIGH_F = "weather_high_f"
+    const val KEY_WEATHER_LOW_F = "weather_low_f"
+    const val KEY_WEATHER_CONDITION = "weather_condition"
+    const val KEY_WEATHER_FETCHED_AT = "weather_fetched_at" // epoch millis of the cached result above
 }

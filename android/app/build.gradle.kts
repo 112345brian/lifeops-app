@@ -96,6 +96,9 @@ dependencies {
     implementation(platform("com.google.firebase:firebase-bom:34.15.0"))
     implementation("com.google.firebase:firebase-messaging")
 
+    // FusedLocationProviderClient, for LocationReporter's one-shot GPS fix.
+    implementation("com.google.android.gms:play-services-location:21.3.0")
+
     testImplementation("junit:junit:4.13.2")
     testImplementation("androidx.glance:glance-testing:1.1.1")
     testImplementation("androidx.glance:glance-appwidget-testing:1.1.1")

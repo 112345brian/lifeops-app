@@ -3,7 +3,7 @@ import os
 import pytest
 from fastapi.testclient import TestClient
 
-from lifeops import config, history, web, runner
+from lifeops import config, history, web, runner, weather
 
 
 def test_settings_writer_uses_same_env_file_as_runtime():
@@ -210,6 +210,29 @@ def test_api_register_fcm_token_rejects_malformed_token(tmp_path, monkeypatch):
     assert web.fcm._device_token() == ""
 
 
+def test_api_location_persists_valid_coordinates(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "WEB_TOKEN", "")
+    monkeypatch.setattr(history, "ROOT", str(tmp_path))
+    (tmp_path / "logs").mkdir(exist_ok=True)
+
+    response = TestClient(web.app).post("/api/location", json={"lat": 39.29, "lon": -76.61})
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert web.location.get_location() == ("39.29", "-76.61")
+
+
+def test_api_location_rejects_malformed_coordinates(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "WEB_TOKEN", "")
+    monkeypatch.setattr(history, "ROOT", str(tmp_path))
+    (tmp_path / "logs").mkdir(exist_ok=True)
+
+    response = TestClient(web.app).post("/api/location", json={"lat": 200, "lon": -76.61})
+
+    assert response.status_code == 400
+    assert web.location.get_location() is None
+
+
 def test_current_attention_treats_missing_last_run_as_no_system_data(monkeypatch):
     """A fresh install (or any moment logs/last_run.json is missing/
     unreadable) makes _last_run() return None. _current_attention must pass
@@ -259,3 +282,26 @@ def test_api_task_complete_returns_fresh_tasks_and_events(monkeypatch):
     assert body["events"] == []
     assert fake.completed == ["t1"]
     assert fake.recalculated is True
+
+
+def test_api_next_tasks_includes_weather_refreshed_on_the_same_pull(monkeypatch):
+    """weather.current() is called from the same ~15-min-polled endpoint as
+    gym_ring, not just once/day inside run_briefing -- otherwise the widget
+    keeps showing whatever NOAA said that morning all day (confirmed
+    2026-07-15: a stale 64°F reported mid-afternoon)."""
+    monkeypatch.setattr(config, "WEB_TOKEN", "")
+    monkeypatch.setattr(web, "_current_attention", lambda *a, **k: {"state": "ok"})
+    monkeypatch.setattr(weather, "current", lambda now: {
+        "temp_f": 71, "high_f": 80, "low_f": 60, "condition": "Cloudy"})
+
+    class FakeFlowSavvy:
+        def get_schedule(self, start, end):
+            return {"scheduleItems": []}
+
+    monkeypatch.setattr(web, "FlowSavvy", lambda: FakeFlowSavvy())
+
+    response = TestClient(web.app).get("/api/next-tasks")
+
+    assert response.status_code == 200
+    assert response.json()["weather"] == {
+        "temp_f": 71, "high_f": 80, "low_f": 60, "condition": "Cloudy"}

@@ -15,12 +15,14 @@ internal fun httpRequest(
     connectTimeoutMs: Int = 10_000,
     readTimeoutMs: Int = 15_000,
     requireExactCode: Int? = null,
+    headers: Map<String, String> = emptyMap(),
 ): String {
     val connection = (URL(url).openConnection() as HttpURLConnection).apply {
         requestMethod = method
         if (body != null) doOutput = true
         connectTimeout = connectTimeoutMs
         readTimeout = readTimeoutMs
+        headers.forEach { (k, v) -> setRequestProperty(k, v) }
     }
     try {
         if (body != null) {

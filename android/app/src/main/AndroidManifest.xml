@@ -6,6 +6,19 @@
          once delivered, needs no permission: Firebase handles that). -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- LocationReporter's one-shot GPS fix (see that file for the
+         reporting cadence), POSTed to /api/location so weather.py can use
+         the phone's actual position instead of a fixed WEATHER_LAT/LON.
+         FINE, not just COARSE, so the resolved forecast grid cell is
+         accurate; BACKGROUND is required on API 29+ because the fetch runs
+         from NextTasksRefreshWorker (a WorkManager job), which the OS
+         treats as background execution even though the app itself is
+         never foregrounded for it; without this permission a background
+         getCurrentLocation() call silently yields nothing on Android 10+. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+
     <application
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"

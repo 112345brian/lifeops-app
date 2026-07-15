@@ -1,6 +1,6 @@
 import datetime
 
-from lifeops import config, history, weather
+from lifeops import config, history, location, weather
 
 NOW = datetime.datetime(2026, 7, 13, 9, 0)
 
@@ -140,6 +140,41 @@ def test_forecast_urls_cache_invalidated_when_location_changes(tmp_path, monkeyp
     weather.current(NOW)
 
     assert calls.count("https://api.weather.gov/points/40.71,-74.01") == 1
+
+
+def test_phone_location_takes_priority_over_static_config(tmp_path, monkeypatch):
+    """A fresh phone-reported fix must override the static WEATHER_LAT/LON,
+    not just supplement it -- see weather._resolve_location."""
+    _configure(monkeypatch, tmp_path)
+    location.set_location(40.71, -74.01)
+    phone_points = {"properties": {
+        "forecastHourly": "https://api.weather.gov/gridpoints/NYC/1,2/forecast/hourly",
+        "forecast": "https://api.weather.gov/gridpoints/NYC/1,2/forecast",
+    }}
+    responses = {
+        "https://api.weather.gov/points/40.71,-74.01": phone_points,
+        "https://api.weather.gov/gridpoints/NYC/1,2/forecast/hourly": HOURLY_RESPONSE,
+        "https://api.weather.gov/gridpoints/NYC/1,2/forecast": DAILY_RESPONSE,
+    }
+    monkeypatch.setattr(weather, "_get", _fake_get(responses))
+
+    out = weather.current(NOW)
+
+    assert out == {"temp_f": 73, "high_f": 85, "low_f": 67, "condition": "Cloudy"}
+
+
+def test_falls_back_to_static_config_when_no_phone_location_reported(tmp_path, monkeypatch):
+    _configure(monkeypatch, tmp_path)
+    responses = {
+        "https://api.weather.gov/points/39.29,-76.61": POINTS_RESPONSE,
+        "https://api.weather.gov/gridpoints/OFFICE/1,2/forecast/hourly": HOURLY_RESPONSE,
+        "https://api.weather.gov/gridpoints/OFFICE/1,2/forecast": DAILY_RESPONSE,
+    }
+    monkeypatch.setattr(weather, "_get", _fake_get(responses))
+
+    out = weather.current(NOW)
+
+    assert out == {"temp_f": 73, "high_f": 85, "low_f": 67, "condition": "Cloudy"}
 
 
 def test_evening_call_does_not_show_tomorrows_high_as_todays(tmp_path, monkeypatch):
