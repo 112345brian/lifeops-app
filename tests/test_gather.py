@@ -333,6 +333,13 @@ def _patch_social_config(monkeypatch, social_cal=""):
     monkeypatch.setattr(config, "PROPOSE_AHEAD_DAYS", 7)
     monkeypatch.setattr(config, "EVENT_CALS", {})
     monkeypatch.setattr(config, "FRIEND_NAMES", [])
+    # social_input's friend_event_next now reads gather._ALL_EVENTS_CACHE
+    # (see gather.py's 2026-07-14 fix reusing _all_events_cached instead of
+    # its own fresh fs.list_items(itemType="event") call) -- same
+    # per-process cache _patch_spend_config already has to reset, or a
+    # later test's fake fs would silently see an earlier test's cached
+    # "all events".
+    monkeypatch.setattr(gather, "_ALL_EVENTS_CACHE", {})
 
 
 def test_social_input_days_until_none_when_nothing_planned(monkeypatch):
@@ -356,6 +363,24 @@ def test_social_input_good_days_start_next_week(monkeypatch):
     out = gather.social_input(fs, now)
 
     assert min(datetime.date.fromisoformat(d) for d in out["good_days"]) >= now.date() + datetime.timedelta(days=7)
+
+
+def test_social_input_good_days_nonempty_even_with_tiny_propose_ahead_days(monkeypatch):
+    """PROPOSE_AHEAD_DAYS is user-editable via the panel's Settings page.
+    `hi` used to be derived independently from PROPOSE_AHEAD_DAYS (not from
+    the already-floored `lo`), so PROPOSE_AHEAD_DAYS <= 3 produced hi < lo
+    and silently emptied good_days -- disabling all future hangout
+    proposals with no error anywhere (confirmed 2026-07-14)."""
+    _patch_social_config(monkeypatch)
+    for tiny in (0, 1, 2, 3):
+        monkeypatch.setattr(config, "PROPOSE_AHEAD_DAYS", tiny)
+        fs = _FakeSpendFlowSavvy({}, tasks=[])
+        now = datetime.datetime(2026, 7, 13, 9, 0)
+
+        out = gather.social_input(fs, now)
+
+        assert out["good_days"], f"good_days was empty for PROPOSE_AHEAD_DAYS={tiny}"
+        assert min(datetime.date.fromisoformat(d) for d in out["good_days"]) >= now.date() + datetime.timedelta(days=7)
 
 
 def test_social_input_days_until_reads_soonest_scheduled_task(monkeypatch):

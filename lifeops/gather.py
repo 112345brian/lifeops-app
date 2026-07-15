@@ -598,15 +598,16 @@ def social_input(fs, now):
         not _is_lifeops_generated_social_task(t) and _is_friend_commitment(t)
     ))
 
-    try:
-        friend_event_next = _next_event_date(fs.list_items(itemType="event").get("items", []),
-                                             lambda e: _is_friend_hangout(e.get("title"), e.get("notes")) or
-                                             "friends" in _note_types(e.get("notes")))
-        friend_next = _min_date(friend_next, friend_event_next)
-        if friend_event_next is not None:
-            has_friend = True
-    except Exception:
-        pass
+    # _all_events_cached, not a fresh fs.list_items(itemType="event") --
+    # run_spend already primes this same per-run cache earlier in the same
+    # tick (DOMAINS runs spend before social), so a second full-calendar
+    # fetch here was a genuinely redundant round trip every run.
+    friend_event_next = _next_event_date(_all_events_cached(fs),
+                                         lambda e: _is_friend_hangout(e.get("title"), e.get("notes")) or
+                                         "friends" in _note_types(e.get("notes")))
+    friend_next = _min_date(friend_next, friend_event_next)
+    if friend_event_next is not None:
+        has_friend = True
     for cid, typ in config.EVENT_CALS.items():
         if typ != "friends":
             continue
@@ -631,7 +632,14 @@ def social_input(fs, now):
             pass
     # Never propose the next weekly social hold inside the current 7-day
     # cadence window; it should reserve capacity for the next cycle.
-    lo = max(7, config.PROPOSE_AHEAD_DAYS - 3); hi = config.PROPOSE_AHEAD_DAYS + 4
+    # `hi` is derived from the (already-floored) `lo`, not independently
+    # from PROPOSE_AHEAD_DAYS -- deriving it independently let a small
+    # configured PROPOSE_AHEAD_DAYS (<=3, editable via the panel's own
+    # Settings page) produce `hi < lo`, silently emptying `good_days` and
+    # disabling all future hangout proposals with no error anywhere
+    # (confirmed 2026-07-14 via code review). Fixed width keeps the same
+    # ~7-day candidate window the unclamped math always produced.
+    lo = max(7, config.PROPOSE_AHEAD_DAYS - 3); hi = lo + 7
     days = [now.date() + datetime.timedelta(days=i) for i in range(lo, hi)]
     days.sort(key=lambda d: (d.weekday() < 5, d))   # weekends first, ~3 weeks out
     def _until(d):

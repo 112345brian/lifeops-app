@@ -10,9 +10,11 @@
      money_widget_info.xml's comment for the same finding. Using the
      literal formula floor for n=1 (40dp) instead: mathematically
      guaranteed to never round up to 2 cells on any compliant launcher.
-     SocialSection's stacked chips use shrunk font sizes for this preset
-     specifically (see the stacked branch's StatTile calls) since default
-     sizing doesn't fit two rows in a widget this small. -->
+     The solo single-stat preset (badge hidden, only Social visible) no
+     longer uses SocialSection's stacked chips at all: it renders via
+     SocialFocusTile (a SoloStatCard instance, see BriefingWidget.kt),
+     which picks whichever of partner/friends is more actionable and shows
+     it as one big value with its own font sizing, not two shrunk rows. -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:minWidth="40dp"
     android:minHeight="40dp"

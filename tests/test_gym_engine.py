@@ -175,3 +175,18 @@ def test_viable_left_checks_candidates_against_each_other_not_just_busy():
     inp["rules"]["target"] = 0   # needed=0 -> the chosen-loop never runs
     out = gym_engine.plan(inp)
     assert "viable_left=3" in out["summary"], out["summary"]
+
+
+def test_needs_wind_down_default_matches_exported_constant():
+    """runner.py's wind-down pruning pass reads
+    DEFAULT_WIND_DOWN_EXEMPT_WEEKDAYS directly (not an independently
+    hardcoded weekday string) so it can never silently drift out of sync
+    with this function's own default -- this test is the tripwire: if
+    the default here ever changes without updating the constant, this
+    fails instead of the two going quietly out of sync."""
+    # 2026-07-08 is a Wednesday; the day before (Tuesday) is exempt by
+    # default, so no wind-down block is needed for a Wednesday gym day.
+    assert gym_engine.needs_wind_down("2026-07-08", {}) is False
+    # 2026-07-09 is a Thursday; the day before (Wednesday) is not exempt.
+    assert gym_engine.needs_wind_down("2026-07-09", {}) is True
+    assert gym_engine.DEFAULT_WIND_DOWN_EXEMPT_WEEKDAYS == ["Tue"]

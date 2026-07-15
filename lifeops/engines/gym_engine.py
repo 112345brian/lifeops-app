@@ -40,9 +40,17 @@ def run_length(date_str, busy):
     while x.isoformat() in busy: n += 1; x += DAY
     return n
 
+# Wednesday is not a before-work gym day, so Tuesday night doesn't need a
+# wind-down block. Exported so runner.py's pruning pass (which deletes
+# already-created wind-down tasks) can check the SAME exempt weekdays this
+# function uses, instead of an independently hardcoded "Tue" that could
+# silently drift out of sync the moment wind_down_exempt_weekdays is ever
+# actually wired up to a real per-user setting.
+DEFAULT_WIND_DOWN_EXEMPT_WEEKDAYS = ["Tue"]
+
 def needs_wind_down(gym_date, r):
     prior = D(gym_date) - DAY
-    exempt = set(r.get("wind_down_exempt_weekdays", ["Tue"]))
+    exempt = set(r.get("wind_down_exempt_weekdays", DEFAULT_WIND_DOWN_EXEMPT_WEEKDAYS))
     return prior.strftime("%a") not in exempt
 
 def plan(inp):

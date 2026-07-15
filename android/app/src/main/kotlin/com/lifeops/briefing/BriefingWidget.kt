@@ -712,24 +712,23 @@ private fun MoneyTile(
     }
 }
 
+/** Shared skeleton for every "solo" single-stat card (label / big value /
+ * bottom accent-colored status bar) -- SoloMoneyTile and SocialFocusTile
+ * used to be two hand-copied ~50-line composables with identical layout
+ * and only their label/value/status/accent computation actually differing
+ * (confirmed 2026-07-14 code review; this is the exact WeatherSection/
+ * CompactWeatherTile duplication mistake android/CLAUDE.md already
+ * documents as a repeated-bug source -- "if you're about to write a
+ * second version of an existing section for a different size, stop --
+ * parameterize the existing one instead"). Callers compute their own
+ * domain-specific label/value/status/accent and hand them here.
+ *
+ * Samsung's launcher can grant a visually narrow 1x1 surface even when
+ * LocalSize reports a larger value. Typography stays conservative so a
+ * value like "-$160" never wraps into two lines on the actual home
+ * screen. */
 @Composable
-private fun SoloMoneyTile(dollars: Int, severity: String?, scale: Float, modifier: GlanceModifier) {
-    val isNegative = dollars < 0
-    val status = when {
-        isNegative -> "OVER"
-        severity == "watch" -> "LOW"
-        severity == "risk" || severity == "fucked" -> "RISK"
-        else -> "LEFT"
-    }
-    val accent = when {
-        isNegative || severity == "risk" || severity == "fucked" -> MONEY_SOLO_RISK_ACCENT
-        severity == "watch" -> MONEY_SOLO_WATCH_ACCENT
-        else -> MONEY_SOLO_OK_ACCENT
-    }
-    // Samsung's launcher can grant a visually narrow 1x1 surface even when
-    // LocalSize reports a larger value. Keep the solo preset's typography
-    // conservative so negative amounts like "-$160" never wrap into two
-    // lines on the actual home screen.
+private fun SoloStatCard(label: String, value: String, status: String, accent: Color, scale: Float, modifier: GlanceModifier) {
     val labelSp = 8f
     val valueSp = 22f
     val statusSp = 9f
@@ -748,7 +747,7 @@ private fun SoloMoneyTile(dollars: Int, severity: String?, scale: Float, modifie
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = "SPEND",
+                text = label,
                 maxLines = 1,
                 style = TextStyle(
                     fontWeight = FontWeight.Bold,
@@ -759,7 +758,7 @@ private fun SoloMoneyTile(dollars: Int, severity: String?, scale: Float, modifie
                 modifier = GlanceModifier.fillMaxWidth(),
             )
             Text(
-                text = formatMoney(dollars),
+                text = value,
                 maxLines = 1,
                 style = TextStyle(
                     fontWeight = FontWeight.Bold,
@@ -791,6 +790,24 @@ private fun SoloMoneyTile(dollars: Int, severity: String?, scale: Float, modifie
             )
         }
     }
+}
+
+@Composable
+private fun SoloMoneyTile(dollars: Int, severity: String?, scale: Float, modifier: GlanceModifier) {
+    val isNegative = dollars < 0
+    val status = when {
+        isNegative -> "OVER"
+        severity == "watch" -> "LOW"
+        severity == "risk" || severity == "fucked" -> "RISK"
+        else -> "LEFT"
+    }
+    val accent = when {
+        isNegative || severity == "risk" || severity == "fucked" -> MONEY_SOLO_RISK_ACCENT
+        severity == "watch" -> MONEY_SOLO_WATCH_ACCENT
+        else -> MONEY_SOLO_OK_ACCENT
+    }
+    SoloStatCard(label = "SPEND", value = formatMoney(dollars), status = status,
+        accent = accent, scale = scale, modifier = modifier)
 }
 
 internal fun formatMoney(dollars: Int): String = if (dollars < 0) "-$${-dollars}" else "$$dollars"
@@ -1034,67 +1051,8 @@ private fun SocialFocusTile(item: SocialItem, scale: Float, modifier: GlanceModi
     }
     val value = if (planned) "${metric.daysUntil}d" else "${metric.daysSince}d"
     val status = if (planned) "NEXT" else "AGO"
-    val labelSp = 8f
-    val valueSp = 22f
-    val statusSp = 9f
-
-    Column(
-        modifier = modifier
-            .cornerRadius(14.dp)
-            .background(ColorProvider(MONEY_SOLO_BG)),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalAlignment = Alignment.Top,
-    ) {
-        Spacer(modifier = GlanceModifier.defaultWeight())
-        Column(
-            modifier = GlanceModifier.fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = item.label,
-                maxLines = 1,
-                style = TextStyle(
-                    fontWeight = FontWeight.Bold,
-                    fontSize = (labelSp * scale).sp,
-                    color = GlanceTheme.colors.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                ),
-                modifier = GlanceModifier.fillMaxWidth(),
-            )
-            Text(
-                text = value,
-                maxLines = 1,
-                style = TextStyle(
-                    fontWeight = FontWeight.Bold,
-                    fontSize = (valueSp * scale).sp,
-                    color = GlanceTheme.colors.onSurface,
-                    textAlign = TextAlign.Center,
-                ),
-                modifier = GlanceModifier.fillMaxWidth().padding(top = 2.dp),
-            )
-        }
-        Spacer(modifier = GlanceModifier.defaultWeight())
-        Box(
-            modifier = GlanceModifier
-                .fillMaxWidth()
-                .background(ColorProvider(accent))
-                .padding(vertical = 5.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = status,
-                maxLines = 1,
-                style = TextStyle(
-                    fontWeight = FontWeight.Bold,
-                    fontSize = (statusSp * scale).sp,
-                    color = ColorProvider(Color(0xFF171A20)),
-                    textAlign = TextAlign.Center,
-                ),
-                modifier = GlanceModifier.fillMaxWidth(),
-            )
-        }
-    }
+    SoloStatCard(label = item.label, value = value, status = status,
+        accent = accent, scale = scale, modifier = modifier)
 }
 
 // Matches the app's one established accent blue (the web panel's
