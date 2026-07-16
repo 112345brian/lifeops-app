@@ -4,6 +4,15 @@ Notable changes, newest first. Personal project, versioned simply (see
 `VERSION` / `lifeops.__version__`) — dates and the reasoning behind each
 change matter more here than semver strictness.
 
+## [1.18.8] — 2026-07-16
+
+### Added
+- **Tapping the money tile through to YNAB now schedules a delayed refresh.**
+  Opening YNAB from the widget enqueues a forced category-balance refresh 2
+  minutes later, so an edit made there shows up without waiting on the
+  normal 45-minute refresh gate or a manual config-screen Save. Repeated
+  taps just reset the 2-minute timer instead of stacking up refreshes.
+
 ## [1.18.7] — 2026-07-15
 
 ### Added

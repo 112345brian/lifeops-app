@@ -25,6 +25,13 @@ class OpenExternalAppAction : ActionCallback {
         val intent = when (target) {
             TARGET_MONEY -> {
                 packageNameForFallback = packageName ?: WidgetDisplayConfig.DEFAULT_MONEY_APP_PACKAGE
+                // Tapping through to YNAB is the strongest signal we have that
+                // the user is about to (or just did) change a category balance
+                // there -- schedule a forced refresh a couple minutes out so
+                // the widget picks it up without waiting on YnabRefresh's
+                // normal 45-min gate, instead of requiring a manual config-
+                // screen Save to see the update.
+                enqueueDelayedYnabRefresh(context)
                 appOrStoreIntent(context, packageNameForFallback)
             }
             TARGET_GYM -> {
