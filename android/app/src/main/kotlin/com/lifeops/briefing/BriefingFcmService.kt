@@ -3,7 +3,9 @@ package com.lifeops.briefing
 import android.content.Context
 import android.util.Log
 import androidx.glance.GlanceId
+import androidx.glance.appwidget.state.getAppWidgetState
 import androidx.glance.appwidget.state.updateAppWidgetState
+import androidx.glance.state.PreferencesGlanceStateDefinition
 import androidx.work.BackoffPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
@@ -91,11 +93,26 @@ class BriefingFcmService : FirebaseMessagingService() {
  * periodic pull so a fresh BriefingState is persisted identically from
  * either path. */
 internal suspend fun persistBriefingForInstance(context: Context, glanceId: GlanceId, state: BriefingState) {
+    val existingState = try {
+        getAppWidgetState(context, PreferencesGlanceStateDefinition, glanceId)[WidgetKeys.BRIEFING_JSON]
+            ?.let { BriefingState.fromJson(it) }
+    } catch (e: Exception) {
+        null
+    }
+    val mergedState = state.withLocalYnabFallback(existingState)
     updateAppWidgetState(context, glanceId) { prefs ->
-        prefs[WidgetKeys.BRIEFING_JSON] = state.toJson()
-        state.fetchedAtEpochMillis?.let { prefs[WidgetKeys.LAST_FETCHED_AT] = it }
+        prefs[WidgetKeys.BRIEFING_JSON] = mergedState.toJson()
+        mergedState.fetchedAtEpochMillis?.let { prefs[WidgetKeys.LAST_FETCHED_AT] = it }
     }
     BriefingWidget().update(context, glanceId)
+}
+
+internal fun BriefingState.withLocalYnabFallback(existingState: BriefingState?): BriefingState {
+    if (existingState == null) return this
+    return copy(
+        discretionaryCurrentDollars = discretionaryCurrentDollars ?: existingState.discretionaryCurrentDollars,
+        ynabCategoryBalances = ynabCategoryBalances.ifEmpty { existingState.ynabCategoryBalances },
+    )
 }
 
 /** Shared by both onNewToken and SettingsActivity's Save button so a fresh
@@ -142,4 +159,3 @@ private fun registerTokenDirect(baseUrl: String, authToken: String, token: Strin
         requireExactCode = HttpURLConnection.HTTP_OK,
     )
 }
-

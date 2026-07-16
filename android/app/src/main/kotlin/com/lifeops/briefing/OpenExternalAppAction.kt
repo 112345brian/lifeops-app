@@ -2,8 +2,12 @@ package com.lifeops.briefing
 
 import android.content.Context
 import android.content.ActivityNotFoundException
+import android.content.ComponentName
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.content.pm.ResolveInfo
 import android.net.Uri
+import android.os.Build
 import androidx.glance.GlanceId
 import androidx.glance.action.ActionParameters
 import androidx.glance.appwidget.action.ActionCallback
@@ -44,12 +48,20 @@ class OpenExternalAppAction : ActionCallback {
         }
     }
 
-    // getLaunchIntentForPackage already does the MAIN/LAUNCHER resolution a
-    // manual queryIntentActivities scan would (that used to be duplicated
-    // here, and separately in WidgetConfigActivity.kt's launchableApps());
-    // no need to reimplement it.
-    private fun appOrStoreIntent(context: Context, packageName: String): Intent =
-        context.packageManager.getLaunchIntentForPackage(packageName) ?: storeIntent(packageName)
+    private fun appOrStoreIntent(context: Context, packageName: String): Intent {
+        val launchIntent = Intent(Intent.ACTION_MAIN)
+            .addCategory(Intent.CATEGORY_LAUNCHER)
+        val activity = context.packageManager.queryLauncherActivities(launchIntent)
+            .firstOrNull { it.activityInfo?.packageName == packageName }
+            ?.activityInfo
+        if (activity != null) {
+            return Intent(Intent.ACTION_MAIN)
+                .addCategory(Intent.CATEGORY_LAUNCHER)
+                .setComponent(ComponentName(activity.packageName, activity.name))
+        }
+        return context.packageManager.getLaunchIntentForPackage(packageName)
+            ?: storeIntent(packageName)
+    }
 
     private fun storeIntent(packageName: String): Intent =
         Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$packageName"))
@@ -66,6 +78,14 @@ class OpenExternalAppAction : ActionCallback {
         }
         return Intent(Intent.ACTION_VIEW, Uri.parse(url))
     }
+
+    private fun PackageManager.queryLauncherActivities(intent: Intent): List<ResolveInfo> =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            queryIntentActivities(intent, PackageManager.ResolveInfoFlags.of(0))
+        } else {
+            @Suppress("DEPRECATION")
+            queryIntentActivities(intent, 0)
+        }
 
     companion object {
         val TARGET_KEY = ActionParameters.Key<String>("externalTarget")
