@@ -916,6 +916,75 @@ def cycle_edit(id: str = Form(...), days: int = Form(...)):
                 break
     return RedirectResponse("/recurring", 303)
 
+def _find_fs_item(fs, item_type, item_id):
+    """Locates a FlowSavvy item by id for the upcoming-events edit/delete
+    controls. Tasks: the same small unfinished-tasks list gather.py's
+    PARTNER_TASK/FRIENDS_TASK pass already fetches. Events: gather's
+    paginated all-calendars sweep, since the item could be on any
+    calendar, not just one in EVENT_CALS -- calls _fetch_all_events (NOT
+    _all_events_cached) since that cache is process-lifetime and this is
+    a long-running server, not runner.py's one-shot-per-run subprocess."""
+    if item_type == "task":
+        items = fs.list_items(itemType="task", completed=False).get("items", [])
+    else:
+        items = gather._fetch_all_events(fs)
+    for it in items:
+        if str(it.get("id")) == str(item_id):
+            return it
+    return None
+
+@app.post("/upcoming-events/edit")
+def upcoming_event_edit(item_id: str = Form(...), item_type: str = Form(...),
+                         cost: float = Form(...)):
+    """Overrides (or, with cost=0, effectively deletes-from-the-forecast)
+    a single upcoming event/task's projected cost, by rewriting its
+    FlowSavvy notes -- the same "cost: <dollars>" override gather.py
+    already understands -- rather than deleting the underlying
+    appointment, which still needs to happen."""
+    if item_type not in ("event", "task"):
+        raise HTTPException(400, "unknown item_type")
+    with _exclusive():
+        fs = FlowSavvy()
+        item = _find_fs_item(fs, item_type, item_id)
+        if not item:
+            raise HTTPException(404, "That item wasn't found — it may have already changed.")
+        # Send only the changed field, matching every other update_task call
+        # site (runner.py's title=.../dueDateTime=... calls) -- spreading the
+        # whole fetched item back as the body would round-trip whatever
+        # read-only/computed fields list_items() happens to include into a
+        # PUT whose real shape is inferred, not confirmed (flowsavvy.py's own
+        # docstring), for no benefit over a single-field update.
+        new_notes = gather.set_cost_override(item.get("notes"), cost)
+        if item_type == "task":
+            fs.update_task(item_id, notes=new_notes)
+        else:
+            fs.update_event(item_id, notes=new_notes)
+    _run_domain("cashflow")
+    return RedirectResponse("/", 303)
+
+@app.post("/upcoming-events/new")
+def upcoming_event_new(label: str = Form(...), cost: float = Form(...), date: str = Form(...)):
+    """Adds a brand-new manual future cost not tied to any existing
+    calendar item -- a FlowSavvy calendar event carrying a "type: custom
+    / cost: <dollars>" note, on any EVENT_CALS calendar (the note-swept
+    type always wins over that calendar's own default, so which one it
+    lands on doesn't matter)."""
+    cal_id = next(iter(config.EVENT_CALS), "")
+    if not cal_id:
+        raise HTTPException(400, "No EVENT_CALS calendar configured to add a manual cost to.")
+    with _exclusive():
+        fs = FlowSavvy()
+        fs.create_event(
+            title=label,
+            calendarId=cal_id,
+            startDateTime=f"{date}T12:00:00",
+            endDateTime=f"{date}T13:00:00",
+            notes=gather.set_cost_override("type: custom", cost),
+        )
+        fs.recalculate()
+    _run_domain("cashflow")
+    return RedirectResponse("/", 303)
+
 @app.post("/domain")
 def domain_toggle(name: str = Form(...), on: int = Form(...)):
     d = _domains()

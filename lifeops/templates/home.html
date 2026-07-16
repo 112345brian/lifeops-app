@@ -83,21 +83,44 @@
 </div>
 {% endif %}
 
-{% if cashflow and cashflow.events %}
 <!-- ── Upcoming events (same data run_cashflow already swept -- gather.spend_input's
      next-21-days event list; this is the plain "what's coming up" view of it,
-     the projection above is the money-impact view). ── -->
+     the projection above is the money-impact view). Always shown (not gated
+     on cashflow.events) so the "add a cost" form below stays reachable even
+     with nothing currently upcoming. Per-row cost editing writes back to the
+     underlying FlowSavvy item's notes (gather.set_cost_override) -- set to 0
+     to mark something free/no-charge without deleting the appointment
+     itself; older items missing item_id (cashflow.json from before this
+     existed) just show a plain "$" tag until cashflow next regenerates. ── -->
 <div class="card section" id="upcoming-events">
   <div class="card-title">📅 Upcoming events</div>
+  {% if cashflow and cashflow.events %}
   {% for e in cashflow.events %}
   <div class="event-row">
     <span class="hist-ts">{{ e.days_until }}d</span>
     <span>{{ e.label }}</span>
-    {% if e.cost %}<span class="hist-meta">${{ e.cost }}</span>{% endif %}
+    {% if e.item_id %}
+    <form method="post" action="/upcoming-events/edit" class="f-row upcoming-edit-row">
+      <input type="hidden" name="item_id" value="{{ e.item_id }}">
+      <input type="hidden" name="item_type" value="{{ e.item_type }}">
+      <input type="number" name="cost" step="0.01" min="0" value="{{ e.cost or 0 }}">
+      <button class="btn btn-ghost btn-xs" title="Save this cost">save</button>
+    </form>
+    {% elif e.cost %}
+    <span class="hist-meta">${{ e.cost }}</span>
+    {% endif %}
   </div>
   {% endfor %}
+  {% else %}
+  <div class="muted" style="font-size:13px;">Nothing coming up.</div>
+  {% endif %}
+  <form method="post" action="/upcoming-events/new" class="upcoming-new-row">
+    <input type="text" name="label" placeholder="What?" required>
+    <input type="date" name="date" required>
+    <input type="number" name="cost" step="0.01" min="0" placeholder="$" required>
+    <button class="btn btn-sm btn-primary">+ add cost</button>
+  </form>
 </div>
-{% endif %}
 
 <!-- ── Two-col grid: Domains + Reference ── -->
 <div class="grid-2 section">

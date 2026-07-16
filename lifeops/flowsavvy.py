@@ -99,6 +99,7 @@ class FlowSavvy:
     def update_task(self, task_id, **body):return self._put(f"/tasks/{task_id}", body)
     def complete_task(self, task_id):      return self._post(f"/tasks/{task_id}/complete")
     def create_event(self, **body):        return self._post("/events", body)
+    def update_event(self, event_id, **body): return self._put(f"/events/{event_id}", body)
     def delete_item(self, item_id, **p):   return self._delete(f"/items/{item_id}", **p)
     def recalculate(self, reschedule_past=False):
         return self._post("/recalculate", {"reschedulePastTasks": reschedule_past})

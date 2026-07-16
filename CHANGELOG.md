@@ -4,6 +4,20 @@ Notable changes, newest first. Personal project, versioned simply (see
 `VERSION` / `lifeops.__version__`) — dates and the reasoning behind each
 change matter more here than semver strictness.
 
+## [1.18.9] — 2026-07-16
+
+### Added
+- **The home panel's "Upcoming events" card can now edit, zero-out, or add a
+  future cost.** Each upcoming event/task gets an inline cost field — save a
+  new value to override the projected cost, or `0` to mark it free without
+  cancelling the actual appointment. A new "add cost" form below the list
+  creates a manual cost entry (e.g. a purchase not tied to any calendar item)
+  on any configured event calendar. Both write back through the existing
+  `cost: <dollars>` notes-override convention `gather.py` already understood,
+  via two new FlowSavvy client calls (`update_event`, alongside the existing
+  `update_task`) and two new web routes (`/upcoming-events/edit`,
+  `/upcoming-events/new`).
+
 ## [1.18.8] — 2026-07-16
 
 ### Added

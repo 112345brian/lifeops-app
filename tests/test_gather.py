@@ -74,6 +74,22 @@ def test_parse_note_overrides_empty_notes():
     assert gather._parse_note_overrides("") == {}
 
 
+def test_set_cost_override_replaces_existing_cost_line():
+    assert gather.set_cost_override("type: friends\ncost: 30", 0) == "type: friends\ncost: 0"
+
+
+def test_set_cost_override_appends_when_no_cost_line():
+    assert gather.set_cost_override("type: friends", 15) == "type: friends\ncost: 15"
+
+
+def test_set_cost_override_handles_empty_notes():
+    assert gather.set_cost_override(None, 20) == "cost: 20"
+
+
+def test_set_cost_override_formats_float_without_trailing_zero():
+    assert gather.set_cost_override("cost: 10", 30.5) == "cost: 30.5"
+
+
 def test_sleep_minutes_last_night_returns_none_without_watch_data(tmp_path, monkeypatch):
     monkeypatch.setattr(history, "ROOT", str(tmp_path))
     monkeypatch.setattr(history, "HIST", str(tmp_path / "logs" / "history.jsonl"))
@@ -236,7 +252,8 @@ def test_spend_input_uses_projected_cost_for_mapped_calendar_event(monkeypatch):
     out = gather.spend_input(fs, _FakeYnab(200), now)
 
     assert out["events"] == [
-        {"date": "2026-07-15", "type": "friends", "cost": 35, "label": "Chloe hangout", "days_until": 2},
+        {"date": "2026-07-15", "type": "friends", "cost": 35, "label": "Chloe hangout", "days_until": 2,
+         "item_id": "e1", "item_type": "event"},
     ]
     assert out["fun_money"] == 200
     assert out["net_fun_money"] == 165
@@ -290,7 +307,8 @@ def test_spend_input_sweeps_unmapped_calendar_event_with_explicit_type_note(monk
     out = gather.spend_input(fs, _FakeYnab(200), now)
 
     assert out["events"] == [
-        {"date": "2026-07-15", "type": "friends", "cost": 30, "label": "Chloe hangout", "days_until": 2},
+        {"date": "2026-07-15", "type": "friends", "cost": 30, "label": "Chloe hangout", "days_until": 2,
+         "item_id": "e1", "item_type": "event"},
     ]
     assert out["net_fun_money"] == 170
 

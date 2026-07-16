@@ -266,10 +266,22 @@ nav.pages a.active { background: var(--md-primary-container); color: var(--md-on
   font-size: 13px;
 }
 .event-row:last-child { border-bottom: none; }
+.upcoming-new-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .4rem;
+  margin-top: .6rem;
+}
+.upcoming-new-row input[type=text] { flex: 1 1 160px; min-width: 0; }
+.upcoming-new-row input[type=date] { flex: 1 1 140px; min-width: 0; }
+.upcoming-new-row input[type=number] { flex: 0 1 5.5rem; min-width: 4rem; }
+.upcoming-new-row button { flex: 0 0 auto; }
 @media (max-width: 620px) {
   .ops-hero-head { grid-template-columns: 1fr; }
   .progress-row { grid-template-columns: 3.2rem minmax(0, 1fr) 4rem; }
   .progress-row .hist-meta { display: none; }
+  .event-row { grid-template-columns: 3.2rem minmax(0, 1fr) auto; }
+  .event-row .upcoming-edit-row input[type=number] { width: 4rem; }
 }
 
 /* generic banner (flash messages, install hint) */
@@ -546,6 +558,19 @@ input[type=date] {
   color-scheme: dark;
 }
 input[type=date]:focus { outline: 2px solid var(--md-primary); outline-offset: 1px; border-color: transparent; }
+
+input[type=number] {
+  background: var(--md-surface);
+  border: 1px solid var(--md-outline);
+  color: var(--md-on-surface);
+  border-radius: var(--shape-sm);
+  padding: .4rem .6rem;
+  min-height: 32px;
+  width: 5.5rem;
+  font-size: 13px;
+  font-family: var(--font);
+}
+input[type=number]:focus { outline: 2px solid var(--md-primary); outline-offset: 1px; border-color: transparent; }
 
 /* ── misc ── */
 .muted  { color: var(--md-on-surface-variant); }

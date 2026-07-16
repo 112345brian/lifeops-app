@@ -63,6 +63,24 @@ def _parse_note_overrides(notes):
                 out["cost"] = parsed
     return out
 
+def set_cost_override(notes, cost):
+    """Given an item's existing notes text, replace its "cost: <dollars>"
+    line (or append one) so callers writing back to FlowSavvy (web.py's
+    upcoming-events edit/delete controls) preserve every other line --
+    a "type: ..." override, or free-text description -- instead of
+    clobbering the whole notes field with just the new cost."""
+    lines = (notes or "").splitlines()
+    out, replaced = [], False
+    for line in lines:
+        if re.match(r"(?i)^\s*cost\s*:", line):
+            out.append(f"cost: {cost:g}")
+            replaced = True
+        else:
+            out.append(line)
+    if not replaced:
+        out.append(f"cost: {cost:g}")
+    return "\n".join(out).strip()
+
 def _note_types(notes):
     overrides = _parse_note_overrides(notes)
     if "types" in overrides:
@@ -449,31 +467,43 @@ def today_events_input(fs, now, n=5, schedule_items=None):
 # "fetch every event on every calendar" call from 3 independent call sites).
 _ALL_EVENTS_CACHE = {}
 
+def _fetch_all_events(fs):
+    """The paginated "every event on every calendar" fetch, always live --
+    no caching. A single unpaginated call only returns the API's default
+    page (items ordered by id ascending) -- on an account with a large
+    Google Calendar import behind it, that page never reaches the present
+    day, so every caller silently saw only ancient events (confirmed
+    2026-07-14: a friend hangout event created same-day was invisible to
+    social_input's "next hangout" detection because it was far past page
+    1). Page through nextPageToken until exhausted; the 50-page cap is only
+    a runaway-loop backstop, not an expected limit. web.py's upcoming-events
+    edit lookup calls this directly (not _all_events_cached below) -- that
+    cache is only safe from runner.py's one-shot-per-run subprocess model;
+    a persistent server process needs a fresh fetch every call, or an event
+    created after the cache's first fill would be permanently unfindable
+    until the server restarts (confirmed 2026-07-16 code review)."""
+    events = []
+    try:
+        page_token = None
+        for _ in range(50):
+            params = {"itemType": "event", "limit": 200}
+            if page_token:
+                params["pageToken"] = page_token
+            resp = fs.list_items(**params)
+            events.extend(resp.get("items", []))
+            page_token = resp.get("nextPageToken")
+            if not page_token:
+                break
+    except Exception:
+        pass
+    return events
+
 def _all_events_cached(fs):
-    """A single unpaginated call only returns the API's default page (items
-    ordered by id ascending) -- on an account with a large Google Calendar
-    import behind it, that page never reaches the present day, so every
-    caller silently saw only ancient events (confirmed 2026-07-14: a friend
-    hangout event created same-day was invisible to social_input's "next
-    hangout" detection because it was far past page 1). Page through
-    nextPageToken until exhausted; the 50-page cap is only a runaway-loop
-    backstop, not an expected limit."""
+    """Cached wrapper around _fetch_all_events for runner.py's per-process
+    call sites (spend/briefing/cashflow all sharing one FlowSavvy() within
+    a single subprocess run -- see the module cache comment above)."""
     if "events" not in _ALL_EVENTS_CACHE:
-        events = []
-        try:
-            page_token = None
-            for _ in range(50):
-                params = {"itemType": "event", "limit": 200}
-                if page_token:
-                    params["pageToken"] = page_token
-                resp = fs.list_items(**params)
-                events.extend(resp.get("items", []))
-                page_token = resp.get("nextPageToken")
-                if not page_token:
-                    break
-        except Exception:
-            pass
-        _ALL_EVENTS_CACHE["events"] = events
+        _ALL_EVENTS_CACHE["events"] = _fetch_all_events(fs)
     return _ALL_EVENTS_CACHE["events"]
 
 def spend_input(fs, yn, now):
@@ -506,12 +536,16 @@ def spend_input(fs, yn, now):
         eid = e.get("id")
         return eid if eid is not None else (st, e.get("title"))
 
-    def _spend_event(st, typ, notes, label, default_typ_cost=None):
+    def _spend_event(st, typ, notes, label, default_typ_cost=None, item_id=None, item_type=None):
         """Builds one events[] entry: resolves the note overrides, the
         final cost (explicit override > this type's projected default >
         the ORIGINAL type's default, for when an override changes the type
         but not the cost), and days_until -- shared by all three passes
-        below so they can't drift on how an event dict is shaped."""
+        below so they can't drift on how an event dict is shaped.
+        item_id/item_type identify the underlying FlowSavvy item (a
+        calendar "event" or a "task") so web.py's upcoming-events
+        edit/delete controls can write a cost override straight back to
+        its notes -- see gather.set_cost_override."""
         overrides = _parse_note_overrides(notes)
         typ_final = overrides.get("type", typ)
         fallback_cost = config.COSTS.get(typ_final, default_typ_cost if default_typ_cost is not None
@@ -519,7 +553,8 @@ def spend_input(fs, yn, now):
         cost = overrides.get("cost", fallback_cost)
         du = (datetime.date.fromisoformat(_d(st)) - now.date()).days
         return {"date": _d(st), "type": typ_final, "cost": cost,
-                "label": label or typ_final, "days_until": du}
+                "label": label or typ_final, "days_until": du,
+                "item_id": item_id, "item_type": item_type}
 
     for cid, typ in caltype.items():
         try:
@@ -531,7 +566,8 @@ def spend_input(fs, yn, now):
             if not st or not (start <= _d(st) <= end):
                 continue
             events.append(_spend_event(st, typ, e.get("notes"), e.get("title"),
-                                        default_typ_cost=config.COSTS.get(typ, 40)))
+                                        default_typ_cost=config.COSTS.get(typ, 40),
+                                        item_id=e.get("id"), item_type="event"))
             seen_ids.add(_event_key(e, st))
     # Sweep every OTHER calendar too, for events that declare their own
     # type/cost via notes -- e.g. a hangout with a friend that lives on your
@@ -549,12 +585,14 @@ def spend_input(fs, yn, now):
         notes = e.get("notes")
         if not _parse_note_overrides(notes).get("type"):
             continue
-        events.append(_spend_event(st, None, notes, e.get("title")))
+        events.append(_spend_event(st, None, notes, e.get("title"),
+                                    item_id=e.get("id"), item_type="event"))
     for t in fs.list_items(itemType="task", completed=False).get("items", []):
         title = t.get("title") or ""; st = t.get("startDateTime") or t.get("dueDateTime")
         if title in (config.PARTNER_TASK, config.FRIENDS_TASK) and st and start <= _d(st) <= end:
             typ = "date" if title == config.PARTNER_TASK else "friends"
-            events.append(_spend_event(st, typ, t.get("notes"), title))
+            events.append(_spend_event(st, typ, t.get("notes"), title,
+                                        item_id=t.get("id"), item_type="task"))
     disc = set(config.DISCRETIONARY)
     try:
         month = yn.month()

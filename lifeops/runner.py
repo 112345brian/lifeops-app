@@ -419,7 +419,8 @@ def _gym_backfill(fs, now, gym_tasks):
             history.append("gym", ts=(start[:19] or None), source="manual")
         logged[iid] = today_iso
         handled.add(iid)
-        # visible confirmation on tasks (the client has no update_event)
+        # visible confirmation on tasks only -- not extended to events here,
+        # to keep this backfill-logging pass's behavior unchanged
         if it.get("itemType") == "task" and not title.startswith("✅"):
             try:
                 fs.update_task(iid, title=f"✅ {title} (logged)")
@@ -842,7 +843,8 @@ def run_cashflow(fs, yn, now):
     proj = {"date": now.date().isoformat(), "start_balance": bal, "weeks": weeks,
             "dips_below_zero": any(wk["balance"] < 0 for wk in weeks),
             "events": [{"label": e.get("label"), "days_until": e.get("days_until"),
-                        "cost": e.get("cost")} for e in events[:6]]}
+                        "cost": e.get("cost"), "item_id": e.get("item_id"),
+                        "item_type": e.get("item_type")} for e in events[:6]]}
     bp = os.path.join(history.ROOT, "logs", "cashflow.json")
     os.makedirs(os.path.dirname(bp), exist_ok=True)
     _save_json_atomic(bp, proj)
