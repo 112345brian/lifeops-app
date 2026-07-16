@@ -56,6 +56,7 @@ import androidx.glance.unit.ColorProvider
 import com.lifeops.briefing.data.AttentionReason
 import com.lifeops.briefing.data.BriefingState
 import com.lifeops.briefing.data.GymRing
+import com.lifeops.briefing.data.MoneyDisplayMode
 import com.lifeops.briefing.data.NextTask
 import com.lifeops.briefing.data.NextTasksState
 import com.lifeops.briefing.data.NotableEvent
@@ -421,14 +422,14 @@ internal fun BriefingContent(
 
         for (group in groupSectionsForRendering(renderableOrder)) {
             if (group.size > 1) {
-                TileRow(group, state, nextTasks.gymRing, scale)
+                TileRow(group, state, nextTasks.gymRing, scale, config = config)
                 continue
             }
             when (val section = group.first()) {
                 WidgetSection.SEVERITY_DOTS -> StandaloneSeverityDots(state.reasons, scale)
                 WidgetSection.GYM_RING, WidgetSection.MONEY_TILE, WidgetSection.COURSEWORK_TILE,
                 WidgetSection.SLEEP_TILE ->
-                    SoloableTileRow(section, state, nextTasks.gymRing, scale, solo)
+                    SoloableTileRow(section, state, nextTasks.gymRing, scale, solo, config)
                 WidgetSection.BRIEFING_PARAGRAPH -> {
                     val text = state.text
                     if (bucket == WidgetSizeBucket.LARGE && text != null) BriefingParagraph(text, scale)
@@ -478,7 +479,8 @@ internal fun BriefingContent(
                             temperatureF, w?.highF ?: state.weatherHighF,
                             w?.lowF ?: state.weatherLowF, w?.condition ?: state.weatherCondition,
                             scale,
-                            modifier = if (solo) GlanceModifier.fillMaxSize() else GlanceModifier.padding(top = 4.dp))
+                            modifier = if (solo) GlanceModifier.fillMaxSize() else GlanceModifier.padding(top = 4.dp),
+                            appPackage = config.weatherAppPackage)
                     }
                 }
                 WidgetSection.SOCIAL ->
@@ -926,14 +928,29 @@ private fun MoneyTile(
     soloStyle: Boolean = false,
     cornerRadiusDp: Dp = 10.dp,
     todayDollars: Int? = null,
+    currentDollars: Int? = null,
+    currentLabel: String = "YNAB",
+    moneyDisplayMode: MoneyDisplayMode = MoneyDisplayMode.YNAB_CURRENT,
+    appPackage: String = "",
 ) {
+    val clickableModifier = externalAppClick(modifier, OpenExternalAppAction.TARGET_MONEY, appPackage)
     if (soloStyle) {
-        SoloMoneyTile(dollars, severity, scale, modifier, todayDollars = todayDollars)
+        SoloMoneyTile(dollars, severity, scale, clickableModifier,
+            todayDollars = todayDollars, currentDollars = currentDollars, currentLabel = currentLabel,
+            moneyDisplayMode = moneyDisplayMode)
         return
     }
-    SeverityValueTile(formatMoney(dollars), severity, scale, modifier,
+    SeverityValueTile(
+        moneyStatPresentation(dollars, severity, todayDollars, currentDollars,
+            compact = true, displayMode = moneyDisplayMode, currentLabel = currentLabel).value,
+        severity, scale, clickableModifier,
         horizontalAlignment, verticalAlignment, fontSp, tilePadding, cornerRadiusDp)
 }
+
+private fun selectedYnabCategory(state: BriefingState, config: WidgetDisplayConfig) =
+    state.ynabCategoryBalances.firstOrNull {
+        it.name.equals(config.ynabCategoryName, ignoreCase = true)
+    }
 
 /** Shared skeleton for every "solo" single-stat card (label / big value /
  * bottom accent-colored status bar) -- SoloMoneyTile and SocialFocusTile
@@ -1044,32 +1061,57 @@ private fun SoloMoneyTile(
     labelSp: Float = 8f, valueSp: Float = 22f, statusSp: Float = 9f,
     cornerRadiusDp: Dp = 14.dp, statusVerticalPaddingDp: Dp = 5.dp,
     todayDollars: Int? = null,
+    currentDollars: Int? = null,
+    currentLabel: String = "YNAB",
+    moneyDisplayMode: MoneyDisplayMode = MoneyDisplayMode.YNAB_CURRENT,
 ) {
-    val stat = moneyStatPresentation(dollars, severity, todayDollars)
+    val stat = moneyStatPresentation(dollars, severity, todayDollars, currentDollars,
+        displayMode = moneyDisplayMode, currentLabel = currentLabel)
     SoloStatCard(label = stat.label, value = stat.value, status = stat.status,
         accent = stat.accent, scale = scale, modifier = modifier, secondary = stat.secondary,
         labelSp = labelSp, valueSp = valueSp, statusSp = statusSp,
         cornerRadiusDp = cornerRadiusDp, statusVerticalPaddingDp = statusVerticalPaddingDp)
 }
 
-/** [todayDollars], when a positive amount is already earmarked for TODAY
- * specifically (days_until == 0 events -- see gather.spend_input's
- * docstring), becomes the headline value/label instead of [dollars] (the
- * net-of-everything-upcoming balance) -- that's the number worth checking
- * mid-outing, when [dollars] alone would read as "broke" purely because it
- * also reserves money for next week (confirmed 2026-07-15). On a day with
- * nothing specifically budgeted, todayDollars is 0/null and this falls back
- * to the previous "SPEND"/net-balance headline unchanged. When today is
- * headlined, the net future balance remains visible as secondary text so
- * the tile carries both numbers. status/accent always reflect [severity]
- * (the overall net picture), regardless of which number is headlined. */
+/** Builds the money tile according to the per-widget display mode. The mode
+ * chooses the headline number; missing data falls back to the next useful
+ * money value rather than blanking the tile. */
 internal fun moneyStatPresentation(
     dollars: Int,
     severity: String?,
     todayDollars: Int? = null,
+    currentDollars: Int? = null,
     compact: Boolean = false,
+    displayMode: MoneyDisplayMode = MoneyDisplayMode.YNAB_CURRENT,
+    currentLabel: String = "YNAB",
 ): SoloStatPresentation {
-    val isNegative = dollars < 0
+    val todayAvailable = todayDollars != null && todayDollars > 0
+    val selected = when (displayMode) {
+        MoneyDisplayMode.YNAB_CURRENT -> if (currentDollars != null) {
+            Triple(currentLabel.uppercase(), currentDollars,
+                if (!compact && currentDollars != dollars) "PLAN ${formatMoney(dollars)}" else null)
+        } else if (todayAvailable) {
+            Triple("TODAY", todayDollars, if (!compact) "FUTURE ${formatMoney(dollars)}" else null)
+        } else {
+            Triple("SPEND", dollars, null)
+        }
+        MoneyDisplayMode.TODAY -> if (todayAvailable) {
+            Triple("TODAY", todayDollars, if (!compact) {
+                currentDollars?.let { "${currentLabel.uppercase()} ${formatMoney(it)}" }
+                    ?: "FUTURE ${formatMoney(dollars)}"
+            } else null)
+        } else if (currentDollars != null) {
+            Triple(currentLabel.uppercase(), currentDollars,
+                if (!compact && currentDollars != dollars) "PLAN ${formatMoney(dollars)}" else null)
+        } else {
+            Triple("SPEND", dollars, null)
+        }
+        MoneyDisplayMode.PROJECTED -> Triple("SPEND", dollars, if (!compact && currentDollars != null) {
+            "${currentLabel.uppercase()} ${formatMoney(currentDollars)}"
+        } else null)
+    }
+    val displayedDollars = selected.second
+    val isNegative = displayedDollars < 0
     val status = when {
         isNegative -> "OVER"
         severity == "watch" -> "LOW"
@@ -1081,14 +1123,7 @@ internal fun moneyStatPresentation(
         severity == "watch" -> MONEY_SOLO_WATCH_ACCENT
         else -> MONEY_SOLO_OK_ACCENT
     }
-    return if (!compact && todayDollars != null && todayDollars > 0) {
-        SoloStatPresentation("TODAY", formatMoney(todayDollars), status, accent,
-            secondary = "FUTURE ${formatMoney(dollars)}")
-    } else if (compact && todayDollars != null && todayDollars > 0) {
-        SoloStatPresentation("TODAY", formatMoney(todayDollars), status, accent)
-    } else {
-        SoloStatPresentation("SPEND", formatMoney(dollars), status, accent)
-    }
+    return SoloStatPresentation(selected.first, formatMoney(selected.second), status, accent, secondary = selected.third)
 }
 
 internal fun formatMoney(dollars: Int): String = if (dollars < 0) "-$${-dollars}" else "$$dollars"
@@ -1170,13 +1205,14 @@ internal fun sleepStatPresentation(minutes: Int): SoloStatPresentation {
 @Composable
 private fun SoloableTileRow(
     section: WidgetSection, state: BriefingState, gymRing: GymRing?, scale: Float, solo: Boolean,
+    config: WidgetDisplayConfig,
 ) {
     if (solo) {
         Box(modifier = GlanceModifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            TileRow(listOf(section), state, gymRing, scale, expand = true)
+            TileRow(listOf(section), state, gymRing, scale, expand = true, config = config)
         }
     } else {
-        TileRow(listOf(section), state, gymRing, scale)
+        TileRow(listOf(section), state, gymRing, scale, config = config)
     }
 }
 
@@ -1192,13 +1228,15 @@ private fun SoloableTileRow(
 @Composable
 private fun TileRow(
     sections: List<WidgetSection>, state: BriefingState, gymRing: GymRing?, scale: Float, expand: Boolean = false,
+    config: WidgetDisplayConfig,
 ) {
     val moneySeverity = state.reasons.firstOrNull { it.domain == "money" }?.severity
     val courseworkSeverity = state.reasons.firstOrNull { it.domain == "coursework" }?.severity
     val sleepSev = state.sleepMinutes?.let(::sleepSeverity)
     val hasGym = WidgetSection.GYM_RING in sections &&
         (gymRing != null || (state.gymLast7d != null && state.gymTarget != null))
-    val hasMoney = WidgetSection.MONEY_TILE in sections && state.discretionaryDollars != null
+    val hasMoney = WidgetSection.MONEY_TILE in sections &&
+        (state.discretionaryDollars != null || state.discretionaryCurrentDollars != null)
     val hasCoursework = WidgetSection.COURSEWORK_TILE in sections && state.courseworkHoursNext7d != null
     val hasSleep = WidgetSection.SLEEP_TILE in sections && state.sleepMinutes != null
     if (!hasGym && !hasMoney && !hasCoursework && !hasSleep) return
@@ -1226,7 +1264,7 @@ private fun TileRow(
                     gymRing != null -> {
                         if (addedFirst) Spacer(modifier = GlanceModifier.width(6.dp))
                         if (expand) {
-                            SoloGymTile(gymRing, scale, modifier = tileWidth)
+                            SoloGymTile(gymRing, scale, modifier = tileWidth, appPackage = config.gymAppPackage)
                         } else {
                             GymRingIndicator(gymRing, scale)
                         }
@@ -1235,7 +1273,8 @@ private fun TileRow(
                     state.gymLast7d != null && state.gymTarget != null -> {
                         if (addedFirst) Spacer(modifier = GlanceModifier.width(6.dp))
                         if (expand) {
-                            SoloGymFallbackTile(state.gymLast7d, state.gymTarget, scale, modifier = tileWidth)
+                            SoloGymFallbackTile(state.gymLast7d, state.gymTarget, scale, modifier = tileWidth,
+                                appPackage = config.gymAppPackage)
                         } else {
                             GymBar(state.gymLast7d, state.gymTarget, scale)
                         }
@@ -1243,13 +1282,19 @@ private fun TileRow(
                     }
                     else -> false
                 }
-                WidgetSection.MONEY_TILE -> if (state.discretionaryDollars != null) {
+                WidgetSection.MONEY_TILE -> if (state.discretionaryDollars != null || state.discretionaryCurrentDollars != null) {
                     if (addedFirst) Spacer(modifier = GlanceModifier.width(6.dp))
-                    MoneyTile(state.discretionaryDollars, moneySeverity, scale, modifier = tileWidth,
+                    val projectedDollars = state.discretionaryDollars ?: state.discretionaryCurrentDollars ?: 0
+                    val selectedCategory = selectedYnabCategory(state, config)
+                    MoneyTile(projectedDollars, moneySeverity, scale, modifier = tileWidth,
                         horizontalAlignment = tileAlignment, verticalAlignment = tileVerticalAlignment,
                         fontSp = if (expand) MONEY_SOLO_FONT_SP else BASE_MONEY_FONT_SP,
                         tilePadding = if (expand) 4.dp else 6.dp,
-                        soloStyle = expand, todayDollars = state.discretionaryTodayDollars)
+                        soloStyle = expand, todayDollars = state.discretionaryTodayDollars,
+                        currentDollars = selectedCategory?.dollars ?: state.discretionaryCurrentDollars,
+                        currentLabel = selectedCategory?.name ?: "YNAB",
+                        moneyDisplayMode = config.moneyDisplayMode,
+                        appPackage = config.moneyAppPackage)
                     true
                 } else false
                 WidgetSection.COURSEWORK_TILE -> if (state.courseworkHoursNext7d != null) {
@@ -1314,7 +1359,11 @@ internal const val COMBO_EVENTS_HEADER_SP = 11f
 internal enum class ComboLayout { COMPACT_2X2, MEDIUM_3X2, WIDE_4X2, TALL_4X3 }
 
 internal fun comboLayoutFor(size: DpSize): ComboLayout = when {
-    size.width.value < 180f -> ComboLayout.COMPACT_2X2
+    // Samsung can report a visually 2x2 placement at the 180dp formula
+    // boundary, so keep compact inclusive with a little tolerance. Without
+    // this the live widget takes the 3x2 two-column branch and renders
+    // weather/gym in the left column with money as a full-height right cell.
+    size.width.value <= 190f -> ComboLayout.COMPACT_2X2
     size.width.value < 250f -> ComboLayout.MEDIUM_3X2
     size.height.value < 180f -> ComboLayout.WIDE_4X2
     else -> ComboLayout.TALL_4X3
@@ -1326,6 +1375,8 @@ private data class ComboCell(
     val gymRing: GymRing? = null,
     val gymCompleted: Int? = null,
     val gymTarget: Int? = null,
+    val appPackage: String = "",
+    val compact: Boolean = false,
 )
 
 /** Agenda-style combo cell. A notable event is a list item (day/time/title),
@@ -1410,9 +1461,11 @@ private fun ComboEventsTile(events: List<NotableEvent>, scale: Float, modifier: 
 internal val COMBO_BG = MONEY_SOLO_BG
 internal val COMBO_OUTER_RADIUS = 16.dp
 
-/** Size-aware Combo renderer. COMPACT_2X2 shows two configured cells,
- * MEDIUM_3X2 shows three, WIDE_4X2 shows four, and TALL_4X3 keeps the
- * richer left-stack plus events shape. No Spacer between any of the pieces,
+/** Size-aware Combo renderer. COMPACT_2X2 uses one full-width top cell and
+ * two half-width bottom cells, prioritizing weather over money + gym when
+ * those configured cells have data. MEDIUM_3X2 shows three, WIDE_4X2 shows
+ * four, and TALL_4X3 keeps the richer left-stack plus events shape. No
+ * Spacer between any of the pieces,
  * AND every
  * individual tile inside is flat (cornerRadiusDp = 0.dp) -- only the OUTER
  * edge of this whole Row is rounded/opaque ([COMBO_BG]/[COMBO_OUTER_RADIUS]),
@@ -1466,13 +1519,27 @@ private fun ComboGridContent(
         }) {
             when (section) {
                 WidgetSection.GYM_RING -> when {
-                    nextTasks.gymRing != null -> add(ComboCell(section, gymRing = nextTasks.gymRing))
+                    layout == ComboLayout.COMPACT_2X2 && nextTasks.gymRing != null ->
+                        add(ComboCell(section, stat = gymStatPresentation(nextTasks.gymRing),
+                            appPackage = config.gymAppPackage, compact = true))
+                    nextTasks.gymRing != null -> add(ComboCell(section, gymRing = nextTasks.gymRing,
+                        appPackage = config.gymAppPackage))
+                    layout == ComboLayout.COMPACT_2X2 && state.gymLast7d != null && state.gymTarget != null ->
+                        add(ComboCell(section, stat = gymFallbackStatPresentation(state.gymLast7d, state.gymTarget),
+                            appPackage = config.gymAppPackage, compact = true))
                     state.gymLast7d != null && state.gymTarget != null ->
-                        add(ComboCell(section, gymCompleted = state.gymLast7d, gymTarget = state.gymTarget))
+                        add(ComboCell(section, gymCompleted = state.gymLast7d, gymTarget = state.gymTarget,
+                            appPackage = config.gymAppPackage))
                 }
-                WidgetSection.MONEY_TILE -> state.discretionaryDollars?.let {
+                WidgetSection.MONEY_TILE -> (state.discretionaryCurrentDollars ?: state.discretionaryDollars)?.let {
+                    val selectedCategory = selectedYnabCategory(state, config)
                     add(ComboCell(section, moneyStatPresentation(
-                        it, moneySeverity, state.discretionaryTodayDollars, compact = compactCells)))
+                        it, moneySeverity, state.discretionaryTodayDollars,
+                        currentDollars = selectedCategory?.dollars ?: state.discretionaryCurrentDollars,
+                        compact = compactCells,
+                        displayMode = config.moneyDisplayMode,
+                        currentLabel = selectedCategory?.name ?: "YNAB"),
+                        appPackage = config.moneyAppPackage))
                 }
                 WidgetSection.COURSEWORK_TILE -> state.courseworkHoursNext7d?.let {
                     add(ComboCell(section, courseworkStatPresentation(it, courseworkSeverity)))
@@ -1483,7 +1550,8 @@ private fun ComboGridContent(
                 WidgetSection.SOCIAL -> socialStatPresentation(socialItems, compact = compactCells)?.let {
                     add(ComboCell(section, it))
                 }
-                WidgetSection.WEATHER -> if (temperatureF != null) add(ComboCell(section))
+                WidgetSection.WEATHER -> if (temperatureF != null) add(ComboCell(section,
+                    appPackage = config.weatherAppPackage))
                 WidgetSection.NOTABLE_EVENTS -> if (state.notableEvents.isNotEmpty()) add(ComboCell(section))
                 else -> Unit
             }
@@ -1497,7 +1565,8 @@ private fun ComboGridContent(
             .background(ColorProvider(COMBO_BG)),
     ) {
         when (layout) {
-            ComboLayout.COMPACT_2X2 -> ComboColumn(cells.take(2), state, temperatureF, highF, lowF, condition, scale)
+            ComboLayout.COMPACT_2X2 ->
+                ComboCompactTwoByTwo(cells, state, temperatureF, highF, lowF, condition, scale)
             ComboLayout.MEDIUM_3X2 -> ComboTwoColumn(cells.take(3), state, temperatureF, highF, lowF, condition, scale,
                 leftCount = 2)
             ComboLayout.WIDE_4X2 -> ComboTwoColumn(cells.take(4), state, temperatureF, highF, lowF, condition, scale,
@@ -1506,6 +1575,42 @@ private fun ComboGridContent(
                 val eventCell = cells.firstOrNull { it.section == WidgetSection.NOTABLE_EVENTS }
                 val priorityCells = cells.filter { it.section != WidgetSection.NOTABLE_EVENTS }
                 ComboTallGrid(priorityCells, eventCell, state, temperatureF, highF, lowF, condition, scale)
+            }
+        }
+    }
+}
+
+private fun compactTwoByTwoCells(cells: List<ComboCell>): List<ComboCell> {
+    val preferred = listOfNotNull(
+        cells.firstOrNull { it.section == WidgetSection.WEATHER },
+        cells.firstOrNull { it.section == WidgetSection.MONEY_TILE },
+        cells.firstOrNull { it.section == WidgetSection.GYM_RING },
+    )
+    return (preferred + cells.filter { it !in preferred && it.section != WidgetSection.NOTABLE_EVENTS })
+        .distinct()
+        .take(3)
+}
+
+@Composable
+private fun RowScope.ComboCompactTwoByTwo(
+    cells: List<ComboCell>, state: BriefingState, temperatureF: Int?, highF: Int?, lowF: Int?, condition: String?,
+    scale: Float,
+) {
+    val compactCells = compactTwoByTwoCells(cells)
+    val top = compactCells.firstOrNull() ?: return
+    val bottom = compactCells.drop(1)
+
+    Column(modifier = GlanceModifier.fillMaxSize().defaultWeight()) {
+        ComboRenderCell(top, state, temperatureF, highF, lowF, condition, scale,
+            GlanceModifier.fillMaxWidth().defaultWeight())
+        if (bottom.isNotEmpty()) {
+            ComboTileDividerHorizontal()
+            Row(modifier = GlanceModifier.fillMaxWidth().defaultWeight()) {
+                bottom.forEachIndexed { index, cell ->
+                    if (index > 0) ComboTileDivider()
+                    ComboRenderCell(cell, state, temperatureF, highF, lowF, condition, scale,
+                        GlanceModifier.fillMaxSize().defaultWeight())
+                }
             }
         }
     }
@@ -1620,17 +1725,25 @@ private fun ComboRenderCell(
 ) {
     when (cell.section) {
         WidgetSection.GYM_RING -> when {
+            cell.stat != null -> ComboStatTile(cell.stat, scale,
+                externalAppClick(modifier, OpenExternalAppAction.TARGET_GYM, cell.appPackage))
             cell.gymRing != null -> GymProgressCard(cell.gymRing, scale, modifier, cornerRadiusDp = 0.dp,
-                statusVerticalPaddingDp = 4.dp)
+                statusVerticalPaddingDp = 4.dp, appPackage = cell.appPackage, compact = cell.compact)
             cell.gymCompleted != null && cell.gymTarget != null ->
                 GymFallbackProgressCard(cell.gymCompleted, cell.gymTarget, scale, modifier,
-                    cornerRadiusDp = 0.dp, statusVerticalPaddingDp = 4.dp)
+                cornerRadiusDp = 0.dp, statusVerticalPaddingDp = 4.dp, appPackage = cell.appPackage,
+                    compact = cell.compact)
         }
         WidgetSection.WEATHER -> temperatureF?.let {
-            WeatherCard(it, highF, lowF, condition, scale, modifier = modifier, cornerRadiusDp = 0.dp)
+            WeatherCard(it, highF, lowF, condition, scale, modifier = modifier, cornerRadiusDp = 0.dp,
+                appPackage = cell.appPackage)
         }
         WidgetSection.NOTABLE_EVENTS -> ComboEventsTile(state.notableEvents, scale, modifier = modifier)
-        else -> cell.stat?.let { ComboStatTile(it, scale, modifier) }
+        else -> cell.stat?.let { stat ->
+            val target = if (cell.section == WidgetSection.MONEY_TILE) OpenExternalAppAction.TARGET_MONEY else null
+            ComboStatTile(stat, scale,
+                if (target != null) externalAppClick(modifier, target, cell.appPackage) else modifier)
+        }
     }
 }
 
@@ -1958,6 +2071,7 @@ private fun WeatherCard(
     // 0.dp from ComboGridContent -- see SeverityValueTile's cornerRadiusDp
     // doc for why an internal cell boundary must stay flat, not rounded.
     cornerRadiusDp: Dp = 12.dp,
+    appPackage: String = "",
 ) {
     val temp = temperatureF ?: return
     val compact = LocalSize.current.height < MEDIUM_SIZE.height
@@ -1971,7 +2085,7 @@ private fun WeatherCard(
     val iconGap = if (compact) 6.dp else 8.dp
 
     Row(
-        modifier = modifier
+        modifier = externalAppClick(modifier, OpenExternalAppAction.TARGET_WEATHER, appPackage)
             .fillMaxWidth()
             .cornerRadius(cornerRadiusDp)
             .background(ColorProvider(WEATHER_BG))
@@ -2310,16 +2424,19 @@ private const val BASE_GYM_RING_STROKE_DP = 5
 private const val BASE_GYM_RING_EMOJI_SP = 22f
 private const val GYM_PROGRESS_RING_BITMAP_PX = 96
 private const val GYM_PROGRESS_RING_STROKE_PX = 10f
+private const val GYM_PROGRESS_ICON = "🏋"
 private val GYM_RING_RED = Color(0xFFB3261E)
 
 @Composable
-private fun SoloGymTile(gymRing: GymRing, scale: Float, modifier: GlanceModifier) {
-    GymProgressCard(gymRing, scale, modifier)
+private fun SoloGymTile(gymRing: GymRing, scale: Float, modifier: GlanceModifier, appPackage: String = "") {
+    GymProgressCard(gymRing, scale, modifier, appPackage = appPackage)
 }
 
 @Composable
-private fun SoloGymFallbackTile(completed: Int, target: Int, scale: Float, modifier: GlanceModifier) {
-    GymFallbackProgressCard(completed, target, scale, modifier)
+private fun SoloGymFallbackTile(
+    completed: Int, target: Int, scale: Float, modifier: GlanceModifier, appPackage: String = "",
+) {
+    GymFallbackProgressCard(completed, target, scale, modifier, appPackage = appPackage)
 }
 
 internal fun gymStatPresentation(gymRing: GymRing): SoloStatPresentation {
@@ -2353,6 +2470,8 @@ private fun GymProgressCard(
     modifier: GlanceModifier,
     cornerRadiusDp: Dp = 14.dp,
     statusVerticalPaddingDp: Dp = 5.dp,
+    appPackage: String = "",
+    compact: Boolean = false,
 ) {
     GymProgressCard(
         completed = gymRing.gymLast7d,
@@ -2364,6 +2483,8 @@ private fun GymProgressCard(
         modifier = modifier,
         cornerRadiusDp = cornerRadiusDp,
         statusVerticalPaddingDp = statusVerticalPaddingDp,
+        appPackage = appPackage,
+        compact = compact,
     )
 }
 
@@ -2375,6 +2496,8 @@ private fun GymFallbackProgressCard(
     modifier: GlanceModifier,
     cornerRadiusDp: Dp = 14.dp,
     statusVerticalPaddingDp: Dp = 5.dp,
+    appPackage: String = "",
+    compact: Boolean = false,
 ) {
     val fill = if (target > 0) (completed.toFloat() / target.toFloat()).coerceIn(0f, 1f) else 0f
     GymProgressCard(
@@ -2387,6 +2510,8 @@ private fun GymFallbackProgressCard(
         modifier = modifier,
         cornerRadiusDp = cornerRadiusDp,
         statusVerticalPaddingDp = statusVerticalPaddingDp,
+        appPackage = appPackage,
+        compact = compact,
     )
 }
 
@@ -2401,9 +2526,15 @@ private fun GymProgressCard(
     modifier: GlanceModifier,
     cornerRadiusDp: Dp,
     statusVerticalPaddingDp: Dp,
+    appPackage: String = "",
+    compact: Boolean = false,
 ) {
-    val ringSizeDp = 56f * scale
+    val ringSizeDp = if (compact) 36f * scale else 56f * scale
+    val labelSp = if (compact) 0f else 8f
+    val iconSp = if (compact) 14f else 20f
+    val verticalPadding = if (compact) 1.dp else statusVerticalPaddingDp
     val ringColor = gymRingColor(color)
+    val healthPercent = (fill.coerceIn(0f, 1f) * 100).roundToInt()
     val bitmap = renderGymRingBitmap(
         sizePx = GYM_PROGRESS_RING_BITMAP_PX,
         strokeWidthPx = GYM_PROGRESS_RING_STROKE_PX,
@@ -2412,40 +2543,42 @@ private fun GymProgressCard(
         fillColor = ringColor.toArgb(),
     )
     Column(
-        modifier = modifier
+        modifier = externalAppClick(modifier, OpenExternalAppAction.TARGET_GYM, appPackage)
             .cornerRadius(cornerRadiusDp)
             .background(ColorProvider(MONEY_SOLO_BG))
-            .padding(vertical = statusVerticalPaddingDp),
+            .padding(vertical = verticalPadding),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalAlignment = Alignment.Top,
     ) {
         Spacer(modifier = GlanceModifier.defaultWeight())
-        Text(
-            text = "GYM",
-            maxLines = 1,
-            style = TextStyle(
-                fontWeight = FontWeight.Bold,
-                fontSize = (8f * scale).sp,
-                color = GlanceTheme.colors.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-            ),
-            modifier = GlanceModifier.fillMaxWidth(),
-        )
+        if (!compact) {
+            Text(
+                text = "GYM",
+                maxLines = 1,
+                style = TextStyle(
+                    fontWeight = FontWeight.Bold,
+                    fontSize = (labelSp * scale).sp,
+                    color = GlanceTheme.colors.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                ),
+                modifier = GlanceModifier.fillMaxWidth(),
+            )
+        }
         Box(
-            modifier = GlanceModifier.size(ringSizeDp.dp).padding(top = 2.dp),
+            modifier = GlanceModifier.size(ringSizeDp.dp).padding(top = if (compact) 0.dp else 2.dp),
             contentAlignment = Alignment.Center,
         ) {
             Image(
                 provider = ImageProvider(bitmap),
-                contentDescription = "Gym $completed/$target, $needDescription",
+                contentDescription = "Gym health $healthPercent%, $needDescription",
                 modifier = GlanceModifier.fillMaxSize(),
             )
             Text(
-                text = "$completed/$target",
+                text = GYM_PROGRESS_ICON,
                 maxLines = 1,
                 style = TextStyle(
                     fontWeight = FontWeight.Bold,
-                    fontSize = (15f * scale).sp,
+                    fontSize = (iconSp * scale).sp,
                     color = GlanceTheme.colors.onSurface,
                     textAlign = TextAlign.Center,
                 ),
@@ -2472,6 +2605,24 @@ private fun gymNeedDescription(color: String): String = when (color) {
     "yellow" -> "needs gym today"
     "green" -> "no gym needed today"
     else -> "gym drought"
+}
+
+private fun externalAppClick(modifier: GlanceModifier, target: String, packageName: String): GlanceModifier {
+    if (WidgetDisplayConfig.isPanelTarget(packageName)) {
+        return modifier.clickable(actionRunCallback<OpenPanelAction>())
+    }
+    return if (packageName.isBlank()) {
+        modifier.clickable(actionRunCallback<OpenExternalAppAction>(
+            actionParametersOf(OpenExternalAppAction.TARGET_KEY to target),
+        ))
+    } else {
+        modifier.clickable(actionRunCallback<OpenExternalAppAction>(
+            actionParametersOf(
+                OpenExternalAppAction.TARGET_KEY to target,
+                OpenExternalAppAction.PACKAGE_KEY to packageName,
+            ),
+        ))
+    }
 }
 
 /** Draws the ring as a bitmap via plain android.graphics.Canvas/Paint --

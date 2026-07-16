@@ -2,7 +2,11 @@ package com.lifeops.briefing
 
 import android.app.Activity
 import android.appwidget.AppWidgetManager
+import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.content.pm.ResolveInfo
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -25,9 +29,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -41,6 +48,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -53,7 +61,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -65,12 +73,16 @@ import androidx.glance.appwidget.state.updateAppWidgetState
 import androidx.glance.state.PreferencesGlanceStateDefinition
 import com.lifeops.briefing.data.AttentionReason
 import com.lifeops.briefing.data.BriefingState
+import com.lifeops.briefing.data.MoneyDisplayMode
 import com.lifeops.briefing.data.NextTask
 import com.lifeops.briefing.data.NextTasksState
 import com.lifeops.briefing.data.TodayEvent
 import com.lifeops.briefing.data.WidgetDisplayConfig
 import com.lifeops.briefing.data.WidgetSection
+import com.lifeops.briefing.data.YnabCategoryBalance
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** Matches the web control panel's dark M3 palette (lifeops/templates/base.html's
  * CSS custom properties) so the two surfaces feel like the same product
@@ -194,6 +206,9 @@ class WidgetConfigActivity : ComponentActivity() {
         updateAppWidgetState(this, glanceId) { prefs ->
             prefs[WidgetKeys.DISPLAY_CONFIG_JSON] = config.toJson()
         }
+        if (config.moneyDisplayMode == MoneyDisplayMode.YNAB_CURRENT || config.ynabCategoryName.isNotBlank()) {
+            enqueueForcedYnabRefresh(this)
+        }
         BriefingWidget().update(this, glanceId)
         setResult(Activity.RESULT_OK, Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId))
         finish()
@@ -274,6 +289,27 @@ private fun WidgetConfigScreen(
     var scale by remember { mutableStateOf(loaded.config.scale) }
     var maxTasksAuto by remember { mutableStateOf(loaded.config.maxTasksOverride == null) }
     var maxTasksValue by remember { mutableStateOf((loaded.config.maxTasksOverride ?: 3).toFloat()) }
+    var moneyAppPackage by remember { mutableStateOf(loaded.config.moneyAppPackage) }
+    var gymAppPackage by remember { mutableStateOf(loaded.config.gymAppPackage) }
+    var weatherAppPackage by remember { mutableStateOf(loaded.config.weatherAppPackage) }
+    var moneyDisplayMode by remember { mutableStateOf(loaded.config.moneyDisplayMode) }
+    var ynabCategoryName by remember { mutableStateOf(loaded.config.ynabCategoryName) }
+    val context = LocalContext.current
+    // queryLauncherActivities scans every installed app's launcher activity
+    // -- on a phone with 100+ apps that's real synchronous PackageManager
+    // work, so it runs off the composition/main thread via LaunchedEffect
+    // instead of blocking the config screen's first frame (remember { } by
+    // itself only skips re-running on recomposition, not on screen entry).
+    var installedApps by remember { mutableStateOf<List<AppChoice>>(emptyList()) }
+    LaunchedEffect(Unit) {
+        installedApps = withContext(Dispatchers.IO) { launchableApps(context) }
+    }
+    val moneyApps = remember(installedApps) {
+        appChoicesWithDefault("YNAB", WidgetDisplayConfig.DEFAULT_MONEY_APP_PACKAGE, installedApps)
+    }
+    val gymApps = remember(installedApps) {
+        appChoicesWithDefault("24GO", WidgetDisplayConfig.DEFAULT_GYM_APP_PACKAGE, installedApps)
+    }
 
     // Save lives in a Scaffold bottomBar, not as the last item in the
     // scrolling content -- on a long section list it used to be scrolled
@@ -304,6 +340,12 @@ private fun WidgetConfigScreen(
                             hiddenSections = hidden,
                             scale = scale,
                             maxTasksOverride = if (maxTasksAuto) null else maxTasksValue.toInt(),
+                            moneyAppPackage = moneyAppPackage.trim(),
+                            gymAppPackage = gymAppPackage.trim(),
+                            weatherAppPackage = weatherAppPackage.trim(),
+                            moneyDisplayMode = moneyDisplayMode,
+                            ynabCategoryName = ynabCategoryName.trim()
+                                .ifBlank { WidgetDisplayConfig.DEFAULT_YNAB_CATEGORY_NAME },
                             // Not user-toggleable from this screen -- carried
                             // through unchanged from whatever was loaded, so
                             // saving a "LifeOps Combo" instance's config
@@ -338,7 +380,8 @@ private fun WidgetConfigScreen(
 
             ConfigCard(title = "Preview") {
                 if (loaded.config.comboGrid) {
-                    ComboGridPreview(state = loaded.state, order = order, hidden = hidden, scale = scale)
+                    ComboGridPreview(state = loaded.state, order = order, hidden = hidden, scale = scale,
+                        moneyDisplayMode = moneyDisplayMode, ynabCategoryName = ynabCategoryName)
                 } else {
                     WidgetPreview(
                         state = loaded.state,
@@ -346,6 +389,8 @@ private fun WidgetConfigScreen(
                         order = order,
                         hidden = hidden,
                         scale = scale,
+                        moneyDisplayMode = moneyDisplayMode,
+                        ynabCategoryName = ynabCategoryName,
                     )
                 }
             }
@@ -353,7 +398,7 @@ private fun WidgetConfigScreen(
             ConfigCard(
                 title = "Sections",
                 subtitle = if (loaded.config.comboGrid) {
-                    "Combo shows the first cells that fit the placed size."
+                    "Compact combo prioritizes Weather, YNAB, and Gym."
                 } else {
                     "Toggle on/off, reorder with the arrows."
                 },
@@ -382,6 +427,44 @@ private fun WidgetConfigScreen(
             ConfigCard(title = "Font & icon size", subtitle = "${"%.2f".format(scale)}x") {
                 Slider(value = scale, onValueChange = { scale = it },
                     valueRange = WidgetDisplayConfig.MIN_SCALE..WidgetDisplayConfig.MAX_SCALE)
+            }
+
+            ConfigCard(title = "Money display", subtitle = moneyDisplayMode.label()) {
+                MoneyDisplayModeRow(selected = moneyDisplayMode, onSelected = { moneyDisplayMode = it })
+            }
+
+            ConfigCard(title = "YNAB category", subtitle = ynabCategoryName) {
+                YnabCategoryPickerRow(
+                    selected = ynabCategoryName,
+                    categories = (loaded.state ?: SAMPLE_STATE).ynabCategoryBalances.map { it.name },
+                    onSelected = { ynabCategoryName = it },
+                )
+            }
+
+            ConfigCard(title = "Tap targets", subtitle = "Choose what each tile opens.") {
+                AppPickerRow(
+                    title = "Money",
+                    selectedPackage = moneyAppPackage,
+                    choices = moneyApps,
+                    onSelected = { moneyAppPackage = it },
+                    allowPanel = true,
+                )
+                AppPickerRow(
+                    title = "Gym",
+                    selectedPackage = gymAppPackage,
+                    choices = gymApps,
+                    onSelected = { gymAppPackage = it },
+                    allowPanel = true,
+                )
+                AppPickerRow(
+                    title = "Weather",
+                    selectedPackage = weatherAppPackage,
+                    choices = installedApps,
+                    onSelected = { weatherAppPackage = it },
+                    allowDefault = true,
+                    defaultLabel = "weather.gov",
+                    allowPanel = true,
+                )
             }
 
             if (!loaded.config.comboGrid) {
@@ -438,6 +521,228 @@ private fun ConfigCard(title: String, subtitle: String? = null, content: @Compos
     }
 }
 
+private data class AppChoice(val label: String, val packageName: String)
+
+private fun appChoicesWithDefault(
+    defaultLabel: String,
+    defaultPackage: String,
+    installedApps: List<AppChoice>,
+): List<AppChoice> {
+    return (listOf(AppChoice(defaultLabel, defaultPackage)) + installedApps)
+        .distinctBy { it.packageName }
+}
+
+private fun launchableApps(context: Context): List<AppChoice> {
+    val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+    val resolved = context.packageManager.queryLauncherActivities(intent)
+    return resolved
+        .mapNotNull { info ->
+            val packageName = info.activityInfo?.packageName ?: return@mapNotNull null
+            AppChoice(info.loadLabel(context.packageManager).toString(), packageName)
+        }
+        .distinctBy { it.packageName }
+        .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label })
+}
+
+private fun PackageManager.queryLauncherActivities(intent: Intent): List<ResolveInfo> =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        queryIntentActivities(intent, PackageManager.ResolveInfoFlags.of(0))
+    } else {
+        @Suppress("DEPRECATION")
+        queryIntentActivities(intent, 0)
+    }
+
+@Composable
+private fun AppPickerRow(
+    title: String,
+    selectedPackage: String,
+    choices: List<AppChoice>,
+    onSelected: (String) -> Unit,
+    allowDefault: Boolean = false,
+    defaultLabel: String = "Default",
+    allowPanel: Boolean = false,
+) {
+    var open by remember { mutableStateOf(false) }
+    val selectedLabel = when {
+        WidgetDisplayConfig.isPanelTarget(selectedPackage) -> "LifeOps panel"
+        selectedPackage.isBlank() -> defaultLabel
+        else -> choices.firstOrNull { it.packageName == selectedPackage }?.label ?: selectedPackage
+    }
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(text = title, fontWeight = FontWeight.SemiBold)
+            Text(
+                text = selectedLabel,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Button(onClick = { open = true }) {
+            Text("Choose")
+        }
+    }
+
+    if (open) {
+        AlertDialog(
+            onDismissRequest = { open = false },
+            title = { Text("Open $title with") },
+            text = {
+                LazyColumn(modifier = Modifier.fillMaxWidth().height(360.dp)) {
+                    if (allowPanel) {
+                        item {
+                            TextButton(
+                                onClick = {
+                                    onSelected(WidgetDisplayConfig.TAP_TARGET_PANEL)
+                                    open = false
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text("LifeOps panel")
+                            }
+                        }
+                    }
+                    if (allowDefault) {
+                        item {
+                            TextButton(
+                                onClick = {
+                                    onSelected("")
+                                    open = false
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(defaultLabel)
+                            }
+                        }
+                    }
+                    items(choices) { app ->
+                        TextButton(
+                            onClick = {
+                                onSelected(app.packageName)
+                                open = false
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                Text(app.label)
+                                Text(
+                                    app.packageName,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { open = false }) {
+                    Text("Cancel")
+                }
+            },
+        )
+    }
+}
+
+private fun MoneyDisplayMode.label(): String = when (this) {
+    MoneyDisplayMode.YNAB_CURRENT -> "Current YNAB"
+    MoneyDisplayMode.TODAY -> "Today"
+    MoneyDisplayMode.PROJECTED -> "Projected"
+}
+
+private fun MoneyDisplayMode.description(): String = when (this) {
+    MoneyDisplayMode.YNAB_CURRENT -> "Raw category balance"
+    MoneyDisplayMode.TODAY -> "Earmarked for today"
+    MoneyDisplayMode.PROJECTED -> "After planned spending"
+}
+
+@Composable
+private fun YnabCategoryPickerRow(selected: String, categories: List<String>, onSelected: (String) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    val choices = (listOf(WidgetDisplayConfig.DEFAULT_YNAB_CATEGORY_NAME) + categories)
+        .distinctBy { it.lowercase() }
+        .sortedWith(String.CASE_INSENSITIVE_ORDER)
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(text = selected.ifBlank { WidgetDisplayConfig.DEFAULT_YNAB_CATEGORY_NAME }, fontWeight = FontWeight.SemiBold)
+            Text(
+                text = if (categories.isEmpty()) {
+                    "Save YNAB token in app settings, then refresh."
+                } else {
+                    "Fetched locally from YNAB"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Button(onClick = { open = true }) {
+            Text("Choose")
+        }
+    }
+    if (open) {
+        AlertDialog(
+            onDismissRequest = { open = false },
+            title = { Text("YNAB category") },
+            text = {
+                LazyColumn(modifier = Modifier.fillMaxWidth().height(360.dp)) {
+                    items(choices) { category ->
+                        TextButton(
+                            onClick = {
+                                onSelected(category)
+                                open = false
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(category)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { open = false }) {
+                    Text("Cancel")
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun MoneyDisplayModeRow(selected: MoneyDisplayMode, onSelected: (MoneyDisplayMode) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        MoneyDisplayMode.entries.forEach { mode ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(text = mode.label(), fontWeight = FontWeight.SemiBold)
+                    Text(
+                        text = mode.description(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (mode == selected) {
+                    Button(onClick = { onSelected(mode) }) {
+                        Text("Selected")
+                    }
+                } else {
+                    TextButton(onClick = { onSelected(mode) }) {
+                        Text("Use")
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun SectionRow(
     label: String,
@@ -483,7 +788,9 @@ private fun SectionRow(
 private val SAMPLE_STATE = BriefingState(
     date = null, text = "Sample briefing text — this is what your paragraph will look like.",
     attentionState = "watch", attentionSymbol = "◆", attentionLabel = "WATCH",
-    gymLast7d = 3, gymTarget = 4, discretionaryDollars = 250, discretionaryTodayDollars = 40,
+    gymLast7d = 3, gymTarget = 4, discretionaryDollars = 210,
+    discretionaryCurrentDollars = 250, discretionaryTodayDollars = 40,
+    ynabCategoryBalances = listOf(YnabCategoryBalance("Fun", 250), YnabCategoryBalance("Eating Out", 75)),
     courseworkHoursNext7d = 4.5,
     temperatureF = 72, weatherHighF = 80, weatherLowF = 60, weatherCondition = "Sunny",
     sleepMinutes = 420, partnerDaysSince = 2, friendDaysSince = 5, friendDaysUntil = 4,
@@ -509,6 +816,8 @@ private fun WidgetPreview(
     order: List<WidgetSection>,
     hidden: Set<WidgetSection>,
     scale: Float,
+    moneyDisplayMode: MoneyDisplayMode,
+    ynabCategoryName: String,
 ) {
     val usingSample = state?.text == null
     val previewState = if (usingSample) SAMPLE_STATE else state
@@ -568,7 +877,7 @@ private fun WidgetPreview(
         for (group in groupSectionsForRendering(renderableOrder)) {
             if (group.size > 1) {
                 Row(horizontalArrangement = Arrangement.spacedBy((6 * scale).dp)) {
-                    group.forEach { PreviewTile(it, previewState, scale) }
+                    group.forEach { PreviewTile(it, previewState, scale, moneyDisplayMode, ynabCategoryName) }
                 }
                 continue
             }
@@ -577,7 +886,7 @@ private fun WidgetPreview(
                     PreviewSeverityDots(previewState.reasons, scale)
                 }
                 WidgetSection.GYM_RING, WidgetSection.MONEY_TILE, WidgetSection.COURSEWORK_TILE,
-                WidgetSection.SLEEP_TILE -> PreviewTile(section, previewState, scale)
+                WidgetSection.SLEEP_TILE -> PreviewTile(section, previewState, scale, moneyDisplayMode, ynabCategoryName)
                 WidgetSection.WEATHER -> PreviewWeatherCard(previewState, scale)
                 WidgetSection.SOCIAL -> PreviewSocialRow(previewState, scale)
                 WidgetSection.BRIEFING_PARAGRAPH ->
@@ -630,7 +939,14 @@ private fun WidgetPreview(
  * launcher span; the real widget chooses 2x2/3x2/4x2/taller variants from
  * LocalSize.current at render time. */
 @Composable
-private fun ComboGridPreview(state: BriefingState?, order: List<WidgetSection>, hidden: Set<WidgetSection>, scale: Float) {
+private fun ComboGridPreview(
+    state: BriefingState?,
+    order: List<WidgetSection>,
+    hidden: Set<WidgetSection>,
+    scale: Float,
+    moneyDisplayMode: MoneyDisplayMode,
+    ynabCategoryName: String,
+) {
     val usingSample = state?.text == null
     val previewState = if (usingSample) SAMPLE_STATE else state
     Column(verticalArrangement = Arrangement.spacedBy((6 * scale).dp)) {
@@ -653,49 +969,49 @@ private fun ComboGridPreview(state: BriefingState?, order: List<WidgetSection>, 
         val visibleComboSections = order.filter {
             it !in hidden && it in WidgetDisplayConfig.COMBO_GRID_SUPPORTED_SECTIONS
         }
-        val topStats = buildList {
-            visibleComboSections.forEach { section ->
-                when (section) {
+        fun statFor(section: WidgetSection): SoloStatPresentation? {
+            return when (section) {
                     WidgetSection.GYM_RING ->
                         if (previewState.gymLast7d != null && previewState.gymTarget != null) {
-                            add(gymFallbackStatPresentation(previewState.gymLast7d, previewState.gymTarget))
+                            gymFallbackStatPresentation(previewState.gymLast7d, previewState.gymTarget)
+                        } else {
+                            null
                         }
-                    WidgetSection.MONEY_TILE -> previewState.discretionaryDollars?.let {
-                        add(moneyStatPresentation(it, moneySeverity, previewState.discretionaryTodayDollars))
+                    WidgetSection.MONEY_TILE -> (previewState.discretionaryCurrentDollars
+                        ?: previewState.discretionaryDollars)?.let {
+                        val selectedCategory = previewState.ynabCategoryBalances.firstOrNull { category ->
+                            category.name.equals(ynabCategoryName, ignoreCase = true)
+                        }
+                        moneyStatPresentation(it, moneySeverity, previewState.discretionaryTodayDollars,
+                            currentDollars = selectedCategory?.dollars ?: previewState.discretionaryCurrentDollars,
+                            compact = true,
+                            displayMode = moneyDisplayMode,
+                            currentLabel = selectedCategory?.name ?: "YNAB")
                     }
-                    WidgetSection.SOCIAL -> socialStatPresentation(socialItems, compact = false)?.let { add(it) }
+                    WidgetSection.SOCIAL -> socialStatPresentation(socialItems, compact = true)
                     WidgetSection.COURSEWORK_TILE -> previewState.courseworkHoursNext7d?.let {
-                        add(courseworkStatPresentation(it, courseworkSeverity))
+                        courseworkStatPresentation(it, courseworkSeverity)
                     }
-                    WidgetSection.SLEEP_TILE -> previewState.sleepMinutes?.let { add(sleepStatPresentation(it)) }
-                    else -> Unit
-                }
+                    WidgetSection.SLEEP_TILE -> previewState.sleepMinutes?.let { sleepStatPresentation(it) }
+                    else -> null
             }
         }
         val showWeather = WidgetSection.WEATHER in visibleComboSections && previewState.temperatureF != null
-        val showEvents = WidgetSection.NOTABLE_EVENTS in visibleComboSections && previewState.notableEvents.isNotEmpty()
-        val rowStats = topStats.take(2)
-        val fullWidthStats = topStats.drop(2)
+        val preferredSections = listOf(WidgetSection.MONEY_TILE, WidgetSection.GYM_RING)
+        val fallbackSections = visibleComboSections.filter {
+            it !in preferredSections && it != WidgetSection.WEATHER && it != WidgetSection.NOTABLE_EVENTS
+        }
+        val compactStats = (preferredSections + fallbackSections).mapNotNull(::statFor)
+        val fallbackTop = if (showWeather) null else compactStats.firstOrNull()
+        val bottomStats = if (showWeather) compactStats.take(2) else compactStats.drop(1).take(2)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .aspectRatio(280f / 220f)
+                .aspectRatio(1f)
                 .clip(RoundedCornerShape(COMBO_OUTER_RADIUS))
                 .background(COMBO_BG),
         ) {
-            Column(modifier = Modifier.fillMaxHeight().weight(1f)) {
-                if (rowStats.isNotEmpty()) {
-                    Row(modifier = Modifier.fillMaxWidth().weight(1f)) {
-                        rowStats.forEachIndexed { index, stat ->
-                            if (index > 0) ComboPreviewDivider()
-                            ComboPreviewStatTile(stat, scale, Modifier.fillMaxHeight().weight(1f))
-                        }
-                    }
-                }
-                fullWidthStats.forEach { stat ->
-                    if (rowStats.isNotEmpty()) ComboPreviewDividerHorizontal()
-                    ComboPreviewStatTile(stat, scale, Modifier.fillMaxWidth().weight(1f))
-                }
+            Column(modifier = Modifier.fillMaxSize()) {
                 if (showWeather) {
                     Row(
                         modifier = Modifier
@@ -716,58 +1032,40 @@ private fun ComboGridPreview(state: BriefingState?, order: List<WidgetSection>, 
                             fontSize = (COMBO_TILE_VALUE_SP * scale).sp)
                         Text(text = weatherEmoji(previewState.weatherCondition), fontSize = (COMBO_TILE_VALUE_SP * scale).sp)
                     }
+                } else if (fallbackTop != null) {
+                    ComboPreviewStatTile(fallbackTop, scale, Modifier.fillMaxWidth().weight(1f))
                 }
-            }
-            // See ComboEventsTile's own doc in BriefingWidget.kt: MONEY_SOLO_BG,
-            // not MONEY_TILE_OK_BG -- a notable event has no severity, and
-            // tinting the whole quadrant "ok"-green read as a false status
-            // signal (confirmed 2026-07-15: "why is the upcoming events
-            // green").
-            if (showEvents) {
-                ComboPreviewDivider()
-                val eventsToShow = previewState.notableEvents.take(COMBO_EVENTS_SHOWN)
-                Column(
-                    modifier = Modifier
-                        .fillMaxHeight()
-                        .weight(1f)
-                        .background(MONEY_SOLO_BG)
-                        .padding((8 * scale).dp),
-                    verticalArrangement = Arrangement.spacedBy((4 * scale).dp),
-                ) {
-                    // "Coming up" header -- see ComboEventsTile's own doc for
-                    // why a header-less centered "Nothing upcoming"/list read as
-                    // adrift with nothing to anchor it (confirmed 2026-07-15 UI
-                    // audit).
-                    Text(text = "Coming up", color = PREVIEW_ON_BG, fontWeight = FontWeight.Bold,
-                        fontSize = (COMBO_EVENTS_HEADER_SP * scale).sp)
-                    if (eventsToShow.isEmpty()) {
-                        Text(text = "Nothing scheduled", color = PREVIEW_ON_BG_DIM,
-                            fontSize = (COMBO_TILE_VALUE_SP * scale).sp)
-                    } else {
-                        eventsToShow.forEach { event ->
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(text = notableEventDay(event), fontFamily = FontFamily.Monospace,
-                                    fontWeight = FontWeight.Bold, color = PREVIEW_ON_BG,
-                                    fontSize = (COMBO_TILE_VALUE_SP * scale).sp,
-                                    modifier = Modifier.width((26 * scale).dp))
-                                notableEventTime(event)?.let { time ->
-                                    Text(text = time, fontFamily = FontFamily.Monospace,
-                                        fontWeight = FontWeight.Bold, color = PREVIEW_ON_BG,
-                                        fontSize = (COMBO_TILE_VALUE_SP * scale).sp,
-                                        modifier = Modifier.width((54 * scale).dp))
-                                }
-                                Text(text = event.title, color = PREVIEW_ON_BG, fontWeight = FontWeight.Bold,
-                                    maxLines = 1, fontSize = (COMBO_TILE_VALUE_SP * scale).sp)
-                            }
-                        }
-                        val hiddenCount = previewState.notableEvents.size - eventsToShow.size
-                        if (hiddenCount > 0) {
-                            Text(text = "+$hiddenCount more", color = PREVIEW_ON_BG_DIM,
-                                fontSize = (COMBO_TILE_VALUE_SP * scale).sp)
-                        }
+                if (showWeather || fallbackTop != null) {
+                    ComboPreviewDividerHorizontal()
+                }
+                Row(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                    bottomStats.forEachIndexed { index, stat ->
+                        if (index > 0) ComboPreviewDivider()
+                        ComboPreviewStatTile(stat, scale, Modifier.fillMaxHeight().weight(1f))
+                    }
+                    if (bottomStats.isEmpty()) {
+                        Spacer(modifier = Modifier.fillMaxSize())
                     }
                 }
             }
+        }
+        // ComboGridContent still renders NOTABLE_EVENTS as its own cell at
+        // MEDIUM_3X2/WIDE_4X2/TALL_4X3 sizes (see BriefingWidget.kt), but
+        // this preview's fixed square grid above has no room to replicate
+        // that size-dependent layout. Surface it as a summary note instead
+        // of silently dropping it, so a user who enabled Notable Events for
+        // a Combo widget isn't misled into thinking it was excluded
+        // (android/CLAUDE.md's Glance/Compose "verify both" parity rule).
+        if (WidgetSection.NOTABLE_EVENTS in visibleComboSections) {
+            Text(
+                text = if (previewState.notableEvents.isEmpty()) {
+                    "Notable events: nothing scheduled"
+                } else {
+                    "Notable events (shown at larger placed sizes): " +
+                        previewState.notableEvents.take(2).joinToString(", ") { it.title }
+                },
+                color = PREVIEW_ON_BG_DIM, fontSize = (10 * scale).sp,
+            )
         }
     }
 }
@@ -858,10 +1156,33 @@ private fun previewTileSeverity(section: WidgetSection, state: BriefingState): S
 }
 
 @Composable
-private fun PreviewTile(section: WidgetSection, state: BriefingState, scale: Float) {
+private fun PreviewTile(
+    section: WidgetSection,
+    state: BriefingState,
+    scale: Float,
+    moneyDisplayMode: MoneyDisplayMode,
+    ynabCategoryName: String,
+) {
+    val moneySeverity = state.reasons.firstOrNull { it.domain == "money" }?.severity
+    val selectedCategory = state.ynabCategoryBalances.firstOrNull {
+        it.name.equals(ynabCategoryName, ignoreCase = true)
+    }
     val (emoji, value) = when (section) {
-        WidgetSection.GYM_RING -> "🏋" to "${state.gymLast7d ?: 0}/${state.gymTarget ?: 0}"
-        WidgetSection.MONEY_TILE -> "" to formatMoney(state.discretionaryDollars ?: 0)
+        // GymProgressCard (the real Glance widget) no longer shows the
+        // completed/target count as text -- it's a ring fill + centered
+        // icon only, so this preview shouldn't claim a number the placed
+        // widget won't actually render (android/CLAUDE.md's "verify both"
+        // Glance/Compose parity rule).
+        WidgetSection.GYM_RING -> "🏋" to ""
+        WidgetSection.MONEY_TILE -> "" to moneyStatPresentation(
+            state.discretionaryDollars ?: state.discretionaryCurrentDollars ?: 0,
+            moneySeverity,
+            state.discretionaryTodayDollars,
+            selectedCategory?.dollars ?: state.discretionaryCurrentDollars,
+            compact = true,
+            displayMode = moneyDisplayMode,
+            currentLabel = selectedCategory?.name ?: "YNAB",
+        ).value
         WidgetSection.COURSEWORK_TILE -> "📚" to "${state.courseworkHoursNext7d ?: 0}h"
         WidgetSection.SLEEP_TILE -> "😴" to formatSleepDuration(state.sleepMinutes ?: 0)
         else -> "" to ""

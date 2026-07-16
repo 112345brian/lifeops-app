@@ -51,10 +51,43 @@ object WidgetConfigStore {
     fun getToken(context: Context): String? =
         prefs(context)?.getString(WidgetKeys.KEY_TOKEN, null)?.takeIf { it.isNotBlank() }
 
-    fun save(context: Context, baseUrl: String, token: String) {
+    fun getYnabToken(context: Context): String? =
+        prefs(context)?.getString(WidgetKeys.KEY_YNAB_TOKEN, null)?.takeIf { it.isNotBlank() }
+
+    fun getYnabBudget(context: Context): String =
+        prefs(context)?.getString(WidgetKeys.KEY_YNAB_BUDGET, null)?.takeIf { it.isNotBlank() } ?: "last-used"
+
+    // Mirrors lifeops/config.py's DISCRETIONARY env var default
+    // ("Shopping,Entertainment,Eating Out,Shows,Splurge") so the phone-side
+    // YnabRefresh sums the same categories the server does for
+    // discretionary_current_dollars, instead of a single hardcoded name that
+    // could silently diverge from the server's (possibly overridden) set.
+    const val DEFAULT_YNAB_DISCRETIONARY_CATEGORIES = "Shopping,Entertainment,Eating Out,Shows,Splurge"
+
+    // Raw, original-case string for round-tripping through the settings
+    // screen's text field -- comparisons against category names should go
+    // through [getYnabDiscretionaryCategories] instead, which normalizes.
+    fun getYnabDiscretionaryCategoriesRaw(context: Context): String =
+        prefs(context)?.getString(WidgetKeys.KEY_YNAB_DISCRETIONARY_CATEGORIES, null)
+            ?.takeIf { it.isNotBlank() } ?: DEFAULT_YNAB_DISCRETIONARY_CATEGORIES
+
+    fun getYnabDiscretionaryCategories(context: Context): List<String> =
+        getYnabDiscretionaryCategoriesRaw(context)
+            .split(",").map { it.trim().lowercase() }.filter { it.isNotEmpty() }
+
+    fun save(
+        context: Context, baseUrl: String, token: String, ynabToken: String, ynabBudget: String,
+        ynabDiscretionaryCategories: String,
+    ) {
         prefs(context)?.edit()
             ?.putString(WidgetKeys.KEY_BASE_URL, baseUrl.trimEnd('/'))
             ?.putString(WidgetKeys.KEY_TOKEN, token)
+            ?.putString(WidgetKeys.KEY_YNAB_TOKEN, ynabToken)
+            ?.putString(WidgetKeys.KEY_YNAB_BUDGET, ynabBudget.ifBlank { "last-used" })
+            ?.putString(
+                WidgetKeys.KEY_YNAB_DISCRETIONARY_CATEGORIES,
+                ynabDiscretionaryCategories.ifBlank { DEFAULT_YNAB_DISCRETIONARY_CATEGORIES },
+            )
             ?.apply()
     }
 }

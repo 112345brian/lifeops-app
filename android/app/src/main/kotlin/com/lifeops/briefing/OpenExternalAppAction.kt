@@ -1,0 +1,77 @@
+package com.lifeops.briefing
+
+import android.content.Context
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.net.Uri
+import androidx.glance.GlanceId
+import androidx.glance.action.ActionParameters
+import androidx.glance.appwidget.action.ActionCallback
+import com.lifeops.briefing.data.WidgetDisplayConfig
+
+class OpenExternalAppAction : ActionCallback {
+    override suspend fun onAction(
+        context: Context,
+        glanceId: GlanceId,
+        parameters: ActionParameters,
+    ) {
+        val target = parameters[TARGET_KEY] ?: return
+        val packageName = parameters[PACKAGE_KEY]?.takeIf { it.isNotBlank() }
+        var packageNameForFallback: String? = null
+        val intent = when (target) {
+            TARGET_MONEY -> {
+                packageNameForFallback = packageName ?: WidgetDisplayConfig.DEFAULT_MONEY_APP_PACKAGE
+                appOrStoreIntent(context, packageNameForFallback)
+            }
+            TARGET_GYM -> {
+                packageNameForFallback = packageName ?: WidgetDisplayConfig.DEFAULT_GYM_APP_PACKAGE
+                appOrStoreIntent(context, packageNameForFallback)
+            }
+            TARGET_WEATHER -> if (packageName != null) {
+                packageNameForFallback = packageName
+                appOrStoreIntent(context, packageName)
+            } else {
+                weatherIntent(context)
+            }
+            else -> null
+        } ?: return
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try {
+            context.startActivity(intent)
+        } catch (e: ActivityNotFoundException) {
+            packageNameForFallback ?: return
+            context.startActivity(storeIntent(packageNameForFallback).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
+    }
+
+    // getLaunchIntentForPackage already does the MAIN/LAUNCHER resolution a
+    // manual queryIntentActivities scan would (that used to be duplicated
+    // here, and separately in WidgetConfigActivity.kt's launchableApps());
+    // no need to reimplement it.
+    private fun appOrStoreIntent(context: Context, packageName: String): Intent =
+        context.packageManager.getLaunchIntentForPackage(packageName) ?: storeIntent(packageName)
+
+    private fun storeIntent(packageName: String): Intent =
+        Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$packageName"))
+
+    private fun weatherIntent(context: Context): Intent {
+        val prefs = context.getSharedPreferences(WidgetKeys.LOCATION_PREFS_NAME, Context.MODE_PRIVATE)
+        val hasLocation = prefs.contains(WidgetKeys.KEY_LAST_LAT) && prefs.contains(WidgetKeys.KEY_LAST_LON)
+        val url = if (hasLocation) {
+            val lat = prefs.getFloat(WidgetKeys.KEY_LAST_LAT, 0f)
+            val lon = prefs.getFloat(WidgetKeys.KEY_LAST_LON, 0f)
+            "https://forecast.weather.gov/MapClick.php?lat=$lat&lon=$lon"
+        } else {
+            "https://www.weather.gov/"
+        }
+        return Intent(Intent.ACTION_VIEW, Uri.parse(url))
+    }
+
+    companion object {
+        val TARGET_KEY = ActionParameters.Key<String>("externalTarget")
+        val PACKAGE_KEY = ActionParameters.Key<String>("externalPackage")
+        const val TARGET_MONEY = "money"
+        const val TARGET_GYM = "gym"
+        const val TARGET_WEATHER = "weather"
+    }
+}

@@ -33,6 +33,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import com.google.firebase.messaging.FirebaseMessaging
@@ -51,6 +52,14 @@ class SettingsActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         actionBar?.hide()
+        if (intent.getBooleanExtra(EXTRA_FORCE_YNAB_REFRESH, false)) {
+            lifecycleScope.launch {
+                refreshYnabCategoriesIfConfigured(this@SettingsActivity, force = true)
+                Toast.makeText(this@SettingsActivity, "Refreshed YNAB", Toast.LENGTH_SHORT).show()
+                finish()
+            }
+            return
+        }
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
@@ -68,6 +77,11 @@ class SettingsActivity : ComponentActivity() {
 private fun SettingsScreen(context: Context, onSaved: () -> Unit) {
     var baseUrl by remember { mutableStateOf(WidgetConfigStore.getBaseUrl(context) ?: "") }
     var token by remember { mutableStateOf(WidgetConfigStore.getToken(context) ?: "") }
+    var ynabToken by remember { mutableStateOf(WidgetConfigStore.getYnabToken(context) ?: "") }
+    var ynabBudget by remember { mutableStateOf(WidgetConfigStore.getYnabBudget(context)) }
+    var ynabDiscretionaryCategories by remember {
+        mutableStateOf(WidgetConfigStore.getYnabDiscretionaryCategoriesRaw(context))
+    }
     var hasForegroundLocation by remember { mutableStateOf(hasForegroundLocationPermission(context)) }
     val scope = rememberCoroutineScope()
 
@@ -105,6 +119,31 @@ private fun SettingsScreen(context: Context, onSaved: () -> Unit) {
             modifier = Modifier.fillMaxWidth(),
         )
 
+        OutlinedTextField(
+            value = ynabToken,
+            onValueChange = { ynabToken = it },
+            label = { Text("YNAB API token") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            modifier = Modifier.fillMaxWidth(),
+        )
+
+        OutlinedTextField(
+            value = ynabBudget,
+            onValueChange = { ynabBudget = it },
+            label = { Text("YNAB budget ID") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+
+        OutlinedTextField(
+            value = ynabDiscretionaryCategories,
+            onValueChange = { ynabDiscretionaryCategories = it },
+            label = { Text("Discretionary categories (comma-separated)") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+
         // LocationReporter (piggybacked on NextTasksRefreshWorker) silently
         // no-ops without this permission, so surface it explicitly here
         // rather than leaving weather stuck on the static WEATHER_LAT/LON
@@ -138,7 +177,10 @@ private fun SettingsScreen(context: Context, onSaved: () -> Unit) {
 
         Button(
             onClick = {
-                WidgetConfigStore.save(context, baseUrl.trim(), token.trim())
+                WidgetConfigStore.save(
+                    context, baseUrl.trim(), token.trim(), ynabToken.trim(), ynabBudget.trim(),
+                    ynabDiscretionaryCategories.trim(),
+                )
                 WorkManager.getInstance(context)
                     .enqueue(OneTimeWorkRequestBuilder<NextTasksRefreshWorker>().build())
                 // Register the current FCM token now too -- covers the
@@ -162,8 +204,22 @@ private fun SettingsScreen(context: Context, onSaved: () -> Unit) {
         ) {
             Text("Save")
         }
+
+        OutlinedButton(
+            onClick = {
+                scope.launch {
+                    refreshYnabCategoriesIfConfigured(context, force = true)
+                    Toast.makeText(context, "Refreshed YNAB", Toast.LENGTH_SHORT).show()
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Refresh YNAB now")
+        }
     }
 }
+
+private const val EXTRA_FORCE_YNAB_REFRESH = "forceYnabRefresh"
 
 private fun hasForegroundLocationPermission(context: Context): Boolean =
     ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==

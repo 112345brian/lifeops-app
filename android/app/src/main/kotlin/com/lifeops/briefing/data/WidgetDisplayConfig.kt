@@ -21,6 +21,12 @@ enum class WidgetSection {
     NOTABLE_EVENTS,
 }
 
+enum class MoneyDisplayMode {
+    YNAB_CURRENT,
+    TODAY,
+    PROJECTED,
+}
+
 /** Per-widget-instance display customization -- which sections show, in what
  * order, at what font/icon scale, and how many "Up next" tasks to show.
  * Configured via WidgetConfigActivity's native Android widget-configure
@@ -51,6 +57,11 @@ data class WidgetDisplayConfig(
     val hiddenSections: Set<WidgetSection> = emptySet(),
     val scale: Float = 1.0f,
     val maxTasksOverride: Int? = null,
+    val moneyAppPackage: String = DEFAULT_MONEY_APP_PACKAGE,
+    val gymAppPackage: String = DEFAULT_GYM_APP_PACKAGE,
+    val weatherAppPackage: String = "",
+    val moneyDisplayMode: MoneyDisplayMode = MoneyDisplayMode.YNAB_CURRENT,
+    val ynabCategoryName: String = DEFAULT_YNAB_CATEGORY_NAME,
     // True only for the "LifeOps Combo" preset (see [comboGrid]) -- tells
     // BriefingContent to render the dedicated size-aware gapless combo
     // surface instead of the normal section-by-section briefing layout.
@@ -68,6 +79,11 @@ data class WidgetDisplayConfig(
         })
         put("scale", scale.toDouble())
         put("maxTasksOverride", maxTasksOverride)
+        put("moneyAppPackage", moneyAppPackage)
+        put("gymAppPackage", gymAppPackage)
+        put("weatherAppPackage", weatherAppPackage)
+        put("moneyDisplayMode", moneyDisplayMode.name)
+        put("ynabCategoryName", ynabCategoryName)
         put("comboGrid", comboGrid)
     }.toString()
 
@@ -77,6 +93,25 @@ data class WidgetDisplayConfig(
         // font/icon size calculation in BriefingWidget.kt.
         const val MIN_SCALE = 0.85f
         const val MAX_SCALE = 1.3f
+        const val DEFAULT_MONEY_APP_PACKAGE = "com.youneedabudget.evergreen.app"
+        const val DEFAULT_GYM_APP_PACKAGE = "io.a24go.android.dev"
+        const val DEFAULT_YNAB_CATEGORY_NAME = "Fun"
+
+        // Sentinel stored in moneyAppPackage/gymAppPackage/weatherAppPackage
+        // to mean "open the in-app panel instead of an app" -- these fields
+        // stay typed String (not a sealed TapTarget) to avoid a JSON schema
+        // migration, but any code choosing between the two meanings MUST go
+        // through [isPanelTarget] rather than comparing against this
+        // constant directly, so a real package name is never mistaken for
+        // the sentinel or vice versa.
+        const val TAP_TARGET_PANEL = "__lifeops_panel__"
+
+        /** The only correct way to test whether a moneyAppPackage/
+         * gymAppPackage/weatherAppPackage value means "open the panel" --
+         * code that treats these fields as literal package names (passing
+         * to PackageManager, logging, listing in a UI) must check this
+         * first and branch away, not fall through with the sentinel. */
+        fun isPanelTarget(packageName: String): Boolean = packageName == TAP_TARGET_PANEL
 
         fun default() = WidgetDisplayConfig()
 
@@ -154,6 +189,14 @@ data class WidgetDisplayConfig(
                 } else {
                     o.optInt("maxTasksOverride", -1).takeIf { it > 0 }
                 },
+                moneyAppPackage = o.optString("moneyAppPackage", DEFAULT_MONEY_APP_PACKAGE),
+                gymAppPackage = o.optString("gymAppPackage", DEFAULT_GYM_APP_PACKAGE),
+                weatherAppPackage = o.optString("weatherAppPackage", ""),
+                moneyDisplayMode = runCatching {
+                    MoneyDisplayMode.valueOf(o.optString("moneyDisplayMode", MoneyDisplayMode.YNAB_CURRENT.name))
+                }.getOrDefault(MoneyDisplayMode.YNAB_CURRENT),
+                ynabCategoryName = o.optString("ynabCategoryName", DEFAULT_YNAB_CATEGORY_NAME)
+                    .takeIf { it.isNotBlank() } ?: DEFAULT_YNAB_CATEGORY_NAME,
                 comboGrid = o.optBoolean("comboGrid", false),
             )
         }

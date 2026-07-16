@@ -34,6 +34,18 @@ object WidgetKeys {
     const val CONFIG_PREFS_NAME = "lifeops_widget_config"
     const val KEY_BASE_URL = "base_url" // e.g. "https://my-tailscale-host:8765" -- no trailing slash
     const val KEY_TOKEN = "token" // WEB_TOKEN value, appended as ?token= on next-tasks calls
+    const val KEY_YNAB_TOKEN = "ynab_token"
+    const val KEY_YNAB_BUDGET = "ynab_budget" // "last-used" is accepted by YNAB
+    const val KEY_YNAB_DISCRETIONARY_CATEGORIES = "ynab_discretionary_categories" // comma-separated, mirrors server's DISCRETIONARY env var
+
+    // Separate, unencrypted app-level SharedPreferences for YnabRefresh's
+    // report-cadence gate -- just a timestamp, not a credential, same
+    // reasoning as LOCATION_PREFS_NAME/WEATHER_PREFS_NAME below.
+    const val YNAB_REFRESH_PREFS_NAME = "lifeops_ynab_refresh_gate"
+    const val KEY_LAST_YNAB_REFRESH_AT = "last_ynab_refresh_at" // epoch millis, 0 = never
+    const val KEY_LAST_YNAB_REFRESH_ATTEMPT_AT = "last_ynab_refresh_attempt_at"
+    const val KEY_LAST_YNAB_REFRESH_STATUS = "last_ynab_refresh_status"
+    const val KEY_LAST_YNAB_REFRESH_COUNT = "last_ynab_refresh_count"
 
     // Separate, unencrypted app-level SharedPreferences for LocationReporter's
     // report-cadence gate -- just a timestamp, not a credential, so it
