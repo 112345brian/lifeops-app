@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Single-stat preset (coursework tile only): see gym_widget_info.xml's
-     comment for why minHeight/minResizeHeight are 56dp, not 150dp. -->
+<!-- Single-stat preset (coursework only). The real solo rendering is a
+     label/value/status SoloStatCard with the long "COURSEWORK" label, so
+     this defaults to a compact 2x1 strip rather than forcing a cramped 1x1.
+     Users can still resize it larger. -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:minWidth="110dp"
     android:minHeight="56dp"

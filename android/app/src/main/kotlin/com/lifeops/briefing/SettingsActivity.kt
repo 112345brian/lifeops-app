@@ -54,6 +54,7 @@ class SettingsActivity : ComponentActivity() {
         actionBar?.hide()
         if (intent.getBooleanExtra(EXTRA_FORCE_YNAB_REFRESH, false)) {
             lifecycleScope.launch {
+                WidgetConfigStore.importYnabConfigFileIfPresent(this@SettingsActivity)
                 refreshYnabCategoriesIfConfigured(this@SettingsActivity, force = true)
                 Toast.makeText(this@SettingsActivity, "Refreshed YNAB", Toast.LENGTH_SHORT).show()
                 finish()
@@ -208,6 +209,7 @@ private fun SettingsScreen(context: Context, onSaved: () -> Unit) {
         OutlinedButton(
             onClick = {
                 scope.launch {
+                    WidgetConfigStore.importYnabConfigFileIfPresent(context)
                     refreshYnabCategoriesIfConfigured(context, force = true)
                     Toast.makeText(context, "Refreshed YNAB", Toast.LENGTH_SHORT).show()
                 }

@@ -9,6 +9,7 @@ import androidx.glance.testing.unit.hasText
 import com.lifeops.briefing.data.AttentionReason
 import com.lifeops.briefing.data.BriefingState
 import com.lifeops.briefing.data.GymRing
+import com.lifeops.briefing.data.MoneyDisplayMode
 import com.lifeops.briefing.data.NextTask
 import com.lifeops.briefing.data.NextTasksState
 import com.lifeops.briefing.data.NotableEvent
@@ -16,6 +17,7 @@ import com.lifeops.briefing.data.TodayEvent
 import com.lifeops.briefing.data.WeatherInfo
 import com.lifeops.briefing.data.WidgetDisplayConfig
 import com.lifeops.briefing.data.WidgetSection
+import com.lifeops.briefing.data.YnabCategoryBalance
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -43,18 +45,14 @@ class BriefingWidgetTest {
     }
 
     @Test
-    fun singleStatGymPreset_stillShowsGymCardWhenResizedToItsSmallestDeclaredSize() = runGlanceAppWidgetUnitTest {
+    fun singleStatGymPreset_stillShowsGymCardAtDeclaredFloor() = runGlanceAppWidgetUnitTest {
         // Regression test for the exact bug reported 2026-07-13: a
         // single-stat preset widget (WidgetDisplayConfig.singleStat) could
         // be dragged onto the home screen but not actually resized down to
-        // its own declared minimum (gym_widget_info.xml's 120x120dp) without
-        // its only content vanishing, because BriefingContent's SMALL
-        // bucket used to hard-stop right after the attention badge. Updated
-        // from the original 110x56dp to match gym_widget_info.xml's later
-        // bump to 120x120dp (2026-07-14, to stop gym content clipping against
-        // its own edge) -- this must track that XML's declared minimum, not
-        // an arbitrary small size, or a real clipping regression at the
-        // widget's true floor would pass silently.
+        // its own declared minimum without its only content vanishing,
+        // because BriefingContent's SMALL bucket used to hard-stop right
+        // after the attention badge. This tracks gym_widget_info.xml's
+        // live-device-tested 120x120dp floor.
         setAppWidgetSize(DpSize(120.dp, 120.dp))
         provideComposable {
             GlanceTheme {
@@ -67,9 +65,10 @@ class BriefingWidgetTest {
         }
 
         onNode(hasText("GYM", true)).assertExists()
-        onNode(hasText("2/3", true)).assertExists()
+        onNode(hasText("🏋", true)).assertExists()
+        onNode(hasText("2/3", true)).assertDoesNotExist()
         onNode(hasText("7 DAYS", true)).assertDoesNotExist()
-        onNode(hasContentDescription("Gym 2/3, today status unavailable")).assertExists()
+        onNode(hasContentDescription("Gym health 67%, today status unavailable")).assertExists()
     }
 
     @Test
@@ -257,6 +256,128 @@ class BriefingWidgetTest {
         onNode(hasText("TODAY", true)).assertExists()
         onNode(hasText("$40", true)).assertExists()
         onNode(hasText("FUTURE -$125", true)).assertExists()
+    }
+
+    @Test
+    fun soloMoneyPreset_headlinesCurrentYnabBalanceWhenAvailable() = runGlanceAppWidgetUnitTest {
+        setAppWidgetSize(DpSize(120.dp, 120.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(
+                        discretionaryDollars = 175,
+                        discretionaryCurrentDollars = 240,
+                        discretionaryTodayDollars = 40,
+                        reasons = listOf(AttentionReason("money", "watch")),
+                    ),
+                    nextTasks = NextTasksState.empty(),
+                    config = WidgetDisplayConfig.singleStat(WidgetSection.MONEY_TILE),
+                )
+            }
+        }
+
+        onNode(hasText("YNAB", true)).assertExists()
+        onNode(hasText("$240", true)).assertExists()
+        onNode(hasText("PLAN $175", true)).assertExists()
+        onNode(hasText("TODAY", true)).assertDoesNotExist()
+    }
+
+    @Test
+    fun soloMoneyPreset_headlinesSelectedYnabCategoryWhenAvailable() = runGlanceAppWidgetUnitTest {
+        setAppWidgetSize(DpSize(120.dp, 120.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(
+                        discretionaryDollars = 175,
+                        discretionaryCurrentDollars = 240,
+                        ynabCategoryBalances = listOf(
+                            YnabCategoryBalance("Fun", 90),
+                            YnabCategoryBalance("Eating Out", 75),
+                        ),
+                    ),
+                    nextTasks = NextTasksState.empty(),
+                    config = WidgetDisplayConfig.singleStat(WidgetSection.MONEY_TILE).copy(
+                        ynabCategoryName = "Fun",
+                    ),
+                )
+            }
+        }
+
+        onNode(hasText("FUN", true)).assertExists()
+        onNode(hasText("$90", true)).assertExists()
+        onNode(hasText("$240", true)).assertDoesNotExist()
+    }
+
+    @Test
+    fun soloMoneyPreset_positiveCurrentBalanceDoesNotShowOver() = runGlanceAppWidgetUnitTest {
+        setAppWidgetSize(DpSize(120.dp, 120.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(
+                        discretionaryDollars = -125,
+                        discretionaryCurrentDollars = 40,
+                        reasons = listOf(AttentionReason("money", "risk")),
+                    ),
+                    nextTasks = NextTasksState.empty(),
+                    config = WidgetDisplayConfig.singleStat(WidgetSection.MONEY_TILE),
+                )
+            }
+        }
+
+        onNode(hasText("YNAB", true)).assertExists()
+        onNode(hasText("$40", true)).assertExists()
+        onNode(hasText("RISK", true)).assertExists()
+        onNode(hasText("OVER", true)).assertDoesNotExist()
+    }
+
+    @Test
+    fun soloMoneyPreset_canBeConfiguredToHeadlineTodayAmount() = runGlanceAppWidgetUnitTest {
+        setAppWidgetSize(DpSize(120.dp, 120.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(
+                        discretionaryDollars = -125,
+                        discretionaryCurrentDollars = 240,
+                        discretionaryTodayDollars = 40,
+                    ),
+                    nextTasks = NextTasksState.empty(),
+                    config = WidgetDisplayConfig.singleStat(WidgetSection.MONEY_TILE).copy(
+                        moneyDisplayMode = MoneyDisplayMode.TODAY,
+                    ),
+                )
+            }
+        }
+
+        onNode(hasText("TODAY", true)).assertExists()
+        onNode(hasText("$40", true)).assertExists()
+        onNode(hasText("YNAB $240", true)).assertExists()
+    }
+
+    @Test
+    fun soloMoneyPreset_canBeConfiguredToHeadlineProjectedAmount() = runGlanceAppWidgetUnitTest {
+        setAppWidgetSize(DpSize(120.dp, 120.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(
+                        discretionaryDollars = -125,
+                        discretionaryCurrentDollars = 240,
+                    ),
+                    nextTasks = NextTasksState.empty(),
+                    config = WidgetDisplayConfig.singleStat(WidgetSection.MONEY_TILE).copy(
+                        moneyDisplayMode = MoneyDisplayMode.PROJECTED,
+                    ),
+                )
+            }
+        }
+
+        onNode(hasText("SPEND", true)).assertExists()
+        onNode(hasText("-$125", true)).assertExists()
+        onNode(hasText("YNAB $240", true)).assertExists()
+        onNode(hasText("OVER", true)).assertExists()
     }
 
     @Test
@@ -780,19 +901,21 @@ class BriefingWidgetTest {
     @Test
     fun comboLayoutFor_mapsCommonLauncherSpansToExplicitVariants() {
         assertEquals(ComboLayout.COMPACT_2X2, comboLayoutFor(DpSize(120.dp, 120.dp)))
+        assertEquals(ComboLayout.COMPACT_2X2, comboLayoutFor(DpSize(180.dp, 180.dp)))
         assertEquals(ComboLayout.MEDIUM_3X2, comboLayoutFor(DpSize(200.dp, 150.dp)))
         assertEquals(ComboLayout.WIDE_4X2, comboLayoutFor(DpSize(280.dp, 150.dp)))
         assertEquals(ComboLayout.TALL_4X3, comboLayoutFor(DpSize(280.dp, 220.dp)))
     }
 
     @Test
-    fun comboGrid_2x2_showsWeatherAndGymOnly() = runGlanceAppWidgetUnitTest {
+    fun comboGrid_2x2_prioritizesWeatherMoneyAndGym() = runGlanceAppWidgetUnitTest {
         setAppWidgetSize(DpSize(120.dp, 120.dp))
         provideComposable {
             GlanceTheme {
                 BriefingContent(
                     state = fullState.copy(
-                        discretionaryDollars = 250,
+                        discretionaryDollars = 210,
+                        discretionaryCurrentDollars = 250,
                         partnerDaysSince = 6,
                         courseworkHoursNext7d = 4.1,
                         temperatureF = 64,
@@ -805,10 +928,69 @@ class BriefingWidgetTest {
         }
 
         onNode(hasText("64", true)).assertExists()
+        onNode(hasText("YNAB", true)).assertExists()
         onNode(hasText("GYM", true)).assertExists()
-        onNode(hasText("SPEND", true)).assertDoesNotExist()
+        onNode(hasText("2/3", true)).assertExists()
+        onNode(hasText("$250", true)).assertExists()
         onNode(hasText("PARTNER", true)).assertDoesNotExist()
         onNode(hasText("Coming up", true)).assertDoesNotExist()
+    }
+
+    @Test
+    fun comboGrid_samsungTwoByTwoBoundaryStillUsesCompactWeatherMoneyGym() = runGlanceAppWidgetUnitTest {
+        setAppWidgetSize(DpSize(180.dp, 180.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(
+                        discretionaryDollars = -125,
+                        discretionaryCurrentDollars = 90,
+                        partnerDaysSince = 6,
+                        temperatureF = 64,
+                        notableEvents = sixNotable,
+                    ),
+                    nextTasks = NextTasksState.empty(),
+                    config = WidgetDisplayConfig.comboGrid(),
+                )
+            }
+        }
+
+        onNode(hasText("64", true)).assertExists()
+        onNode(hasText("YNAB", true)).assertExists()
+        onNode(hasText("$90", true)).assertExists()
+        onNode(hasText("GYM", true)).assertExists()
+        onNode(hasText("2/3", true)).assertExists()
+        onNode(hasText("SPEND", true)).assertDoesNotExist()
+        onNode(hasText("OVER", true)).assertDoesNotExist()
+        onNode(hasText("PARTNER", true)).assertDoesNotExist()
+        onNode(hasText("Coming up", true)).assertDoesNotExist()
+    }
+
+    @Test
+    fun comboGrid_compactMoneyCellUsesSelectedYnabCategory() = runGlanceAppWidgetUnitTest {
+        setAppWidgetSize(DpSize(180.dp, 180.dp))
+        provideComposable {
+            GlanceTheme {
+                BriefingContent(
+                    state = fullState.copy(
+                        discretionaryDollars = 210,
+                        discretionaryCurrentDollars = 250,
+                        ynabCategoryBalances = listOf(
+                            YnabCategoryBalance("Fun", 90),
+                            YnabCategoryBalance("Eating Out", 75),
+                        ),
+                        temperatureF = 64,
+                    ),
+                    nextTasks = NextTasksState.empty(),
+                    config = WidgetDisplayConfig.comboGrid().copy(ynabCategoryName = "Fun"),
+                )
+            }
+        }
+
+        onNode(hasText("FUN", true)).assertExists()
+        onNode(hasText("$90", true)).assertExists()
+        onNode(hasText("YNAB", true)).assertDoesNotExist()
+        onNode(hasText("$250", true)).assertDoesNotExist()
     }
 
     @Test
@@ -982,7 +1164,8 @@ class BriefingWidgetTest {
 
         onNode(hasText("64", true)).assertDoesNotExist()
         onNode(hasText("GYM", true)).assertExists()
-        onNode(hasText("SPEND", true)).assertExists()
+        onNode(hasText("2/3", true)).assertExists()
+        onNode(hasText("$250", true)).assertExists()
         onNode(hasText("PARTNER", true)).assertDoesNotExist()
     }
 
@@ -1085,9 +1268,10 @@ class BriefingWidgetTest {
         }
 
         onNode(hasText("GYM", true)).assertExists()
-        onNode(hasText("2/4", true)).assertExists()
+        onNode(hasText("🏋", true)).assertExists()
+        onNode(hasText("2/4", true)).assertDoesNotExist()
         onNode(hasText("TODAY", true)).assertDoesNotExist()
-        onNode(hasContentDescription("Gym 2/4, needs gym today")).assertExists()
+        onNode(hasContentDescription("Gym health 50%, needs gym today")).assertExists()
     }
 
     @Test
@@ -1112,9 +1296,10 @@ class BriefingWidgetTest {
             }
         }
 
-        onNode(hasText("4/4", true)).assertExists()
+        onNode(hasText("🏋", true)).assertExists()
+        onNode(hasText("4/4", true)).assertDoesNotExist()
         onNode(hasText("DONE", true)).assertDoesNotExist()
-        onNode(hasContentDescription("Gym 4/4, no gym needed today")).assertExists()
+        onNode(hasContentDescription("Gym health 100%, no gym needed today")).assertExists()
     }
 
     @Test

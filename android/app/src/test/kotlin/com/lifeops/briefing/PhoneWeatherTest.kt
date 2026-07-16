@@ -1,9 +1,12 @@
 package com.lifeops.briefing
 
+import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
+import org.robolectric.RuntimeEnvironment
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -93,5 +96,53 @@ class PhoneWeatherTest {
 
         assertEquals(85, high)
         assertEquals(null, low)
+    }
+
+    @Test
+    fun readCachedPhoneWeather_returnsFreshSuccessfulResult() {
+        val context = RuntimeEnvironment.getApplication() as Context
+        val prefs = context.getSharedPreferences(WidgetKeys.WEATHER_PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().clear()
+            .putInt(WidgetKeys.KEY_WEATHER_TEMP_F, 64)
+            .putInt(WidgetKeys.KEY_WEATHER_HIGH_F, 70)
+            .putInt(WidgetKeys.KEY_WEATHER_LOW_F, 58)
+            .putString(WidgetKeys.KEY_WEATHER_CONDITION, "Sunny")
+            .putLong(WidgetKeys.KEY_WEATHER_FETCHED_AT, 1_000L)
+            .apply()
+
+        val weather = readCachedPhoneWeather(context, nowMillis = 1_000L + 30 * 60 * 1000L)
+
+        assertEquals(64, weather?.temperatureF)
+        assertEquals(70, weather?.highF)
+        assertEquals(58, weather?.lowF)
+        assertEquals("Sunny", weather?.condition)
+    }
+
+    @Test
+    fun readCachedPhoneWeather_ignoresStaleSuccessfulResult() {
+        val context = RuntimeEnvironment.getApplication() as Context
+        val prefs = context.getSharedPreferences(WidgetKeys.WEATHER_PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().clear()
+            .putInt(WidgetKeys.KEY_WEATHER_TEMP_F, 64)
+            .putLong(WidgetKeys.KEY_WEATHER_FETCHED_AT, 1_000L)
+            .apply()
+
+        val weather = readCachedPhoneWeather(context, nowMillis = 1_000L + 3 * 60 * 60 * 1000L)
+
+        assertNull(weather)
+    }
+
+    @Test
+    fun readCachedPhoneWeather_readsLegacyCacheUsingLastFetchTimestamp() {
+        val context = RuntimeEnvironment.getApplication() as Context
+        val prefs = context.getSharedPreferences(WidgetKeys.WEATHER_PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().clear()
+            .putInt(WidgetKeys.KEY_WEATHER_TEMP_F, 64)
+            .putLong(WidgetKeys.KEY_LAST_WEATHER_FETCH_AT, 1_000L)
+            .apply()
+
+        val weather = readCachedPhoneWeather(context, nowMillis = 1_000L + 30 * 60 * 1000L)
+
+        assertEquals(64, weather?.temperatureF)
     }
 }

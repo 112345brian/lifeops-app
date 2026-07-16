@@ -27,6 +27,7 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(gather, "deadline_input", lambda fs, now: [])   # generalized crunch: none extra
     monkeypatch.setattr(gather, "spend_input", lambda fs, yn, now: {
         "fun_money": 42.0, "today_budget": 15.0,
+        "ynab_category_balances": {"Fun": 42.0},
         "events": [{"label": "Concert", "days_until": 3, "cost": 40, "type": "concert"}]})
     alerts = []
     monkeypatch.setattr(runner, "_alert_once", lambda key, *a, **k: alerts.append(key))
@@ -55,7 +56,9 @@ def test_briefing_builds_facts_alerts_and_persists(sandbox):
     assert f["coursework_at_risk"]                    # load_engine flagged the heavy+soon paper
     assert f["gym_last_7d"] == 2                       # two gym days in the trailing 7
     assert f["discretionary_dollars"] == 42
+    assert f["discretionary_current_dollars"] == 42
     assert f["discretionary_today_dollars"] == 15
+    assert f["ynab_category_balances"] == {"Fun": 42}
     assert f["upcoming_paid_events"] == ["Concert in 3d"]
 
 

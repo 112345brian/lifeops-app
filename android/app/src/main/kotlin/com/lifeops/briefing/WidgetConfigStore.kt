@@ -3,6 +3,7 @@ package com.lifeops.briefing
 import android.content.Context
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import java.util.Properties
 
 /** Single place that opens the EncryptedSharedPreferences holding the panel
  * base URL and auth token -- OpenPanelAction/NextTasksRefreshWorker/
@@ -89,5 +90,29 @@ object WidgetConfigStore {
                 ynabDiscretionaryCategories.ifBlank { DEFAULT_YNAB_DISCRETIONARY_CATEGORIES },
             )
             ?.apply()
+    }
+
+    fun importYnabConfigFileIfPresent(context: Context): Boolean {
+        val file = context.filesDir.resolve("ynab_local_import.properties")
+        if (!file.exists()) return false
+        val props = Properties()
+        file.inputStream().use { props.load(it) }
+        val importedToken = props.getProperty("YNAB_TOKEN")?.takeIf { it.isNotBlank() }
+        val importedBudget = props.getProperty("YNAB_BUDGET")?.takeIf { it.isNotBlank() }
+        val importedDiscretionary = props.getProperty("YNAB_DISCRETIONARY_CATEGORIES")?.takeIf { it.isNotBlank() }
+        if (importedToken == null && importedBudget == null && importedDiscretionary == null) {
+            file.delete()
+            return false
+        }
+        save(
+            context = context,
+            baseUrl = getBaseUrl(context) ?: "",
+            token = getToken(context) ?: "",
+            ynabToken = importedToken ?: getYnabToken(context).orEmpty(),
+            ynabBudget = importedBudget ?: getYnabBudget(context),
+            ynabDiscretionaryCategories = importedDiscretionary ?: getYnabDiscretionaryCategoriesRaw(context),
+        )
+        file.delete()
+        return true
     }
 }

@@ -92,6 +92,29 @@ class BriefingStateTest {
     }
 
     @Test
+    fun parsesCurrentDiscretionaryBalanceAndRoundTripsThroughJson() {
+        val raw = """{
+            "date":"2026-07-12",
+            "text":"Money snapshot.",
+            "facts":{
+                "discretionary_dollars":175,
+                "discretionary_current_dollars":240,
+                "discretionary_today_dollars":35,
+                "ynab_category_balances":{"Fun":240,"Eating Out":75}
+            }
+        }"""
+
+        val state = BriefingState.fromApiResponse(raw, 1L)
+
+        assertEquals(175, state.discretionaryDollars)
+        assertEquals(240, state.discretionaryCurrentDollars)
+        assertEquals(35, state.discretionaryTodayDollars)
+        assertEquals(listOf(YnabCategoryBalance("Eating Out", 75), YnabCategoryBalance("Fun", 240)),
+            state.ynabCategoryBalances)
+        assertEquals(state, BriefingState.fromJson(state.toJson()))
+    }
+
+    @Test
     fun parsesNotableEventsAndRoundTripsThroughJson() {
         // Matches notable_events.this_weeks_notable_events's own
         // {title, date, weekday} shape (see the Python module) --

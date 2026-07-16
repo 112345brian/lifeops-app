@@ -71,6 +71,10 @@ class NextTasksRefreshWorker(
         // server goes down, we'd want the widget to update regardless").
         reportLocationIfDue(applicationContext)
         reportWeatherIfDue(applicationContext)
+        refreshYnabCategoriesIfConfigured(
+            applicationContext,
+            force = inputData.getBoolean(INPUT_FORCE_YNAB_REFRESH, false),
+        )
 
         val baseUrl = WidgetConfigStore.getBaseUrl(applicationContext)
         val token = WidgetConfigStore.getToken(applicationContext)
@@ -205,6 +209,7 @@ class NextTasksRefreshWorker(
 
     companion object {
         private const val TAG = "NextTasksRefreshWorker"
+        const val INPUT_FORCE_YNAB_REFRESH = "force_ynab_refresh"
         private const val CONNECT_TIMEOUT_MS = 10_000
         private const val READ_TIMEOUT_MS = 15_000
         private const val MIN_BACKOFF_MS = 30_000L

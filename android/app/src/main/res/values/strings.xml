@@ -10,7 +10,7 @@
     <string name="widget_name_events">LifeOps Events</string>
     <string name="widget_name_combo">LifeOps Combo</string>
     <string name="widget_description_briefing">Status, stats, schedule, and next tasks from LifeOps.</string>
-    <string name="widget_description_gym">Gym progress from LifeOps.</string>
+    <string name="widget_description_gym">Gym count and today status from LifeOps.</string>
     <string name="widget_description_money">Discretionary budget from LifeOps.</string>
     <string name="widget_description_coursework">Upcoming coursework load from LifeOps.</string>
     <string name="widget_description_weather">Current weather from LifeOps.</string>
@@ -21,14 +21,25 @@
     <string name="widget_preview_briefing_status">◆ WATCH</string>
     <string name="widget_preview_briefing_text">Briefing: handle the important task first, then protect the next block.</string>
     <string name="widget_preview_up_next">Up next: submit assignment · gym · budget check</string>
-    <string name="widget_preview_gym">3/4</string>
+    <string name="widget_preview_gym">🏋</string>
     <string name="widget_preview_money">$250</string>
+    <string name="widget_preview_money_label">SPEND</string>
+    <string name="widget_preview_money_status">LEFT</string>
     <string name="widget_preview_coursework">4.5h</string>
+    <string name="widget_preview_coursework_label">COURSEWORK</string>
+    <string name="widget_preview_coursework_status">LOAD</string>
     <string name="widget_preview_sleep">7h</string>
+    <string name="widget_preview_sleep_label">SLEEP</string>
+    <string name="widget_preview_sleep_status">SLEEP</string>
+    <string name="widget_preview_social_label">FRIENDS</string>
+    <string name="widget_preview_social_value">5d</string>
+    <string name="widget_preview_social_status">AGO</string>
     <string name="widget_preview_partner">2d partner</string>
     <string name="widget_preview_friends">5d friends</string>
     <string name="widget_preview_weather_temp">72°</string>
     <string name="widget_preview_weather_condition">☀ Sunny</string>
     <string name="widget_preview_events_title">Haircut</string>
+    <string name="widget_preview_events_label">EVENTS</string>
+    <string name="widget_preview_events_status">THU</string>
     <string name="widget_preview_events_weekday">Thursday</string>
 </resources>

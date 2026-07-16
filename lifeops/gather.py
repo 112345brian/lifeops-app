@@ -560,12 +560,18 @@ def spend_input(fs, yn, now):
         month = yn.month()
     except Exception:
         month = {"categories": []}
-    fun = sum(c.get("balance", 0) for c in month.get("categories", [])
+    categories = month.get("categories", [])
+    category_balances = {
+        c["name"]: c.get("balance", 0) / 1000.0
+        for c in categories
+        if c.get("name")
+    }
+    fun = sum(c.get("balance", 0) for c in categories
               if c["name"].lower() in disc) / 1000.0
     net_fun = fun - sum(e.get("cost", 0) or 0 for e in events)
     today_budget = sum(e.get("cost", 0) or 0 for e in events if e.get("days_until") == 0)
     return {"events": events, "fun_money": fun, "net_fun_money": net_fun,
-            "today_budget": today_budget}
+            "today_budget": today_budget, "ynab_category_balances": category_balances}
 
 def social_input(fs, now):
     def ago(ts):

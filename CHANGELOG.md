@@ -4,6 +4,29 @@ Notable changes, newest first. Personal project, versioned simply (see
 `VERSION` / `lifeops.__version__`) — dates and the reasoning behind each
 change matter more here than semver strictness.
 
+## [1.18.7] — 2026-07-15
+
+### Added
+- **The Android combo widget can now show a live YNAB category balance.**
+  Widget config supports choosing the money display mode, selecting the YNAB
+  category name, and refreshing category balances locally from the phone.
+- **Widget tiles can open configured apps or the LifeOps panel.** Money,
+  gym, and weather tap targets can be selected from installed launcher apps,
+  with a dedicated LifeOps panel target where desired.
+
+### Fixed
+- **The 2x2 combo widget now renders as weather over money/gym on Samsung
+  launcher sizes.** The compact layout handles Samsung's reported size
+  boundary and keeps the settings preview aligned with the live Glance
+  widget.
+- **YNAB local refresh now uses the correct month endpoint and exposes
+  refresh status.** The phone refresh reads `data.month.categories`, records
+  success/error/no-token state, and only gates successful refreshes.
+- **External app launching no longer falls straight through to Play Store
+  when a launchable activity exists.** The tap action resolves launcher
+  activities explicitly, and the manifest declares launcher-app visibility
+  for the app picker.
+
 ## [1.18.6] — 2026-07-15
 
 ### Changed

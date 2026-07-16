@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Single-stat preset (sleep only): see gym_widget_info.xml's comment
-     for why minHeight/minResizeHeight are 56dp, not 150dp. -->
+<!-- Single-stat preset (sleep only). The real solo rendering is a
+     label/value/status SoloStatCard; 2x1 keeps that readable without
+     needing a separate tiny 1x1-specific sleep layout. -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:minWidth="110dp"
     android:minHeight="56dp"

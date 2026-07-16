@@ -1,8 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Single-stat preset (weather only). Back to the same true 2x1 footprint
-     as every other single-stat preset (matching social_widget_info.xml's
-     width too, so they line up when placed together). COMPACT_WEATHER_*
-     in BriefingWidget.kt already fits this width without clipping:the
+<!-- Single-stat preset (weather only). Weather keeps a true 2x1 footprint
+     because current temp + condition/high/low need horizontal room. COMPACT_WEATHER_*
+     in BriefingWidget.kt already fits this width without clipping; the
      one thing that still needed tuning was the condition text label
      itself, nudged down a point (confirmed 2026-07-13: "it was literally
      fine except for that"). maxResizeWidth/Height still let it grow into

@@ -43,10 +43,14 @@
       <div class="kpi-label">Gym</div>
       <div class="kpi-value">{{ briefing.facts.gym_last_7d }}/{{ briefing.facts.gym_target }} trailing 7d</div>
     </div>
-    {% if briefing.facts.discretionary_dollars is not none %}
+    {% set current_discretionary = briefing.facts.discretionary_current_dollars
+       if briefing.facts.discretionary_current_dollars is defined else none %}
+    {% set shown_discretionary = current_discretionary
+       if current_discretionary is not none else briefing.facts.discretionary_dollars %}
+    {% if shown_discretionary is not none %}
     <div class="kpi">
-      <div class="kpi-label">Discretionary</div>
-      <div class="kpi-value">${{ briefing.facts.discretionary_dollars }}</div>
+      <div class="kpi-label">Discretionary{% if current_discretionary is not none %} YNAB{% endif %}</div>
+      <div class="kpi-value">${{ shown_discretionary }}</div>
     </div>
     {% endif %}
   </div>

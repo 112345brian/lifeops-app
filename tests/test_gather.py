@@ -208,7 +208,10 @@ class _FakeYnab:
         self._balance_dollars = balance_dollars
 
     def month(self):
-        return {"categories": [{"name": "Shopping", "balance": self._balance_dollars * 1000}]}
+        return {"categories": [
+            {"name": "Shopping", "balance": self._balance_dollars * 1000},
+            {"name": "Fun", "balance": 90_000},
+        ]}
 
 
 def _patch_spend_config(monkeypatch, event_cals=None, costs=None):
@@ -238,6 +241,7 @@ def test_spend_input_uses_projected_cost_for_mapped_calendar_event(monkeypatch):
     assert out["fun_money"] == 200
     assert out["net_fun_money"] == 165
     assert out["today_budget"] == 0
+    assert out["ynab_category_balances"]["Fun"] == 90
 
 
 def test_spend_input_today_budget_sums_only_same_day_events(monkeypatch):

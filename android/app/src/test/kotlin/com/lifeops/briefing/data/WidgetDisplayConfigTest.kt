@@ -35,6 +35,8 @@ class WidgetDisplayConfigTest {
         assertEquals(emptySet<WidgetSection>(), config.hiddenSections)
         assertEquals(1.0f, config.scale)
         assertEquals(null, config.maxTasksOverride)
+        assertEquals(MoneyDisplayMode.YNAB_CURRENT, config.moneyDisplayMode)
+        assertEquals("Fun", config.ynabCategoryName)
         assertEquals(config, WidgetDisplayConfig.fromJson(config.toJson()))
     }
 
@@ -50,6 +52,11 @@ class WidgetDisplayConfigTest {
             hiddenSections = setOf(WidgetSection.SEVERITY_DOTS, WidgetSection.TODAY_EVENTS),
             scale = 1.2f,
             maxTasksOverride = 5,
+            moneyAppPackage = WidgetDisplayConfig.TAP_TARGET_PANEL,
+            gymAppPackage = "gym.pkg",
+            weatherAppPackage = "weather.pkg",
+            moneyDisplayMode = MoneyDisplayMode.PROJECTED,
+            ynabCategoryName = "Eating Out",
         )
 
         assertEquals(config, WidgetDisplayConfig.fromJson(config.toJson()))
@@ -105,6 +112,16 @@ class WidgetDisplayConfigTest {
         val config = WidgetDisplayConfig.fromJson("""{"sectionOrder": [], "hiddenSections": []}""")
 
         assertEquals(1.0f, config.scale)
+    }
+
+    @Test
+    fun missingOrUnknownMoneyDisplayModeUsesCurrentYnab() {
+        val missing = WidgetDisplayConfig.fromJson("""{"sectionOrder": [], "hiddenSections": []}""")
+        val unknown = WidgetDisplayConfig.fromJson(
+            """{"sectionOrder": [], "hiddenSections": [], "moneyDisplayMode": "NOPE"}""")
+
+        assertEquals(MoneyDisplayMode.YNAB_CURRENT, missing.moneyDisplayMode)
+        assertEquals(MoneyDisplayMode.YNAB_CURRENT, unknown.moneyDisplayMode)
     }
 
     @Test

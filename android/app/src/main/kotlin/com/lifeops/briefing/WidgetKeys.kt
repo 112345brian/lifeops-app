@@ -46,6 +46,7 @@ object WidgetKeys {
     const val KEY_LAST_YNAB_REFRESH_ATTEMPT_AT = "last_ynab_refresh_attempt_at"
     const val KEY_LAST_YNAB_REFRESH_STATUS = "last_ynab_refresh_status"
     const val KEY_LAST_YNAB_REFRESH_COUNT = "last_ynab_refresh_count"
+    const val KEY_LAST_YNAB_REFRESH_ERROR = "last_ynab_refresh_error"
 
     // Separate, unencrypted app-level SharedPreferences for LocationReporter's
     // report-cadence gate -- just a timestamp, not a credential, so it

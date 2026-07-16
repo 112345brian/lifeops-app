@@ -49,6 +49,7 @@ internal suspend fun refreshYnabCategoriesIfConfigured(context: Context, force: 
     } catch (e: Exception) {
         gatePrefs.edit()
             .putString(WidgetKeys.KEY_LAST_YNAB_REFRESH_STATUS, "error")
+            .putString(WidgetKeys.KEY_LAST_YNAB_REFRESH_ERROR, "${e::class.java.simpleName}: ${e.message}")
             .putInt(WidgetKeys.KEY_LAST_YNAB_REFRESH_COUNT, 0)
             .apply()
         Log.e("YnabRefresh", "error fetching YNAB category balances", e)
@@ -57,6 +58,7 @@ internal suspend fun refreshYnabCategoriesIfConfigured(context: Context, force: 
     gatePrefs.edit()
         .putLong(WidgetKeys.KEY_LAST_YNAB_REFRESH_AT, now)
         .putString(WidgetKeys.KEY_LAST_YNAB_REFRESH_STATUS, "success")
+        .remove(WidgetKeys.KEY_LAST_YNAB_REFRESH_ERROR)
         .putInt(WidgetKeys.KEY_LAST_YNAB_REFRESH_COUNT, balances.size)
         .apply()
     Log.i("YnabRefresh", "refreshed ${balances.size} YNAB category balances")
@@ -95,7 +97,7 @@ internal suspend fun refreshYnabCategoriesIfConfigured(context: Context, force: 
 
 private fun fetchYnabCategoryBalances(token: String, budget: String): List<YnabCategoryBalance> {
     val encodedBudget = URLEncoder.encode(budget, StandardCharsets.UTF_8.name())
-    val url = "https://api.ynab.com/v1/budgets/$encodedBudget/months/current/categories"
+    val url = "https://api.ynab.com/v1/budgets/$encodedBudget/months/current"
     val body = httpRequest(
         url = url,
         method = "GET",
@@ -104,7 +106,7 @@ private fun fetchYnabCategoryBalances(token: String, budget: String): List<YnabC
         readTimeoutMs = 15_000,
         requireExactCode = HttpURLConnection.HTTP_OK,
     )
-    val categories = JSONObject(body).getJSONObject("data").getJSONArray("categories")
+    val categories = JSONObject(body).getJSONObject("data").getJSONObject("month").getJSONArray("categories")
     return (0 until categories.length()).mapNotNull { i ->
         val category = categories.getJSONObject(i)
         if (category.optBoolean("hidden", false) || category.optBoolean("deleted", false)) return@mapNotNull null

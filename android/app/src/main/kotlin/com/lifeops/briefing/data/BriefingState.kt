@@ -23,6 +23,7 @@ data class AttentionReason(val domain: String, val severity: String)
  * it; the widget falls back to day-only when it's absent rather than
  * hiding the event. */
 data class NotableEvent(val title: String, val date: String, val weekday: String, val start: String? = null)
+data class YnabCategoryBalance(val name: String, val dollars: Int)
 
 /** In-memory shape of one briefing snapshot -- what BriefingReceiver parses
  * each ntfy "briefing-data" push into, and what the widget UI renders.
@@ -33,6 +34,8 @@ data class BriefingState(
     val gymLast7d: Int? = null,
     val gymTarget: Int? = null,
     val discretionaryDollars: Int? = null,
+    val discretionaryCurrentDollars: Int? = null,
+    val ynabCategoryBalances: List<YnabCategoryBalance> = emptyList(),
     /** Just today's (days_until == 0) earmarked event costs -- what's safe
      * to spend on tonight's already-budgeted plans, as opposed to
      * [discretionaryDollars] which nets ALL upcoming plans (including
@@ -66,6 +69,15 @@ data class BriefingState(
         put("gymLast7d", gymLast7d)
         put("gymTarget", gymTarget)
         put("discretionaryDollars", discretionaryDollars)
+        put("discretionaryCurrentDollars", discretionaryCurrentDollars)
+        put("ynabCategoryBalances", JSONArray().apply {
+            ynabCategoryBalances.forEach { c ->
+                put(JSONObject().apply {
+                    put("name", c.name)
+                    put("dollars", c.dollars)
+                })
+            }
+        })
         put("discretionaryTodayDollars", discretionaryTodayDollars)
         put("courseworkHoursNext7d", courseworkHoursNext7d)
         put("temperatureF", temperatureF)
@@ -145,6 +157,22 @@ data class BriefingState(
             }
         }
 
+        private fun parseYnabCategoryBalances(arr: JSONArray?): List<YnabCategoryBalance> {
+            if (arr == null) return emptyList()
+            return (0 until arr.length()).mapNotNull { i ->
+                val c = arr.getJSONObject(i)
+                val name = c.optStringOrNull("name") ?: return@mapNotNull null
+                YnabCategoryBalance(name = name, dollars = c.optInt("dollars"))
+            }
+        }
+
+        private fun parseYnabCategoryBalanceObject(o: JSONObject?): List<YnabCategoryBalance> {
+            if (o == null) return emptyList()
+            return o.keys().asSequence().map { name ->
+                YnabCategoryBalance(name = name, dollars = o.optInt(name))
+            }.sortedBy { it.name.lowercase() }.toList()
+        }
+
         fun fromJson(raw: String): BriefingState {
             val o = JSONObject(raw)
             return BriefingState(
@@ -153,6 +181,8 @@ data class BriefingState(
                 gymLast7d = o.optIntOrNull("gymLast7d"),
                 gymTarget = o.optIntOrNull("gymTarget"),
                 discretionaryDollars = o.optIntOrNull("discretionaryDollars"),
+                discretionaryCurrentDollars = o.optIntOrNull("discretionaryCurrentDollars"),
+                ynabCategoryBalances = parseYnabCategoryBalances(o.optJSONArray("ynabCategoryBalances")),
                 discretionaryTodayDollars = o.optIntOrNull("discretionaryTodayDollars"),
                 courseworkHoursNext7d = o.optDoubleOrNull("courseworkHoursNext7d"),
                 temperatureF = o.optIntOrNull("temperatureF"),
@@ -187,6 +217,8 @@ data class BriefingState(
                 gymLast7d = facts.optIntOrNull("gym_last_7d"),
                 gymTarget = facts.optIntOrNull("gym_target"),
                 discretionaryDollars = facts.optIntOrNull("discretionary_dollars"),
+                discretionaryCurrentDollars = facts.optIntOrNull("discretionary_current_dollars"),
+                ynabCategoryBalances = parseYnabCategoryBalanceObject(facts.optJSONObject("ynab_category_balances")),
                 discretionaryTodayDollars = facts.optIntOrNull("discretionary_today_dollars"),
                 courseworkHoursNext7d = facts.optDoubleOrNull("coursework_hours_next_7d"),
                 temperatureF = facts.optIntOrNull("temperature_f"),

@@ -40,13 +40,18 @@ def build(fs, yn, now):
 
     try:
         sp = gather.spend_input(fs, yn, now)
+        current_fun_money = round(sp.get("fun_money", 0))
         fun_money = round(sp.get("net_fun_money", sp.get("fun_money", 0)))
         today_budget = round(sp.get("today_budget", 0))
+        ynab_category_balances = {name: round(value)
+                                  for name, value in sp.get("ynab_category_balances", {}).items()}
         near = sorted(sp.get("events", []), key=lambda e: e.get("days_until", 99))[:2]
         upcoming = [f"{e['label']} in {e['days_until']}d" for e in near]
         today_event_names = [e["label"] for e in sp.get("events", []) if e.get("days_until") == 0]
     except Exception:
-        fun_money, today_budget, upcoming, today_event_names = None, None, [], []
+        current_fun_money, fun_money, today_budget, ynab_category_balances, upcoming, today_event_names = (
+            None, None, None, {}, [], []
+        )
 
     w = weather.current(now) or {}
 
@@ -82,6 +87,8 @@ def build(fs, yn, now):
              "gym_last_7d": gym_last_7d, "gym_target": 4,
              "trained_today": trained_today, "gym_ring": gym_ring,
              "discretionary_dollars": fun_money, "discretionary_today_dollars": today_budget,
+             "discretionary_current_dollars": current_fun_money,
+             "ynab_category_balances": ynab_category_balances,
              "upcoming_paid_events": upcoming,
              "temperature_f": w.get("temp_f"), "weather_high_f": w.get("high_f"),
              "weather_low_f": w.get("low_f"), "weather_condition": w.get("condition"),

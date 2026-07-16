@@ -79,13 +79,23 @@ internal suspend fun reportWeatherIfDue(context: Context) {
     }
 }
 
-/** Whatever's currently cached, regardless of age -- BriefingContent's own
- * WEATHER branch is what decides priority against the server-provided
- * nextTasks.weather/BriefingState fallbacks; this just exposes "the last
- * thing this phone itself successfully fetched from NOAA," if anything. */
-internal fun readCachedPhoneWeather(context: Context): WeatherInfo? {
+/** The phone-side NOAA reading, only while it is fresh enough to outrank the
+ * server-side nextTasks.weather fallback. A failed fetch stamps
+ * KEY_LAST_WEATHER_FETCH_AT so we don't hammer NOAA, but deliberately does
+ * not update KEY_WEATHER_FETCHED_AT; using the successful-result timestamp
+ * here prevents one old local value (e.g. yesterday's 64F) from pinning the
+ * widget forever ahead of fresher server weather. */
+internal fun readCachedPhoneWeather(
+    context: Context,
+    nowMillis: Long = System.currentTimeMillis(),
+): WeatherInfo? {
     val prefs = context.getSharedPreferences(WidgetKeys.WEATHER_PREFS_NAME, Context.MODE_PRIVATE)
     if (!prefs.contains(WidgetKeys.KEY_WEATHER_TEMP_F)) return null
+    val fetchedAt = prefs.getLong(
+        WidgetKeys.KEY_WEATHER_FETCHED_AT,
+        prefs.getLong(WidgetKeys.KEY_LAST_WEATHER_FETCH_AT, 0L),
+    )
+    if (fetchedAt <= 0L || nowMillis - fetchedAt > MAX_CACHE_AGE_MS) return null
     return WeatherInfo(
         temperatureF = prefs.getInt(WidgetKeys.KEY_WEATHER_TEMP_F, 0),
         highF = if (prefs.contains(WidgetKeys.KEY_WEATHER_HIGH_F)) prefs.getInt(WidgetKeys.KEY_WEATHER_HIGH_F, 0) else null,
@@ -162,4 +172,5 @@ internal fun todayHighLow(periods: JSONArray, today: LocalDate = LocalDate.now()
 // public API with no real benefit -- NOAA's own hourly forecast doesn't
 // change faster than this anyway.
 private const val MIN_INTERVAL_MS = 45 * 60 * 1000L
+private const val MAX_CACHE_AGE_MS = 2 * 60 * 60 * 1000L
 private const val TAG = "PhoneWeather"

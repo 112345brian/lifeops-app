@@ -1,30 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Single-stat preset (gym ring only): see BriefingWidgetReceiver.kt's
-     docstring. Sized to Android's real 2x1 handheld minimum (56dp tall):
-     BriefingContent's SMALL bucket now renders TILE_SECTIONS content (the
-     gym ring included) instead of just the attention badge, so this no
-     longer needs to be artificially held at 150dp/MEDIUM to avoid losing
-     its content when resized down (confirmed 2026-07-13: the widget
-     couldn't actually be shrunk to its declared minimum before this fix).
-
-     minWidth matches minHeight (70dp) and targetCellWidth is 1, not 2:
-     unlike money/coursework/weather/sleep/social, this is a single icon +
-     number with no side-by-side content, so it should default to one
-     square cell, not a 2-wide strip (confirmed 2026-07-14: "it's 1x1
-     widget"). See the widget-info XML section of android/CLAUDE.md for
-     why minWidth (not targetCellWidth) is what actually drives footprint
-     on Samsung's launcher.
-
-     120dp, not the bare 56dp platform floor: BriefingContent's gym ring
-     plus its own padding needs real margin to not clip against this
-     widget's own edge (confirmed 2026-07-14, live device: "not big
-     enough" and "clipped by an invisible border" at 56dp). Bumped
-     70dp -> 96dp -> 112dp -> 120dp alongside GymRingIndicator's
-     SOLO_GYM_RING_SCALE (1.5x, then 1.875x, then an experimental 2x, all
-     confirmed 2026-07-14): the ring alone reaches 96dp at 2x, so 112dp
-     stopped leaving enough room for GymRingIndicator's own
-     SOLO_GYM_RING_OVERHEAD_DP margin and started clamping the ring back
-     down again. -->
+<!-- Single-stat preset (gym only). Keep this at the live-device-tested
+     120dp floor; smaller launcher grants clipped the enlarged standalone
+     ring on Samsung devices. Combo-grid cells handle their own compact
+     rendering separately inside BriefingWidget.kt. -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:minWidth="120dp"
     android:minHeight="120dp"
