@@ -70,14 +70,19 @@ def categorize_unknown(payee, amount, category_names):
 
 def extract_readings(page_text, module_num):
     """Parse a Canvas Readings page into a structured list.
-    Returns [{author, title, type, estimated_minutes}] or [] on failure.
+    Returns [{author, title, type, estimated_minutes, locator}] or [] on failure.
     type: article | blog | chapter | accessible_chapter | tutorial | documentation | book
+    locator: chapter/page info as written on the page (e.g. "Ch. 3, pp. 45-67"),
+    or "" if the page doesn't specify one — needed in FlowSavvy's task notes so
+    the reading is actually findable, since the title alone is truncated/short.
     """
     prompt = (
         f"Module {module_num} Readings & Resources page:\n\n{page_text[:4000]}\n\n"
         "List every individual reading/resource as a JSON array. Each element:\n"
         '{"author":"Last, F. (or org name)","title":"Short title","type":"article|blog|chapter|'
-        'accessible_chapter|tutorial|documentation|book","estimated_minutes":30}\n'
+        'accessible_chapter|tutorial|documentation|book","estimated_minutes":30,'
+        '"locator":"chapter/page range as stated, e.g. \'Ch. 3, pp. 45-67\' or \'pp. 12-20\', '
+        'empty string if not specified"}\n'
         "Duration guidelines — article/blog: 20-30, tutorial-with-code: 40-60, "
         "documentation: 45-60, academic chapter: 40-50, accessible chapter: 25-35, "
         "full short book: 240. Return ONLY the JSON array."

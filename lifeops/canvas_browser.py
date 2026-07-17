@@ -42,6 +42,7 @@ PROFILE_DIR = ROOT / "data" / "browser_profiles" / "canvas"
 _CHROME_CANDIDATES = [
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
     r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
 ]
 
 def _chrome_path():
@@ -81,7 +82,10 @@ def launch_manual_login(url):
     exe = _chrome_path()
     if not exe:
         raise RuntimeError("Chrome not found — Canvas login needs the real Chrome binary")
-    return subprocess.Popen([exe, f"--user-data-dir={PROFILE_DIR}", "--new-window", url])
+    return subprocess.Popen(
+        [exe, f"--user-data-dir={PROFILE_DIR}", "--new-window", url],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
 
 
 class BrowserCanvas:

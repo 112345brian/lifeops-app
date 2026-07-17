@@ -230,12 +230,12 @@ _READING_DURATION = {
     "book":         240,
 }
 
-def reading_task(mod_num, author, title, rtype, unlock_date, due_date, today):
+def reading_task(mod_num, author, title, rtype, unlock_date, due_date, today, locator=None):
     duration = _READING_DURATION.get(rtype, 35)
     prio = "high" if due_date and (due_date - today).days <= 3 else "normal"
     short_author = author.split(",")[0].strip() if author else "Source"
     short_title  = title[:50] if title else "reading"
-    return {
+    t = {
         "title":           f"M{mod_num:02d}: Read {short_author}, {short_title}",
         "durationMinutes": duration,
         "minLengthMinutes": min(duration, 20),
@@ -244,6 +244,16 @@ def reading_task(mod_num, author, title, rtype, unlock_date, due_date, today):
         "priority":        prio,
         "_dep_title":      None,
     }
+    # full title + chapter/pages in notes — the title alone is truncated to
+    # 50 chars and never carries a locator, so it's not enough to know what
+    # to actually open and read.
+    note_bits = [title or "reading"]
+    if author:
+        note_bits.append(f"by {author}")
+    if locator and isinstance(locator, str):
+        note_bits.append(locator)
+    t["notes"] = " — ".join(note_bits)
+    return t
 
 
 # ── top-level planner ─────────────────────────────────────────────────────────
@@ -292,7 +302,8 @@ def plan(modules_data, existing_titles, today):
         # readings
         for r in readings:
             t = reading_task(num, r.get("author",""), r.get("title",""),
-                             r.get("type","article"), unlock, readings_due, today)
+                             r.get("type","article"), unlock, readings_due, today,
+                             locator=r.get("locator"))
             dup = _find_duplicate(t["title"], existing_norms)
             if dup is None:
                 t["_module_num"] = num

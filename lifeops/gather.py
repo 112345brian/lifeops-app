@@ -22,6 +22,9 @@ def _is_friend_hangout(title, notes):
         return True
     return any(re.search(rf"\b{re.escape(n.lower())}\b", text) for n in config.FRIEND_NAMES)
 
+# canvas_engine.reading_task() titles: "M03: Read Smith, Some Title"
+_CANVAS_READING_TITLE_RE = re.compile(r"^M\d{2}: Read ")
+
 _NOTE_OVERRIDE_RE = re.compile(r"(?im)^\s*(type|cost)\s*:\s*(.+?)\s*$")
 _TYPE_ALIASES = {"concerts": "concert"}
 
@@ -633,9 +636,17 @@ def social_input(fs, now):
         notes = t.get("notes") or ""
         return _is_lifeops_social_placeholder(title) or "Locked in (LifeOps)" in notes
     def _is_friend_commitment(t):
+        title = t.get("title") or ""
+        if _CANVAS_READING_TITLE_RE.match(title):
+            # Canvas reading titles/notes carry the assignment's author and
+            # full citation text verbatim, so a friend's name can appear
+            # there as an unrelated word-boundary match (e.g. a reading
+            # cited "James, W." colliding with a FRIEND_NAMES entry) --
+            # these are never real friend hangouts.
+            return False
         return (
-            (t.get("title") or "") == config.FRIENDS_TASK or
-            _is_friend_hangout(t.get("title"), t.get("notes")) or
+            title == config.FRIENDS_TASK or
+            _is_friend_hangout(title, t.get("notes")) or
             "friends" in _note_types(t.get("notes"))
         )
     def _next_task_date(match):

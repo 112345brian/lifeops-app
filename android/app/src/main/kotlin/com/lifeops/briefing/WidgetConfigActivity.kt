@@ -11,6 +11,8 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.ViewCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -51,8 +53,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -132,10 +136,8 @@ class WidgetConfigActivity : ComponentActivity() {
         // 0dp even with this set (confirmed 2026-07-13 on a real Samsung
         // device: the Save button still sat directly under/behind the
         // 3-button nav bar's icons after adding navigationBarsPadding()).
-        // Rather than keep guessing at *why* Compose's own insets dispatch
-        // isn't reaching this Activity's window, navBarHeightDp() below
-        // reads the nav bar's real height straight from the platform
-        // resource instead -- doesn't depend on insets dispatch at all.
+        // navBarHeightDp() reads the platform view insets instead, so the
+        // bottom action row still clears the system navigation area.
         WindowCompat.setDecorFitsSystemWindows(window, false)
         // Must happen before any UI work -- if the user backs out without
         // saving, the App Widget host must not add the widget.
@@ -158,9 +160,26 @@ class WidgetConfigActivity : ComponentActivity() {
             .getAppWidgetInfo(appWidgetId)?.provider?.className
         val presetDefault = WidgetPresets.defaultConfigFor(providerClassName)
 
-        val navBarHeightDp = navigationBarHeightDp()
-
         setContent {
+            var navBarHeightDp by remember { mutableStateOf(navigationBarHeightDp()) }
+            DisposableEffect(Unit) {
+                val decorView = window.decorView
+                // One-shot: only the first dispatch is needed to capture the
+                // real nav bar height, so the listener unregisters itself
+                // immediately instead of staying live for the Activity's
+                // whole lifetime and recomposing on every unrelated insets
+                // change (keyboard, rotation, etc).
+                ViewCompat.setOnApplyWindowInsetsListener(decorView) { view, insets ->
+                    val px = insets.getInsets(WindowInsetsCompat.Type.navigationBars()).bottom
+                    navBarHeightDp = (px / view.resources.displayMetrics.density).dp
+                    ViewCompat.setOnApplyWindowInsetsListener(decorView, null)
+                    insets
+                }
+                ViewCompat.requestApplyInsets(decorView)
+                onDispose {
+                    ViewCompat.setOnApplyWindowInsetsListener(decorView, null)
+                }
+            }
             MaterialTheme(colorScheme = LifeOpsDarkColors) {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     WidgetConfigScreen(
@@ -246,14 +265,14 @@ private fun <T> List<T>.moved(from: Int, to: Int): List<T> {
     return mutable
 }
 
-/** Reads the 3-button/gesture nav bar's real height straight from the
- * platform resource, in dp -- see the [WidgetConfigActivity.onCreate]
- * comment for why this exists instead of Compose's own
- * navigationBarsPadding(). Falls back to 0dp (no bar, e.g. fully gestural
- * nav with no persistent bar) if the resource isn't present. */
+/** Reads the 3-button/gesture nav bar's real height from the platform view
+ * insets, in dp -- see the [WidgetConfigActivity.onCreate] comment for why
+ * this exists instead of Compose's own navigationBarsPadding(). Falls back
+ * to 0dp when insets have not been dispatched yet or there is no persistent
+ * navigation area. */
 private fun Activity.navigationBarHeightDp(): Dp {
-    val resId = resources.getIdentifier("navigation_bar_height", "dimen", "android")
-    val px = if (resId > 0) resources.getDimensionPixelSize(resId) else 0
+    val insets = ViewCompat.getRootWindowInsets(window.decorView)
+    val px = insets?.getInsets(WindowInsetsCompat.Type.navigationBars())?.bottom ?: 0
     return (px / resources.displayMetrics.density).dp
 }
 
@@ -286,9 +305,9 @@ private fun WidgetConfigScreen(
 
     var order by remember { mutableStateOf(loaded.config.sectionOrder) }
     var hidden by remember { mutableStateOf(loaded.config.hiddenSections) }
-    var scale by remember { mutableStateOf(loaded.config.scale) }
+    var scale by remember { mutableFloatStateOf(loaded.config.scale) }
     var maxTasksAuto by remember { mutableStateOf(loaded.config.maxTasksOverride == null) }
-    var maxTasksValue by remember { mutableStateOf((loaded.config.maxTasksOverride ?: 3).toFloat()) }
+    var maxTasksValue by remember { mutableFloatStateOf((loaded.config.maxTasksOverride ?: 3).toFloat()) }
     var moneyAppPackage by remember { mutableStateOf(loaded.config.moneyAppPackage) }
     var gymAppPackage by remember { mutableStateOf(loaded.config.gymAppPackage) }
     var weatherAppPackage by remember { mutableStateOf(loaded.config.weatherAppPackage) }
@@ -322,10 +341,10 @@ private fun WidgetConfigScreen(
             // system nav bar/gesture bar -- targetSdk 35+ enforces
             // edge-to-edge by default, so without this the Save button
             // rendered right underneath the 3-button nav bar's Home
-            // button, unreachable. navBarHeightDp is read straight from the
-            // platform resource (see [navigationBarHeightDp]), not from
-            // Compose's own WindowInsets -- navigationBarsPadding() measured
-            // 0dp here even after enabling edge-to-edge (confirmed
+            // button, unreachable. navBarHeightDp is read from platform view
+            // insets (see [navigationBarHeightDp]), not from Compose's own
+            // WindowInsets -- navigationBarsPadding() measured 0dp here even
+            // after enabling edge-to-edge (confirmed
             // 2026-07-13 on a real Samsung device: the button still
             // rendered directly behind the nav bar's icons).
             Surface(
