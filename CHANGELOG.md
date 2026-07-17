@@ -6,6 +6,33 @@ change matter more here than semver strictness.
 
 <!-- towncrier release notes start -->
 
+## [1.20.0] — 2026-07-17
+
+### Added
+
+- Canvas reading tasks now carry the full title, author, and chapter/page
+  locator in their FlowSavvy notes, so an assignment is actually findable
+  instead of relying on a title truncated to 50 characters.
+
+### Fixed
+
+- Fixed Canvas reading tasks occasionally getting misclassified as friend
+  hangouts when a citation's author name happened to match a configured
+  friend name, and fixed a crash that could abort an entire Canvas sync if
+  the LLM returned a malformed reading locator.
+- The widget configure screen's nav-bar-clearance padding now reads from live
+  window insets instead of a static platform resource, and no longer leaves a
+  permanent insets listener registered for the screen's whole lifetime.
+
+### Changed
+
+- Canvas browser login now finds Chrome on macOS (previously Windows-only
+  paths) and suppresses noisy Chrome stdout/stderr during manual login.
+- Fixed the app's round icon reference in AndroidManifest.xml, removed
+  redundant per-activity labels, dropped an unused widget preview string, and
+  fixed a mixed-height alignment glitch in the combo widget preview layout.
+
+
 ## [1.19.0] — 2026-07-17
 
 ### Added
