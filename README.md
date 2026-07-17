@@ -125,6 +125,12 @@ Covers every deterministic engine (gym, ynab, chore, load, spend, social,
 canvas) plus adherence — malformed-input, edge-case, and regression coverage,
 not just happy paths.
 
+## Releasing
+Changelog entries are per-change fragments (`changelog.d/+<slug>.<type>.md`),
+not hand-edited at release time — see `changelog.d/README.md` for the
+convention and the full release recipe (`towncrier build` then
+`bump-my-version bump`).
+
 ## Status
 Fully wired: all domains implemented and tested, control panel live, Canvas
 sync working via token or browser session. See `CHANGELOG.md` for recent work.

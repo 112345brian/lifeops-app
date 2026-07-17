@@ -1,0 +1,4 @@
+-r requirements.txt
+
+bump-my-version>=1.4.1,<2.0.0
+towncrier>=25.8.0,<26.0.0

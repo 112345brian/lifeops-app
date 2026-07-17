@@ -1,0 +1,18 @@
+[tool.bumpversion]
+current_version = "1.18.9"
+commit = true
+tag = true
+tag_name = "v{new_version}"
+message = "chore: release v{new_version}"
+tag_message = "Release v{new_version}"
+allow_dirty = false
+
+[[tool.bumpversion.files]]
+filename = "VERSION"
+search = "{current_version}"
+replace = "{new_version}"
+
+[[tool.bumpversion.files]]
+filename = "lifeops/__init__.py"
+search = '__version__ = "{current_version}"'
+replace = '__version__ = "{new_version}"'

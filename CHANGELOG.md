@@ -4,6 +4,8 @@ Notable changes, newest first. Personal project, versioned simply (see
 `VERSION` / `lifeops.__version__`) — dates and the reasoning behind each
 change matter more here than semver strictness.
 
+<!-- towncrier release notes start -->
+
 ## [1.18.9] — 2026-07-16
 
 ### Added
