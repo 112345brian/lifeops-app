@@ -44,7 +44,7 @@ def sandbox(tmp_path, monkeypatch):
                         lambda action, **k: logged.append((action, k)))
     # empty history by default → days_with returns nothing
     monkeypatch.setattr(history, "days_with", lambda *a, **k: set())
-    os.makedirs(os.path.join(str(tmp_path), "logs"), exist_ok=True)
+    os.makedirs(os.path.join(str(tmp_path), "private", "logs"), exist_ok=True)
     return tmp_path, logged
 
 
@@ -54,7 +54,7 @@ def _task(iid, title, start, end=None, notes=""):
 
 
 def _state(tmp_path):
-    p = os.path.join(str(tmp_path), "logs", "gym_state.json")
+    p = os.path.join(str(tmp_path), "private", "logs", "gym_state.json")
     return json.load(open(p, encoding="utf-8")) if os.path.exists(p) else {}
 
 
@@ -103,7 +103,7 @@ def test_future_gym_with_keyword_is_logged(sandbox):
 
 def test_already_logged_item_is_not_relogged(sandbox):
     tmp, logged = sandbox
-    p = os.path.join(str(tmp), "logs", "gym_state.json")
+    p = os.path.join(str(tmp), "private", "logs", "gym_state.json")
     json.dump({"logged_backfills": {"g1": TODAY}}, open(p, "w"))
     fs = _FakeFS()
     task = _task("g1", "✅ Gym (logged)", "2026-07-05T10:00:00", "2026-07-05T11:00:00")
@@ -129,7 +129,7 @@ def test_old_logged_backfill_is_pruned_after_ttl(sandbox):
     tmp, logged = sandbox
     old = (NOW.date() - datetime.timedelta(days=15)).isoformat()
     recent = (NOW.date() - datetime.timedelta(days=3)).isoformat()
-    p = os.path.join(str(tmp), "logs", "gym_state.json")
+    p = os.path.join(str(tmp), "private", "logs", "gym_state.json")
     json.dump({"logged_backfills": {"old1": old, "keep1": recent}}, open(p, "w"))
     fs = _FakeFS()
     runner._gym_backfill(fs, NOW, [])

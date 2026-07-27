@@ -54,12 +54,12 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "_alert_once",
                         lambda *a, **k: pytest.fail("cashflow must not send notifications"))
     monkeypatch.setattr(runner, "_touch", lambda *a, **k: None)
-    os.makedirs(os.path.join(str(tmp_path), "logs"), exist_ok=True)
+    os.makedirs(os.path.join(str(tmp_path), "private", "logs"), exist_ok=True)
     return tmp_path
 
 
 def _cashflow_file(tmp):
-    p = os.path.join(str(tmp), "logs", "cashflow.json")
+    p = os.path.join(str(tmp), "private", "logs", "cashflow.json")
     return json.load(open(p, encoding="utf-8")) if os.path.exists(p) else None
 
 

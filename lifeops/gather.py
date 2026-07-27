@@ -7,7 +7,7 @@ from . import history, config, adherence
 # Canonical path — web.py imports this instead of re-deriving it, so the
 # writer (web UI "block this day") and reader (this module's engine feed)
 # can never silently diverge onto two different files.
-GYM_BLOCKS_FILE = os.path.join(history.ROOT, "logs", "gym_blocks.json")
+GYM_BLOCKS_FILE = os.path.join(history.private_logs_dir(), "gym_blocks.json")
 
 def _is_friend_hangout(title, notes):
     """A task counts as a friend hangout if its title/notes say so directly

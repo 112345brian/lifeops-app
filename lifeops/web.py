@@ -80,13 +80,13 @@ async def _auth(request: Request, call_next):
     return await call_next(request)
 
 ROOT              = history.ROOT
-DOMAINS_FILE      = os.path.join(ROOT, "logs", "domains.json")
+DOMAINS_FILE      = os.path.join(ROOT, "private", "logs", "domains.json")
 # Shared with gather.py's engine-feed reader — must be the SAME path so the
 # writer (this UI) and reader (gather.gym_input) can never silently diverge.
 GYM_BLOCKS_FILE   = gather.GYM_BLOCKS_FILE
-GYM_STATE_FILE    = os.path.join(ROOT, "logs", "gym_state.json")
-SCHED_BLOCKS_FILE = os.path.join(ROOT, "logs", "schedule_blocks.json")
-ALERT_STATE_FILE  = os.path.join(ROOT, "logs", "alert_state.json")
+GYM_STATE_FILE    = os.path.join(ROOT, "private", "logs", "gym_state.json")
+SCHED_BLOCKS_FILE = os.path.join(ROOT, "private", "logs", "schedule_blocks.json")
+ALERT_STATE_FILE  = os.path.join(ROOT, "private", "logs", "alert_state.json")
 ENV               = str(config.ENV_FILE)
 
 ALL_DOMAINS  = ["gym", "ynab", "chore", "catchup", "homework", "spend", "social", "meal", "digest",
@@ -226,7 +226,7 @@ def _run_domain(name):
 
 def _last_run():
     try:
-        lr = json.load(open(os.path.join(ROOT, "logs", "last_run.json"), encoding="utf-8"))
+        lr = json.load(open(os.path.join(ROOT, "private", "logs", "last_run.json"), encoding="utf-8"))
     except Exception:
         return None
     ts = lr.get("ts")
@@ -420,7 +420,7 @@ def _canvas_pending():
     state-loss re-sync signature). Surface it so the panel can show what was
     held and offer a one-tap approve. Returns None when nothing is pending."""
     try:
-        p = json.load(open(os.path.join(ROOT, "logs", "canvas_pending.json"), encoding="utf-8"))
+        p = json.load(open(os.path.join(ROOT, "private", "logs", "canvas_pending.json"), encoding="utf-8"))
     except Exception:
         return None
     return {"count": p.get("count"), "at": p.get("at"),
@@ -439,7 +439,7 @@ def _today_briefing():
     """The daily briefing (run_briefing) writes logs/briefing.json. Show it only
     if it's from today — a stale briefing is worse than none."""
     try:
-        b = json.load(open(os.path.join(ROOT, "logs", "briefing.json"), encoding="utf-8"))
+        b = json.load(open(os.path.join(ROOT, "private", "logs", "briefing.json"), encoding="utf-8"))
     except Exception:
         return None
     if b.get("date") != datetime.date.today().isoformat():
@@ -453,7 +453,7 @@ def _today_briefing_raw():
     formatting step — for API clients (e.g. the Android widget) that want the
     raw **bold**/\\n markup to style themselves rather than <strong>/<br>."""
     try:
-        b = json.load(open(os.path.join(ROOT, "logs", "briefing.json"), encoding="utf-8"))
+        b = json.load(open(os.path.join(ROOT, "private", "logs", "briefing.json"), encoding="utf-8"))
     except Exception:
         return None
     if b.get("date") != datetime.date.today().isoformat():
@@ -485,7 +485,7 @@ def _cashflow():
     logs/cashflow.json; no notifications by design). Adds a `bar_pct` per week
     for a simple inline bar, scaled to the starting balance. Today's only."""
     try:
-        c = json.load(open(os.path.join(ROOT, "logs", "cashflow.json"), encoding="utf-8"))
+        c = json.load(open(os.path.join(ROOT, "private", "logs", "cashflow.json"), encoding="utf-8"))
     except Exception:
         return None
     if c.get("date") != datetime.date.today().isoformat():
@@ -1224,7 +1224,7 @@ def canvas_approve_sync():
     """Approve a Canvas sync the flood guard held. Sets a one-shot `flood_ack`
     (today) in canvas_state.json, then re-runs canvas — the guard bypasses for
     the day and creates the held tasks through the normal path (no replay)."""
-    sp = os.path.join(ROOT, "logs", "canvas_state.json")
+    sp = os.path.join(ROOT, "private", "logs", "canvas_state.json")
     try:
         st = json.load(open(sp, encoding="utf-8"))
     except Exception:
@@ -1243,7 +1243,7 @@ def canvas_dismiss_pending():
     """Discard a held Canvas sync without creating anything (e.g. you restored
     canvas_state.json instead). Just removes the pending file."""
     try:
-        os.remove(os.path.join(ROOT, "logs", "canvas_pending.json"))
+        os.remove(os.path.join(ROOT, "private", "logs", "canvas_pending.json"))
     except Exception:
         pass
     return RedirectResponse(f"/settings?msg={quote('Dismissed the held Canvas sync.')}#canvas", 303)

@@ -54,9 +54,9 @@ def _run_sync(tmp_path, monkeypatch, modules, state):
     were actually selected for syncing this run (i.e. handed to plan())."""
     # Point history's durable-file root at a throwaway dir.
     monkeypatch.setattr(history, "ROOT", str(tmp_path))
-    monkeypatch.setattr(history, "HIST", str(tmp_path / "logs" / "history.jsonl"))
+    monkeypatch.setattr(history, "HIST", str(tmp_path / "private" / "logs" / "history.jsonl"))
 
-    sp = tmp_path / "logs" / "canvas_state.json"
+    sp = tmp_path / "private" / "logs" / "canvas_state.json"
     sp.parent.mkdir(parents=True, exist_ok=True)
     sp.write_text(json.dumps(state), encoding="utf-8")
 

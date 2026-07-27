@@ -77,16 +77,16 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(history, "days_with", lambda *a, **k: set())
     alerts = []
     monkeypatch.setattr(runner, "_alert_once", lambda key, *a, **k: alerts.append(key))
-    os.makedirs(os.path.join(str(tmp_path), "logs"), exist_ok=True)
+    os.makedirs(os.path.join(str(tmp_path), "private", "logs"), exist_ok=True)
     return tmp_path, alerts
 
 
 def _sp(tmp):
-    return os.path.join(str(tmp), "logs", "canvas_state.json")
+    return os.path.join(str(tmp), "private", "logs", "canvas_state.json")
 
 
 def _pending(tmp):
-    p = os.path.join(str(tmp), "logs", "canvas_pending.json")
+    p = os.path.join(str(tmp), "private", "logs", "canvas_pending.json")
     return json.load(open(p, encoding="utf-8")) if os.path.exists(p) else None
 
 
@@ -123,7 +123,7 @@ def test_approved_run_bypasses_guard_and_clears_pending(sandbox):
     tmp, alerts = sandbox
     fs = _FakeFS()
     # a stale pending file + a same-day ack (what the panel's approve writes)
-    with open(os.path.join(str(tmp), "logs", "canvas_pending.json"), "w") as f:
+    with open(os.path.join(str(tmp), "private", "logs", "canvas_pending.json"), "w") as f:
         json.dump({"count": 12}, f)
     with open(_sp(tmp), "w", encoding="utf-8") as f:
         json.dump({"synced_modules": [], "task_titles": [],

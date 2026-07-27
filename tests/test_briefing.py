@@ -31,12 +31,12 @@ def sandbox(tmp_path, monkeypatch):
         "events": [{"label": "Concert", "days_until": 3, "cost": 40, "type": "concert"}]})
     alerts = []
     monkeypatch.setattr(runner, "_alert_once", lambda key, *a, **k: alerts.append(key))
-    os.makedirs(os.path.join(str(tmp_path), "logs"), exist_ok=True)
+    os.makedirs(os.path.join(str(tmp_path), "private", "logs"), exist_ok=True)
     return tmp_path, alerts
 
 
 def _briefing_file(tmp):
-    p = os.path.join(str(tmp), "logs", "briefing.json")
+    p = os.path.join(str(tmp), "private", "logs", "briefing.json")
     return json.load(open(p, encoding="utf-8")) if os.path.exists(p) else None
 
 

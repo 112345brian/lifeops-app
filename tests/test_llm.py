@@ -136,7 +136,7 @@ def test_usage_is_logged_per_call(tmp_path, monkeypatch):
 
     llm.categorize_unknown("Trader Joe's", 42.10, ["Groceries"])
 
-    lines = (tmp_path / "logs" / "llm_usage.jsonl").read_text(encoding="utf-8").strip().splitlines()
+    lines = (tmp_path / "private" / "logs" / "llm_usage.jsonl").read_text(encoding="utf-8").strip().splitlines()
     assert len(lines) == 1
     rec = json.loads(lines[0])
     assert rec["fn"] == "categorize_unknown"

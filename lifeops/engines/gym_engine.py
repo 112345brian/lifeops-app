@@ -8,7 +8,7 @@ hallucinated. `plan(inp)` is pure; the runner (or CLI) handles I/O + logging.
 import json, sys, os, datetime
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-LOG = os.path.join(ROOT, "logs", "gym_log.jsonl")
+LOG = os.path.join(ROOT, "private", "logs", "gym_log.jsonl")
 DAY = datetime.timedelta(days=1)
 
 def D(s):

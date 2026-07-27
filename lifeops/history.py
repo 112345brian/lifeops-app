@@ -10,7 +10,24 @@ One JSON object per line: {"action": "gym", "ts": "2026-06-27T18:00:00", "source
 import os, json, datetime, tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-HIST = os.path.join(ROOT, "logs", "history.jsonl")
+
+
+def private_logs_dir():
+    """Where durable app state lives — inside the `private` submodule (tracked,
+    backed up, and auto-committed after every run — see runner.py's post-run
+    sync) rather than the top-level `logs/`, which stays gitignored for
+    ephemeral/local-only files (fcm_token.json, weather_grid_cache.json,
+    lifeops.lock, web.log).
+
+    A function, not a module constant: tests monkeypatch history.ROOT to
+    redirect state into tmp_path (see tests/test_*.py), and a frozen
+    constant computed once at import time would silently ignore that and
+    keep writing into the real private/logs/ during test runs.
+    """
+    return os.path.join(ROOT, "private", "logs")
+
+
+HIST = os.path.join(private_logs_dir(), "history.jsonl")
 
 def append(action, ts=None, source="", meta=None):
     rec = {"action": action,

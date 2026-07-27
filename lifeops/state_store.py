@@ -1,4 +1,4 @@
-"""Small helpers for durable JSON state files under ``logs/``.
+"""Small helpers for durable JSON state files under ``private/logs/``.
 
 Most LifeOps state is intentionally simple JSON on disk. Keeping the load and
 atomic-write rules here prevents each domain from re-solving corruption,
@@ -10,7 +10,7 @@ from . import history
 
 
 def logs_path(filename):
-    return os.path.join(history.ROOT, "logs", filename)
+    return os.path.join(history.private_logs_dir(), filename)
 
 
 def load_json(path, default=None, require_type=None):

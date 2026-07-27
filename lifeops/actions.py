@@ -1,21 +1,21 @@
 """Audit log of agent-caused changes — the "what did LifeOps do?" feed, plus
 enough info to undo the reversible ones.
 
-One JSON object per line in logs/actions.jsonl:
+One JSON object per line in private/logs/actions.jsonl:
   {"ts","domain","op","title","item_id","undoable","meta"?}
 
 This is distinct from history.jsonl (durable *completions* — when you did things)
 and runs.jsonl (per-run summaries). actions.jsonl is "mutations LifeOps made to
 your calendar," so a surprising task appearing/vanishing is a grep, and the
 control panel can offer a one-tap undo. Undone item ids are tracked in
-logs/actions_undone.json so the feed greys them out and refuses a double-undo.
+private/logs/actions_undone.json so the feed greys them out and refuses a double-undo.
 """
 import os, json, datetime
 from . import history
 
 
 def _path(name):
-    return os.path.join(history.ROOT, "logs", name)
+    return os.path.join(history.private_logs_dir(), name)
 
 
 def log(domain, op, title, item_id=None, undoable=False, meta=None):

@@ -6,7 +6,7 @@ The LLM (lifeops.llm) is touched only for the judgment slivers.
 Run:  python -m lifeops.runner          # all wired domains
       python -m lifeops.runner gym      # one domain
 """
-import sys, os, re, io, json, datetime, contextlib, requests
+import sys, os, re, io, json, datetime, contextlib, requests, subprocess
 from . import config, ntfy, notify, gather, lock, history, adherence, actions, fcm
 from . import briefing_service, push_state, state_store
 from .flowsavvy import FlowSavvy
@@ -94,7 +94,7 @@ def check_panel_health(now):
     per continuous outage, and one recovery alert when it comes back, via
     ntfy directly (not through the panel -- alerts must work precisely when
     the panel doesn't)."""
-    sp = os.path.join(history.ROOT, "logs", "panel_health_state.json")
+    sp = os.path.join(history.ROOT, "private", "logs", "panel_health_state.json")
     st = {"down_since": None, "alerted": False}
     try:
         st.update(json.load(open(sp, encoding="utf-8")))
@@ -141,7 +141,7 @@ def check_panel_health(now):
 def ingest(fs, now):
     """Harvest completions from ntfy signals + FlowSavvy check-offs into the
     permanent history log. Runs every cycle; cheap and deduped."""
-    sp = os.path.join(history.ROOT, "logs", "ingest_state.json")
+    sp = os.path.join(history.ROOT, "private", "logs", "ingest_state.json")
     st = {"ntfy_ts": 0, "logged_ids": [], "handled_ntfy_msg_ids": []}
     try:
         st.update(json.load(open(sp, encoding="utf-8")))
@@ -323,7 +323,7 @@ def _alert_once(key, text, priority="default", tags=None, actions=None, click_an
     section to deep-link into when the notification is tapped (e.g. "gym") —
     "" links to the panel root, which is still useful (opens the app).
     Omitted entirely if PANEL_URL isn't configured."""
-    sp = os.path.join(history.ROOT, "logs", "alert_state.json")
+    sp = os.path.join(history.ROOT, "private", "logs", "alert_state.json")
     st = {}
     try:
         st = json.load(open(sp, encoding="utf-8"))
@@ -367,7 +367,7 @@ def _gym_backfill(fs, now, gym_tasks):
     handled this run so run_gym's cleanup pass skips them (they are attendance,
     not misses to delete).
     """
-    sp = os.path.join(history.ROOT, "logs", "gym_state.json")
+    sp = os.path.join(history.ROOT, "private", "logs", "gym_state.json")
     try:
         st = json.load(open(sp, encoding="utf-8"))
     except Exception:
@@ -498,7 +498,7 @@ def run_gym(fs, yn, now):
                 fs.delete_item(t["id"]); _touch()
             except Exception as e:
                 delete_errors.append(f"{t['id']}: {e}")
-    gym_state_path = os.path.join(history.ROOT, "logs", "gym_state.json")
+    gym_state_path = os.path.join(history.ROOT, "private", "logs", "gym_state.json")
     try:
         sick_until = json.load(open(gym_state_path, encoding="utf-8")).get("sick_until")
     except Exception:
@@ -581,7 +581,7 @@ def run_ynab(fs, yn, now):
         notify.alert(msg)
 
 def run_chore(fs, yn, now):
-    sp = os.path.join(history.ROOT, "logs", "chore_state.json")
+    sp = os.path.join(history.ROOT, "private", "logs", "chore_state.json")
     st = {"processed": [], "lastRunUtc": "1970-01-01T00:00:00Z"}
     try: st.update(json.load(open(sp, encoding="utf-8")))
     except Exception: pass
@@ -613,7 +613,7 @@ def run_chore(fs, yn, now):
     print(f"[chore] cycled {len(out['creates'])}")
 
 def run_catchup(fs, yn, now):
-    sp = os.path.join(history.ROOT, "logs", "catchup_state.json")
+    sp = os.path.join(history.ROOT, "private", "logs", "catchup_state.json")
     st = {"lastHandled": 0}
     try: st.update(json.load(open(sp, encoding="utf-8")))
     except Exception: pass
@@ -665,7 +665,7 @@ def run_social(fs, yn, now):
     # workflow the widget-display fix was meant to introduce; separating
     # "planned" from "tentative" for DISPLAY purposes never required
     # deleting the mechanism that turns a completed plan into a real task.
-    sp = os.path.join(history.ROOT, "logs", "social_state.json")
+    sp = os.path.join(history.ROOT, "private", "logs", "social_state.json")
     st = {"lastLock": "1970-01-01T00:00:00Z"}
     try: st.update(json.load(open(sp, encoding="utf-8")))
     except Exception: pass
@@ -721,7 +721,7 @@ def run_meal(fs, yn, now):
     # earlier version of this fix did exactly that) let a stray tap sit
     # unconsumed for days, then replay against a LATER week the moment `due`
     # flips true again, spuriously wiping that week's freshly-created tasks.
-    sp = os.path.join(history.ROOT, "logs", "meal_state.json")
+    sp = os.path.join(history.ROOT, "private", "logs", "meal_state.json")
     st = {"lastSkip": 0}
     try: st.update(json.load(open(sp, encoding="utf-8")))
     except Exception: pass
@@ -809,7 +809,7 @@ def run_briefing(fs, yn, now):
                        lambda version: notify.push_briefing(date, text, facts, version))
     except Exception as e:
         print(f"[briefing] fcm send error: {e}")
-    bp = os.path.join(history.ROOT, "logs", "briefing.json")
+    bp = os.path.join(history.ROOT, "private", "logs", "briefing.json")
     _save_json_atomic(bp, briefing)
     print("[briefing] sent")
 
@@ -845,7 +845,7 @@ def run_cashflow(fs, yn, now):
             "events": [{"label": e.get("label"), "days_until": e.get("days_until"),
                         "cost": e.get("cost"), "item_id": e.get("item_id"),
                         "item_type": e.get("item_type")} for e in events[:6]]}
-    bp = os.path.join(history.ROOT, "logs", "cashflow.json")
+    bp = os.path.join(history.ROOT, "private", "logs", "cashflow.json")
     os.makedirs(os.path.dirname(bp), exist_ok=True)
     _save_json_atomic(bp, proj)
     print(f"[cashflow] 4wk projected; dips={proj['dips_below_zero']}")
@@ -894,7 +894,7 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now):
     """Shared sync body — `cv` is either canvas.Canvas or
     canvas_browser.BrowserCanvas; both expose the same modules/assignments/
     page/announcements interface, so this logic doesn't care which."""
-    sp = os.path.join(history.ROOT, "logs", "canvas_state.json")
+    sp = os.path.join(history.ROOT, "private", "logs", "canvas_state.json")
     st = {"synced_modules": [], "task_titles": []}
     try:
         st.update(json.load(open(sp, encoding="utf-8")))
@@ -1074,7 +1074,7 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now):
     # sets `flood_ack` = today in canvas_state.json and re-runs canvas; the guard
     # bypasses for that day and creates normally — no replay logic needed.
     creates = result.get("creates", [])
-    pp = os.path.join(history.ROOT, "logs", "canvas_pending.json")
+    pp = os.path.join(history.ROOT, "private", "logs", "canvas_pending.json")
     if len(creates) > _CANVAS_FLOOD_MAX and st.get("flood_ack") != today.isoformat():
         _save_json_atomic(pp, {"at": now.isoformat(), "count": len(creates),
                                "report": result.get("report", ""),
@@ -1244,7 +1244,7 @@ RUNS_LOG_MAX = 2_000_000   # ~2MB before trimming to the newest 2000 runs
 
 def _append_run_log(rec):
     """Durable per-run audit trail: what each domain actually did every cycle."""
-    p = os.path.join(history.ROOT, "logs", "runs.jsonl")
+    p = os.path.join(history.ROOT, "private", "logs", "runs.jsonl")
     try:
         os.makedirs(os.path.dirname(p), exist_ok=True)
         with open(p, "a", encoding="utf-8") as f:
@@ -1255,6 +1255,42 @@ def _append_run_log(rec):
                 f.write("\n".join(lines[-2000:]) + "\n")
     except Exception:
         pass
+
+_GIT_TIMEOUT = 20   # seconds — a hung push must not hang the whole run
+
+def _git(args, cwd):
+    return subprocess.run(["git"] + args, cwd=cwd, capture_output=True,
+                           text=True, timeout=_GIT_TIMEOUT)
+
+def _sync_private_submodule(rec):
+    """Commit + push this run's state (private/logs/) so it's tracked and
+    backed up instead of living only on local disk. Best-effort: a git
+    failure (offline, auth, conflict) must never fail the run that just
+    completed successfully — it just means this run's state syncs on the
+    next run instead, since an uncommitted diff (or an already-committed but
+    unpushed commit) is picked up again next time this runs.
+    """
+    priv = os.path.join(history.ROOT, "private")
+    # .git here is a FILE (a "gitdir: ../.git/modules/private" pointer), not a
+    # directory, since `private` is a submodule -- os.path.isdir would always
+    # be False and silently skip every sync. exists() covers both shapes.
+    if not os.path.exists(os.path.join(priv, ".git")):
+        return   # submodule not checked out (e.g. a fresh clone) -- skip quietly
+    try:
+        _git(["add", "-A", "--", "logs"], cwd=priv)
+        staged = _git(["diff", "--cached", "--quiet", "--", "logs"], cwd=priv)
+        if staged.returncode != 0:   # non-zero == there IS a staged diff
+            names = ",".join(rec.get("ran", [])) or "tick"
+            msg = f"state sync: {rec['ts']} ({names})"
+            commit = _git(["commit", "-q", "-m", msg], cwd=priv)
+            if commit.returncode != 0:
+                print(f"[sync] private commit failed: {commit.stderr.strip()[:200]}")
+        push = _git(["push", "-q"], cwd=priv)
+        if push.returncode != 0:
+            print(f"[sync] private push failed (will retry next run): "
+                  f"{push.stderr.strip()[:200]}")
+    except Exception as e:
+        print(f"[sync] private submodule sync error: {e}")
 
 def main():
     try:
@@ -1273,7 +1309,7 @@ def _run():
     now = datetime.datetime.now()
     _DIRTY[0] = False
     errors = {}
-    hp = os.path.join(history.ROOT, "logs", "last_run.json")
+    hp = os.path.join(history.ROOT, "private", "logs", "last_run.json")
 
     # resume-gap detection: if we'd been down a while, say so on the way back up
     try:
@@ -1301,7 +1337,7 @@ def _run():
     args = sys.argv[1:] or ["tick"]
 
     try:
-        enabled = json.load(open(os.path.join(history.ROOT, "logs", "domains.json"), encoding="utf-8"))
+        enabled = json.load(open(os.path.join(history.ROOT, "private", "logs", "domains.json"), encoding="utf-8"))
     except Exception:
         enabled = {}
     names, unknown = _selected_domains(args, enabled)
@@ -1347,6 +1383,7 @@ def _run():
     os.makedirs(os.path.dirname(hp), exist_ok=True)
     json.dump(rec, open(hp, "w", encoding="utf-8"))
     _append_run_log(rec)
+    _sync_private_submodule(rec)
 
 if __name__ == "__main__":
     main()

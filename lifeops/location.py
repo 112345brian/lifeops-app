@@ -18,7 +18,10 @@ def _location_file():
     # monkeypatched per-test (see fcm.py's _token_file for the same
     # pattern); a constant would freeze in the real ROOT at import time and
     # tests would silently share one real location file on disk.
-    return os.path.join(history.ROOT, "logs", "phone_location.json")
+    # Lives in the private submodule (tracked/backed up), not gitignored
+    # top-level logs/ -- this is GPS history, the most sensitive state file
+    # in the app, so it belongs wherever the rest of durable state lives.
+    return os.path.join(history.private_logs_dir(), "phone_location.json")
 
 
 def set_location(lat, lon):

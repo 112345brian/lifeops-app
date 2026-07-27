@@ -67,14 +67,14 @@ def test_canvas_failed_creation_still_marks_module_synced(tmp_path, monkeypatch)
     This test documents current upstream behavior; it isn't asserting that
     behavior is correct. Worth a follow-up fix upstream."""
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
-    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "logs" / "history.jsonl"))
+    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "private" / "logs" / "history.jsonl"))
     monkeypatch.setattr(config, "LIST_COURSE", "course-list")
     monkeypatch.setattr(config, "SH_COURSE", "course-hours")
 
     runner._canvas_sync(_Canvas(), lambda value: value, canvas_engine, _LLM(),
                         _FlowSavvy(), datetime.datetime(2026, 7, 9, 9, 0))
 
-    state = json.loads((tmp_path / "logs" / "canvas_state.json").read_text(encoding="utf-8"))
+    state = json.loads((tmp_path / "private" / "logs" / "canvas_state.json").read_text(encoding="utf-8"))
     assert state["synced_modules"] == [1]
 
 
@@ -98,11 +98,11 @@ def test_ingest_handled_msg_ids_keeps_most_recent_not_arbitrary(tmp_path, monkey
     order, so truncating `list(a_set)[-1000:]` doesn't reliably keep the
     most-recently-handled ids (see runner.py's comment on this)."""
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
-    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "logs" / "history.jsonl"))
-    (tmp_path / "logs").mkdir(exist_ok=True)
+    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "private" / "logs" / "history.jsonl"))
+    (tmp_path / "private" / "logs").mkdir(parents=True, exist_ok=True)
 
     old_ids = [f"old-{i}" for i in range(1000)]
-    state_path = tmp_path / "logs" / "ingest_state.json"
+    state_path = tmp_path / "private" / "logs" / "ingest_state.json"
     state_path.write_text(json.dumps({"ntfy_ts": 0, "logged_ids": [],
                                       "handled_ntfy_msg_ids": old_ids}), encoding="utf-8")
 
@@ -121,8 +121,8 @@ def test_ingest_handled_msg_ids_keeps_most_recent_not_arbitrary(tmp_path, monkey
 
 def test_ingest_token_signal_registers_fcm_token(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
-    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "logs" / "history.jsonl"))
-    (tmp_path / "logs").mkdir(exist_ok=True)
+    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "private" / "logs" / "history.jsonl"))
+    (tmp_path / "private" / "logs").mkdir(parents=True, exist_ok=True)
 
     token = "d" * 20 + ":APA91b" + "x" * 100
     fake_message = {"id": "msg-1", "time": 100, "message": f"token:{token}"}
@@ -135,8 +135,8 @@ def test_ingest_token_signal_registers_fcm_token(tmp_path, monkeypatch):
 
 def test_ingest_token_signal_with_malformed_token_does_not_raise(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
-    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "logs" / "history.jsonl"))
-    (tmp_path / "logs").mkdir(exist_ok=True)
+    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "private" / "logs" / "history.jsonl"))
+    (tmp_path / "private" / "logs").mkdir(parents=True, exist_ok=True)
 
     fake_message = {"id": "msg-1", "time": 100, "message": "token:too-short"}
     monkeypatch.setattr(runner.ntfy, "poll", lambda since: [fake_message])
@@ -156,8 +156,8 @@ class _NextTasksFakeFlowSavvy:
 
 def test_push_next_tasks_skipped_on_signal_tier(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
-    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "logs" / "history.jsonl"))
-    (tmp_path / "logs").mkdir(exist_ok=True)
+    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "private" / "logs" / "history.jsonl"))
+    (tmp_path / "private" / "logs").mkdir(parents=True, exist_ok=True)
     calls = []
     monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, gym_ring, version: calls.append((tasks, events, version)) or True)
 
@@ -168,8 +168,8 @@ def test_push_next_tasks_skipped_on_signal_tier(tmp_path, monkeypatch):
 
 def test_push_next_tasks_fires_on_tick_tier(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
-    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "logs" / "history.jsonl"))
-    (tmp_path / "logs").mkdir(exist_ok=True)
+    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "private" / "logs" / "history.jsonl"))
+    (tmp_path / "private" / "logs").mkdir(parents=True, exist_ok=True)
     calls = []
     monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, gym_ring, version: calls.append((tasks, events, version)) or True)
 
@@ -186,8 +186,8 @@ def test_push_next_tasks_retries_unacked_push_even_if_unchanged(tmp_path, monkey
     identical content -- "unacked" is exactly the signal the last attempt
     may not have landed (see _push_with_ack)."""
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
-    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "logs" / "history.jsonl"))
-    (tmp_path / "logs").mkdir(exist_ok=True)
+    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "private" / "logs" / "history.jsonl"))
+    (tmp_path / "private" / "logs").mkdir(parents=True, exist_ok=True)
     calls = []
     monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, gym_ring, version: calls.append((tasks, events, version)) or True)
     fs = _NextTasksFakeFlowSavvy()
@@ -201,8 +201,8 @@ def test_push_next_tasks_retries_unacked_push_even_if_unchanged(tmp_path, monkey
 
 def test_push_next_tasks_skips_send_when_unchanged_and_acked(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
-    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "logs" / "history.jsonl"))
-    (tmp_path / "logs").mkdir(exist_ok=True)
+    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "private" / "logs" / "history.jsonl"))
+    (tmp_path / "private" / "logs").mkdir(parents=True, exist_ok=True)
     calls = []
     monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, gym_ring, version: calls.append((tasks, events, version)) or True)
     fs = _NextTasksFakeFlowSavvy()
@@ -217,8 +217,8 @@ def test_push_next_tasks_skips_send_when_unchanged_and_acked(tmp_path, monkeypat
 
 def test_push_next_tasks_sends_again_when_changed(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
-    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "logs" / "history.jsonl"))
-    (tmp_path / "logs").mkdir(exist_ok=True)
+    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "private" / "logs" / "history.jsonl"))
+    (tmp_path / "private" / "logs").mkdir(parents=True, exist_ok=True)
     calls = []
     monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, gym_ring, version: calls.append((tasks, events, version)) or True)
     now = datetime.datetime(2026, 7, 13, 9, 0)
@@ -239,8 +239,8 @@ def test_push_next_tasks_sends_again_when_changed(tmp_path, monkeypatch):
 
 def test_ingest_ack_signal_marks_push_acked(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
-    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "logs" / "history.jsonl"))
-    (tmp_path / "logs").mkdir(exist_ok=True)
+    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "private" / "logs" / "history.jsonl"))
+    (tmp_path / "private" / "logs").mkdir(parents=True, exist_ok=True)
     calls = []
     monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, gym_ring, version: calls.append(version) or True)
 
@@ -251,7 +251,7 @@ def test_ingest_ack_signal_marks_push_acked(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.ntfy, "poll", lambda since: [fake_message])
     runner.ingest(_CompleteFakeFlowSavvy(), datetime.datetime(2026, 7, 13, 9, 5))
 
-    state = json.loads((tmp_path / "logs" / "push_ack_next_tasks.json").read_text(encoding="utf-8"))
+    state = json.loads((tmp_path / "private" / "logs" / "push_ack_next_tasks.json").read_text(encoding="utf-8"))
     assert state["acked"] is True
     assert state["version"] == version
 
@@ -261,7 +261,7 @@ def test_mark_push_acked_ignores_superseded_version(tmp_path, monkeypatch):
     version as acked -- e.g. the phone was slow to respond and the content
     changed again before the ack arrived."""
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
-    (tmp_path / "logs").mkdir(exist_ok=True)
+    (tmp_path / "private" / "logs").mkdir(parents=True, exist_ok=True)
 
     runner._save_json_atomic(runner._push_ack_state_file("next_tasks"),
                              {"snapshot": {"tasks": []}, "version": "current-version", "acked": False})
@@ -275,8 +275,8 @@ def test_mark_push_acked_ignores_superseded_version(tmp_path, monkeypatch):
 
 def test_ingest_malformed_ack_signal_does_not_raise(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
-    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "logs" / "history.jsonl"))
-    (tmp_path / "logs").mkdir(exist_ok=True)
+    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "private" / "logs" / "history.jsonl"))
+    (tmp_path / "private" / "logs").mkdir(parents=True, exist_ok=True)
 
     fake_message = {"id": "msg-1", "time": 100, "message": "ack:not-enough-parts"}
     monkeypatch.setattr(runner.ntfy, "poll", lambda since: [fake_message])
@@ -291,7 +291,7 @@ def test_push_with_ack_writes_no_state_when_nothing_was_sent(tmp_path, monkeypat
     send for this same unchanged content once a device finally registers a
     token (see test_push_with_ack_sends_after_token_registers_for_unchanged_content)."""
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
-    (tmp_path / "logs").mkdir(exist_ok=True)
+    (tmp_path / "private" / "logs").mkdir(parents=True, exist_ok=True)
 
     runner._push_with_ack("next_tasks", {"tasks": []}, lambda version: False)
 
@@ -300,7 +300,7 @@ def test_push_with_ack_writes_no_state_when_nothing_was_sent(tmp_path, monkeypat
 
 def test_push_with_ack_retries_cheaply_every_call_when_nothing_was_sent(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
-    (tmp_path / "logs").mkdir(exist_ok=True)
+    (tmp_path / "private" / "logs").mkdir(parents=True, exist_ok=True)
     calls = []
 
     def push_fn(version):
@@ -320,7 +320,7 @@ def test_push_with_ack_sends_after_token_registers_for_unchanged_content(tmp_pat
     fcm.register_token; the SAME (unchanged) content must still be sent for
     real on the next call, not skipped as already-acked."""
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
-    (tmp_path / "logs").mkdir(exist_ok=True)
+    (tmp_path / "private" / "logs").mkdir(parents=True, exist_ok=True)
     snapshot = {"tasks": [{"id": "t1"}]}
     calls = []
 
@@ -342,7 +342,7 @@ def test_push_with_ack_sends_after_token_registers_for_unchanged_content(tmp_pat
 
 def test_push_with_ack_retries_when_send_was_attempted_but_unacked(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
-    (tmp_path / "logs").mkdir(exist_ok=True)
+    (tmp_path / "private" / "logs").mkdir(parents=True, exist_ok=True)
     calls = []
 
     def push_fn(version):
@@ -360,7 +360,7 @@ def test_mark_push_acked_ignores_non_dict_state(tmp_path, monkeypatch):
     runs inside ingest()'s per-message loop, where an uncaught exception
     would also drop that poll batch's other already-processed signals."""
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
-    (tmp_path / "logs").mkdir(exist_ok=True)
+    (tmp_path / "private" / "logs").mkdir(parents=True, exist_ok=True)
     runner._save_json_atomic(runner._push_ack_state_file("next_tasks"), ["not", "a", "dict"])
 
     runner._mark_push_acked("next_tasks", "some-version")  # must not raise

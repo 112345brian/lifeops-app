@@ -84,7 +84,7 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "_alert_once", lambda *a, **k: None)
     monkeypatch.setattr(runner, "_touch", lambda *a, **k: None)
     monkeypatch.setattr(history, "append", lambda *a, **k: None)
-    sp = os.path.join(str(tmp_path), "logs", "canvas_state.json")
+    sp = os.path.join(str(tmp_path), "private", "logs", "canvas_state.json")
     os.makedirs(os.path.dirname(sp), exist_ok=True)
     return sp
 
