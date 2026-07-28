@@ -104,10 +104,41 @@ def _send(msg_type, payload_dict, version):
     messaging.send(message, app=_firebase_app())
     return True
 
+# These are pure inputs to attention.compute() (see briefing_service.build)
+# with zero client-side readers -- BriefingState.fromJson only ever reads a
+# fixed, named subset of `facts` (confirmed against
+# android/.../data/BriefingState.kt), and none of these three keys are in it.
+# Sending them anyway is what pushed real briefings over Android's 4KB FCM
+# data-message cap (confirmed 2026-07-2x: "Message is too large" send
+# failures on days with a longer overdue-coursework list).
+_BRIEFING_FACTS_DROP = ("overdue", "coursework_at_risk", "due_today")
+
+
+def _trim_facts_for_push(facts):
+    """Shrinks `facts` for the wire without changing anything the widget
+    renders. Drops _BRIEFING_FACTS_DROP entirely (see its comment), and
+    trims attention["reasons"] down to domain+severity per reason --
+    AttentionReason (BriefingState.kt) deliberately never carries
+    title/recommended_action/due, which otherwise just duplicate the
+    (already dropped) `overdue` title strings. The full, untrimmed facts
+    dict still reaches the panel/`/api/briefing`/briefing.json via other
+    call sites -- this trim is push-only."""
+    trimmed = {k: v for k, v in facts.items() if k not in _BRIEFING_FACTS_DROP}
+    attention = trimmed.get("attention")
+    if isinstance(attention, dict) and isinstance(attention.get("reasons"), list):
+        trimmed["attention"] = {**attention, "reasons": [
+            {"domain": r.get("domain"), "severity": r.get("severity")}
+            for r in attention["reasons"]
+        ]}
+    return trimmed
+
+
 def send_briefing(date, text, facts, version):
     """Pushes the daily briefing text + stats. See _send's docstring for the
-    delivery-reliability reasoning and return value."""
-    return _send("briefing", {"date": date, "text": text, "facts": facts}, version)
+    delivery-reliability reasoning and return value, and
+    _trim_facts_for_push's docstring for why `facts` is trimmed here but
+    nowhere else."""
+    return _send("briefing", {"date": date, "text": text, "facts": _trim_facts_for_push(facts)}, version)
 
 def send_next_tasks(tasks, events, gym_ring, version):
     """Pushes a fresh next-tasks + today's-events snapshot -- the

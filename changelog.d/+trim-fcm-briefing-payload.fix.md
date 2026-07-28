@@ -1,0 +1,1 @@
+Daily briefing push notifications no longer silently fail on days with a longer overdue-coursework or attention-reasons list — the FCM payload now drops fields the widget never reads (`overdue`, `coursework_at_risk`, `due_today`) and trims attention reasons to just domain/severity, keeping the push under Android's 4KB data-message limit.

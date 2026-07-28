@@ -73,6 +73,42 @@ def test_send_briefing_and_next_tasks_use_distinct_message_types(tmp_path, monke
     ]
 
 
+def test_send_briefing_drops_client_unused_facts_and_trims_reasons(tmp_path, monkeypatch):
+    """overdue/coursework_at_risk/due_today have zero readers in
+    BriefingState.fromJson and attention.reasons only needs domain+severity
+    client-side (see AttentionReason's docstring) -- these were pushing real
+    briefings over Android's 4KB FCM data-message cap. Confirms the trim
+    drops exactly those keys and reduces reasons to domain+severity, while
+    leaving every other fact (including ones fromJson DOES read) untouched."""
+    monkeypatch.setattr(history, "ROOT", str(tmp_path))
+    calls = []
+    monkeypatch.setattr(fcm, "_send",
+                        lambda msg_type, payload, version: calls.append((msg_type, payload, version)))
+
+    facts = {
+        "gym_last_7d": 2,
+        "overdue": [{"title": "Long overdue reading", "due_in_h": -100, "due": "2026-07-01T00:00:00"}],
+        "coursework_at_risk": ["Some paper"],
+        "due_today": ["Some task"],
+        "attention": {
+            "state": "risk", "symbol": "◆", "label": "RISK", "headline": "Do it now.",
+            "reasons": [{"domain": "coursework", "severity": "risk",
+                         "title": "Overdue: Long overdue reading",
+                         "recommended_action": "Do it now.", "due": "2026-07-01T00:00:00"}],
+        },
+    }
+
+    fcm.send_briefing("2026-07-13", "text", facts, "v1")
+
+    assert calls == [("briefing", {"date": "2026-07-13", "text": "text", "facts": {
+        "gym_last_7d": 2,
+        "attention": {
+            "state": "risk", "symbol": "◆", "label": "RISK", "headline": "Do it now.",
+            "reasons": [{"domain": "coursework", "severity": "risk"}],
+        },
+    }}, "v1")]
+
+
 def test_send_embeds_version_in_message_data_for_ack_round_trip(tmp_path, monkeypatch):
     """The version travels in the actual FCM message data, not just as a
     Python-side parameter -- this is what the client echoes back as

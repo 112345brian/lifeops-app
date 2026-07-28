@@ -83,10 +83,30 @@ private val SMALL_SIZE = DpSize(130.dp, 100.dp)
 private val MEDIUM_SIZE = DpSize(250.dp, 150.dp)
 private val LARGE_SIZE = DpSize(250.dp, 250.dp)
 
-internal fun bucketFor(size: DpSize): WidgetSizeBucket = when {
-    size.height < MEDIUM_SIZE.height -> WidgetSizeBucket.SMALL
-    size.height < LARGE_SIZE.height -> WidgetSizeBucket.MEDIUM
-    else -> WidgetSizeBucket.LARGE
+// Height AND width, not height alone -- a launcher that grants a narrow but
+// tall footprint (confirmed on Smart Launcher, which computes its own cell
+// pitch independent of the *_widget_info.xml declarations, same root cause
+// android/CLAUDE.md already documents for Samsung's launcher) used to read
+// as MEDIUM/LARGE purely because it was tall enough, so the wider/richer
+// sections (paragraph/events/up-next) rendered into a column with no
+// horizontal room, and TileRow's non-wrapping fixed-width Row silently
+// clipped whatever tile didn't fit (reported: "money missing, weather cut
+// off"). SMALL_SIZE.width/MEDIUM_SIZE.width were already declared for
+// exactly this but never read -- taking the more-constrained of the two
+// axes fixes that without changing behavior for any launcher that DOES
+// grant width/height in the aspect ratio this was originally tuned against.
+internal fun bucketFor(size: DpSize): WidgetSizeBucket {
+    val heightBucket = when {
+        size.height < MEDIUM_SIZE.height -> WidgetSizeBucket.SMALL
+        size.height < LARGE_SIZE.height -> WidgetSizeBucket.MEDIUM
+        else -> WidgetSizeBucket.LARGE
+    }
+    val widthBucket = when {
+        size.width < SMALL_SIZE.width -> WidgetSizeBucket.SMALL
+        size.width < MEDIUM_SIZE.width -> WidgetSizeBucket.MEDIUM
+        else -> WidgetSizeBucket.LARGE
+    }
+    return minOf(heightBucket, widthBucket)
 }
 
 /** Computes the actual type/icon scale from the placed widget footprint.
@@ -1551,7 +1571,7 @@ private fun ComboGridContent(
                     add(ComboCell(section, it))
                 }
                 WidgetSection.WEATHER -> if (temperatureF != null) add(ComboCell(section,
-                    appPackage = config.weatherAppPackage))
+                    appPackage = config.weatherAppPackage, compact = compactCells))
                 WidgetSection.NOTABLE_EVENTS -> if (state.notableEvents.isNotEmpty()) add(ComboCell(section))
                 else -> Unit
             }
@@ -1736,7 +1756,7 @@ private fun ComboRenderCell(
         }
         WidgetSection.WEATHER -> temperatureF?.let {
             WeatherCard(it, highF, lowF, condition, scale, modifier = modifier, cornerRadiusDp = 0.dp,
-                appPackage = cell.appPackage)
+                appPackage = cell.appPackage, compact = cell.compact)
         }
         WidgetSection.NOTABLE_EVENTS -> ComboEventsTile(state.notableEvents, scale, modifier = modifier)
         else -> cell.stat?.let { stat ->
@@ -2072,9 +2092,16 @@ private fun WeatherCard(
     // doc for why an internal cell boundary must stay flat, not rounded.
     cornerRadiusDp: Dp = 12.dp,
     appPackage: String = "",
+    // Defaults to bucketFor(LocalSize.current) -- the whole placed widget's
+    // size -- which is correct for the standalone WEATHER row/preset. Inside
+    // ComboGridContent, WEATHER is one cell sharing a row/column with
+    // siblings, so its real available room is much smaller than the whole
+    // widget; ComboGridContent passes its own compactCells verdict here
+    // explicitly instead of letting this default fire (see ComboCell.compact
+    // and the WEATHER branch of ComboGridContent's cell-building loop).
+    compact: Boolean = bucketFor(LocalSize.current) == WidgetSizeBucket.SMALL,
 ) {
     val temp = temperatureF ?: return
-    val compact = LocalSize.current.height < MEDIUM_SIZE.height
     val tempSp = if (compact) COMPACT_WEATHER_TEMP_SP else BASE_WEATHER_TEMP_SP
     val unitSp = if (compact) COMPACT_WEATHER_UNIT_SP else BASE_WEATHER_UNIT_SP
     val hiloSp = if (compact) COMPACT_WEATHER_HILO_SP else BASE_WEATHER_HILO_SP
@@ -2266,7 +2293,7 @@ private fun UpNextSection(tasks: List<NextTask>, maxTasks: Int) {
  * should be dynamic"). */
 @Composable
 private fun NotableEventsSection(events: List<NotableEvent>, maxShown: Int, scale: Float) {
-    val compact = LocalSize.current.height < MEDIUM_SIZE.height
+    val compact = bucketFor(LocalSize.current) == WidgetSizeBucket.SMALL
     if (events.isEmpty()) {
         if (compact) {
             SoloStatCard(label = "EVENTS", value = "None", status = "CLEAR",
