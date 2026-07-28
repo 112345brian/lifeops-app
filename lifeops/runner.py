@@ -1260,7 +1260,8 @@ _GIT_TIMEOUT = 20   # seconds — a hung push must not hang the whole run
 
 def _git(args, cwd):
     return subprocess.run(["git"] + args, cwd=cwd, capture_output=True,
-                           text=True, timeout=_GIT_TIMEOUT)
+                           text=True, timeout=_GIT_TIMEOUT,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
 def _sync_private_submodule(rec):
     """Commit + push this run's state (private/logs/) so it's tracked and

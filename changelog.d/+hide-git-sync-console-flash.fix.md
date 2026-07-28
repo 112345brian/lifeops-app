@@ -1,0 +1,1 @@
+The private-log git sync (add/diff/commit/push, run every tick/signal) no longer flashes a console window — the scheduled tasks run under `pythonw.exe`, but the `git` subprocess wasn't suppressing its own window like every other spawn site already does.
