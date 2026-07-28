@@ -6,6 +6,18 @@ change matter more here than semver strictness.
 
 <!-- towncrier release notes start -->
 
+## [1.21.0] — 2026-07-28
+
+### Added
+
+- All runtime state (gym/meal/canvas/social state, action and briefing history, run logs) now lives in a single SQLite database (`private/logs/state.db`) instead of ~25 separate JSON/JSONL files, with `history.py`'s adherence queries now indexed instead of full-file scans. Backup moved from auto-committing to the private git submodule to a daily snapshot copied out to a local folder (OneDrive by default), since a binary database doesn't diff cleanly in git the way the old JSON files did.
+
+### Fixed
+
+- Daily briefing push notifications no longer silently fail on days with a longer overdue-coursework or attention-reasons list — the FCM payload now drops fields the widget never reads (`overdue`, `coursework_at_risk`, `due_today`) and trims attention reasons to just domain/severity, keeping the push under Android's 4KB data-message limit.
+- Fixed briefing/combo widgets clipping or dropping content under launchers (e.g. Smart Launcher) that grant a narrow-but-tall footprint — size-tier decisions now account for width as well as height, and the combo grid's weather tile now sizes itself off its actual shared-cell footprint instead of the whole widget's placed size.
+
+
 ## [1.20.0] — 2026-07-17
 
 ### Added

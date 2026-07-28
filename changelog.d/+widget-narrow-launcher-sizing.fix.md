@@ -1,1 +1,0 @@
-Fixed briefing/combo widgets clipping or dropping content under launchers (e.g. Smart Launcher) that grant a narrow-but-tall footprint — size-tier decisions now account for width as well as height, and the combo grid's weather tile now sizes itself off its actual shared-cell footprint instead of the whole widget's placed size.
