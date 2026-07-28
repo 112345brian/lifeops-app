@@ -6,19 +6,10 @@ stale; otherwise the static WEATHER_LAT/WEATHER_LON (.env). Both unset =
 the feature no-ops everywhere it's read (current() returns None), same
 "blank = disabled" convention as PANEL_URL/WEB_TOKEN in config.py.
 """
-import json, os
 import requests
-from . import config, history, location
+from . import config, db, location
 
 _TIMEOUT = 10
-
-
-def _grid_cache_file():
-    # A function, not a module-level constant -- history.ROOT is
-    # monkeypatched per-test (see fcm.py's _token_file for the same
-    # pattern); a constant would freeze in the real ROOT at import time and
-    # tests would silently share one real cache file on disk.
-    return os.path.join(history.ROOT, "logs", "weather_grid_cache.json")
 
 
 def _headers():
@@ -35,16 +26,11 @@ def _get(url):
 
 
 def _load_grid_cache():
-    try:
-        return json.load(open(_grid_cache_file(), encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+    return db.local_get("weather_grid_cache", default={})
 
 
 def _save_grid_cache(data):
-    path = _grid_cache_file()
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    json.dump(data, open(path, "w", encoding="utf-8"))
+    db.local_set("weather_grid_cache", data)
 
 
 def _resolve_location():

@@ -109,6 +109,17 @@ WEB_TOKEN  = os.environ.get("WEB_TOKEN", "")
 # don't include a tap-through link.
 PANEL_URL  = os.environ.get("PANEL_URL", "")
 
+# Where runner.py's daily backup step copies private/logs/state.db snapshots
+# (see runner._backup_state_db) -- out-of-git, since a binary SQLite file
+# doesn't diff/compact in git the way the old JSONL appends did. Defaults to
+# a OneDrive-synced folder when one exists on this machine so backups leave
+# the device without any extra setup; override in .env to point elsewhere.
+_DEFAULT_BACKUP_DIR = os.path.join(os.path.expanduser("~"), "OneDrive", "LifeOps-Backups")
+if not os.path.isdir(os.path.join(os.path.expanduser("~"), "OneDrive")):
+    _DEFAULT_BACKUP_DIR = os.path.join(str(ROOT), "private", "backups")
+SQLITE_BACKUP_DIR = os.environ.get("SQLITE_BACKUP_DIR", _DEFAULT_BACKUP_DIR)
+SQLITE_BACKUP_KEEP = _env_int("SQLITE_BACKUP_KEEP", 30)
+
 # Canvas LMS — CANVAS_TOKEN (API token) preferred. If unset (JHU disables
 # self-service tokens), lifeops.canvas_browser drives an authenticated browser
 # session instead (see scripts/canvas_login.py for the one-time setup).

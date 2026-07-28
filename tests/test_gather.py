@@ -92,7 +92,6 @@ def test_set_cost_override_formats_float_without_trailing_zero():
 
 def test_sleep_minutes_last_night_returns_none_without_watch_data(tmp_path, monkeypatch):
     monkeypatch.setattr(history, "ROOT", str(tmp_path))
-    monkeypatch.setattr(history, "HIST", str(tmp_path / "logs" / "history.jsonl"))
     now = datetime.datetime(2026, 7, 13, 9, 0)
 
     assert gather.sleep_minutes_last_night(now) is None
@@ -100,7 +99,6 @@ def test_sleep_minutes_last_night_returns_none_without_watch_data(tmp_path, monk
 
 def test_sleep_minutes_last_night_returns_latest_watch_reading_in_window(tmp_path, monkeypatch):
     monkeypatch.setattr(history, "ROOT", str(tmp_path))
-    monkeypatch.setattr(history, "HIST", str(tmp_path / "logs" / "history.jsonl"))
     now = datetime.datetime(2026, 7, 13, 9, 0)
     history.append("sleep_dur", ts="2026-07-12T23:00:00", meta={"minutes": 300})
     history.append("sleep_dur", ts="2026-07-13T06:00:00", meta={"minutes": 402})
@@ -110,7 +108,6 @@ def test_sleep_minutes_last_night_returns_latest_watch_reading_in_window(tmp_pat
 
 def test_sleep_minutes_last_night_ignores_readings_outside_the_18h_window(tmp_path, monkeypatch):
     monkeypatch.setattr(history, "ROOT", str(tmp_path))
-    monkeypatch.setattr(history, "HIST", str(tmp_path / "logs" / "history.jsonl"))
     now = datetime.datetime(2026, 7, 13, 9, 0)
     history.append("sleep_dur", ts="2026-07-11T06:00:00", meta={"minutes": 402})
 
@@ -129,7 +126,6 @@ class _FakeFlowSavvy:
 
 def test_gym_ring_now_reflects_trailing_history_and_todays_schedule(tmp_path, monkeypatch):
     monkeypatch.setattr(history, "ROOT", str(tmp_path))
-    monkeypatch.setattr(history, "HIST", str(tmp_path / "logs" / "history.jsonl"))
     now = datetime.datetime(2026, 7, 12, 9, 0)
     for day in ["2026-07-07", "2026-07-09", "2026-07-10"]:
         history.append("gym", ts=f"{day}T18:00:00")
@@ -144,7 +140,6 @@ def test_gym_ring_now_reflects_trailing_history_and_todays_schedule(tmp_path, mo
 
 def test_gym_ring_now_green_after_completing_todays_session(tmp_path, monkeypatch):
     monkeypatch.setattr(history, "ROOT", str(tmp_path))
-    monkeypatch.setattr(history, "HIST", str(tmp_path / "logs" / "history.jsonl"))
     now = datetime.datetime(2026, 7, 12, 19, 0)
     for day in ["2026-07-07", "2026-07-09", "2026-07-10", "2026-07-12"]:
         history.append("gym", ts=f"{day}T18:00:00")
@@ -157,7 +152,6 @@ def test_gym_ring_now_green_after_completing_todays_session(tmp_path, monkeypatc
 
 def test_gym_ring_now_red_after_a_week_with_no_sessions(tmp_path, monkeypatch):
     monkeypatch.setattr(history, "ROOT", str(tmp_path))
-    monkeypatch.setattr(history, "HIST", str(tmp_path / "logs" / "history.jsonl"))
     now = datetime.datetime(2026, 7, 12, 9, 0)
 
     ring = gather.gym_ring_now(_FakeFlowSavvy(gym_task_today=False), now)

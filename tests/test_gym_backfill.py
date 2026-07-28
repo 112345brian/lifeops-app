@@ -7,10 +7,10 @@ items are tracked in gym_state.json and pruned after ~2 weeks. The whole point
 is that this runs BEFORE run_gym's cleanup, so a backfill is never deleted as a
 "miss."
 """
-import datetime, json, os
+import datetime, os
 import pytest
 
-from lifeops import runner, history
+from lifeops import runner, history, state_store
 
 
 NOW = datetime.datetime(2026, 7, 8, 12, 0, 0)   # Wed noon
@@ -54,8 +54,7 @@ def _task(iid, title, start, end=None, notes=""):
 
 
 def _state(tmp_path):
-    p = os.path.join(str(tmp_path), "private", "logs", "gym_state.json")
-    return json.load(open(p, encoding="utf-8")) if os.path.exists(p) else {}
+    return state_store.load_json(state_store.logs_path("gym_state.json"), default={})
 
 
 def test_past_unmarked_gym_task_is_logged_and_marked(sandbox):
@@ -103,8 +102,8 @@ def test_future_gym_with_keyword_is_logged(sandbox):
 
 def test_already_logged_item_is_not_relogged(sandbox):
     tmp, logged = sandbox
-    p = os.path.join(str(tmp), "private", "logs", "gym_state.json")
-    json.dump({"logged_backfills": {"g1": TODAY}}, open(p, "w"))
+    state_store.save_json_atomic(state_store.logs_path("gym_state.json"),
+                                 {"logged_backfills": {"g1": TODAY}})
     fs = _FakeFS()
     task = _task("g1", "✅ Gym (logged)", "2026-07-05T10:00:00", "2026-07-05T11:00:00")
     handled = runner._gym_backfill(fs, NOW, [task])
@@ -129,8 +128,8 @@ def test_old_logged_backfill_is_pruned_after_ttl(sandbox):
     tmp, logged = sandbox
     old = (NOW.date() - datetime.timedelta(days=15)).isoformat()
     recent = (NOW.date() - datetime.timedelta(days=3)).isoformat()
-    p = os.path.join(str(tmp), "private", "logs", "gym_state.json")
-    json.dump({"logged_backfills": {"old1": old, "keep1": recent}}, open(p, "w"))
+    state_store.save_json_atomic(state_store.logs_path("gym_state.json"),
+                                 {"logged_backfills": {"old1": old, "keep1": recent}})
     fs = _FakeFS()
     runner._gym_backfill(fs, NOW, [])
     assert fs.deleted == ["old1"]                       # aged out → deleted

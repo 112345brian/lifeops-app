@@ -1,21 +1,22 @@
 """Audit log of agent-caused changes — the "what did LifeOps do?" feed, plus
 enough info to undo the reversible ones.
 
-One JSON object per line in private/logs/actions.jsonl:
-  {"ts","domain","op","title","item_id","undoable","meta"?}
+One row per mutation in the `actions_log` bucket of state_store's log_lines
+table: {"ts","domain","op","title","item_id","undoable","meta"?}, serialized
+as a JSON line same as before (see state_store.append_line/recent_lines).
 
 This is distinct from history.jsonl (durable *completions* — when you did things)
-and runs.jsonl (per-run summaries). actions.jsonl is "mutations LifeOps made to
-your calendar," so a surprising task appearing/vanishing is a grep, and the
-control panel can offer a one-tap undo. Undone item ids are tracked in
-private/logs/actions_undone.json so the feed greys them out and refuses a double-undo.
+and runs.jsonl (per-run summaries). The actions log is "mutations LifeOps made to
+your calendar," so a surprising task appearing/vanishing is a grep away, and the
+control panel can offer a one-tap undo. Undone item ids are tracked in the
+actions_undone kv_state key so the feed greys them out and refuses a double-undo.
 """
-import os, json, datetime
-from . import history
+import json, datetime
+from . import state_store
 
 
 def _path(name):
-    return os.path.join(history.private_logs_dir(), name)
+    return state_store.logs_path(name)
 
 
 def log(domain, op, title, item_id=None, undoable=False, meta=None):
@@ -27,10 +28,7 @@ def log(domain, op, title, item_id=None, undoable=False, meta=None):
     if meta:
         rec["meta"] = meta
     try:
-        p = _path("actions.jsonl")
-        os.makedirs(os.path.dirname(p), exist_ok=True)
-        with open(p, "a", encoding="utf-8") as f:
-            f.write(json.dumps(rec) + "\n")
+        state_store.append_line(_path("actions.jsonl"), json.dumps(rec))
     except Exception:
         pass
     return rec
@@ -38,16 +36,11 @@ def log(domain, op, title, item_id=None, undoable=False, meta=None):
 
 def recent(n=20):
     """Last n actions, newest first, each tagged with an `undone` flag."""
-    try:
-        with open(_path("actions.jsonl"), encoding="utf-8") as f:
-            lines = [l for l in f if l.strip()]
-    except FileNotFoundError:
-        return []
     undone = _undone_ids()
     out = []
-    for l in reversed(lines[-n:]):
+    for line in state_store.recent_lines(_path("actions.jsonl"), n):
         try:
-            r = json.loads(l)
+            r = json.loads(line)
         except Exception:
             continue
         r["undone"] = bool(r.get("item_id")) and r["item_id"] in undone
@@ -56,20 +49,12 @@ def recent(n=20):
 
 
 def _undone_ids():
-    try:
-        return set(json.load(open(_path("actions_undone.json"), encoding="utf-8")))
-    except Exception:
-        return set()
+    return set(state_store.load_json(_path("actions_undone.json"), default=[]))
 
 
 def mark_undone(item_id):
     """Record that an action's item was reversed, so the feed won't offer undo
-    again. Atomic write (temp + replace) like the other state files."""
+    again."""
     ids = _undone_ids()
     ids.add(item_id)
-    p = _path("actions_undone.json")
-    os.makedirs(os.path.dirname(p), exist_ok=True)
-    tmp = p + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(sorted(ids), f)
-    os.replace(tmp, p)
+    state_store.save_json_atomic(_path("actions_undone.json"), sorted(ids))

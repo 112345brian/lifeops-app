@@ -1,9 +1,6 @@
-import json
-import os
-
 import pytest
 
-from lifeops import config, fcm, history
+from lifeops import config, db, fcm, history
 
 
 def test_register_token_rejects_malformed_input(tmp_path, monkeypatch):
@@ -13,7 +10,7 @@ def test_register_token_rejects_malformed_input(tmp_path, monkeypatch):
     assert fcm.register_token(123) is False
     assert fcm.register_token("too-short") is False
     assert fcm.register_token("x" * 4097) is False
-    assert not os.path.exists(os.path.join(str(tmp_path), "logs", "fcm_token.json"))
+    assert db.local_get("fcm_token") is None
 
 
 def test_register_token_persists_and_round_trips(tmp_path, monkeypatch):
@@ -23,7 +20,7 @@ def test_register_token_persists_and_round_trips(tmp_path, monkeypatch):
     assert fcm.register_token(token) is True
     assert fcm._device_token() == token
 
-    saved = json.loads((tmp_path / "logs" / "fcm_token.json").read_text(encoding="utf-8"))
+    saved = db.local_get("fcm_token")
     assert saved == {"token": token}
 
 

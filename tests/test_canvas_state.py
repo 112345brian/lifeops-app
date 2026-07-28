@@ -12,10 +12,10 @@ Guards the two bugs behind persisting the live-fetched FlowSavvy titles into
 The fix: persist ONLY engine-created titles; keep the live-fetched
 incomplete/completed titles and completed_cache in the run-local dedup set only.
 """
-import datetime, json, os
+import datetime
 import pytest
 
-from lifeops import runner, history, config
+from lifeops import runner, history, config, state_store
 from lifeops.engines import canvas_engine
 
 NOW = datetime.datetime(2026, 7, 8, 9, 0, 0)
@@ -84,19 +84,15 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "_alert_once", lambda *a, **k: None)
     monkeypatch.setattr(runner, "_touch", lambda *a, **k: None)
     monkeypatch.setattr(history, "append", lambda *a, **k: None)
-    sp = os.path.join(str(tmp_path), "private", "logs", "canvas_state.json")
-    os.makedirs(os.path.dirname(sp), exist_ok=True)
-    return sp
+    return state_store.logs_path("canvas_state.json")
 
 
 def _write_state(sp, state):
-    with open(sp, "w", encoding="utf-8") as f:
-        json.dump(state, f)
+    state_store.save_json_atomic(sp, state)
 
 
 def _read_state(sp):
-    with open(sp, encoding="utf-8") as f:
-        return json.load(f)
+    return state_store.load_json(sp)
 
 
 def _run(fs, llm, cv):

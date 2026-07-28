@@ -159,7 +159,6 @@ def sandbox(tmp_path, monkeypatch):
     directory, and stubs out _run_domain so tests never spawn a real
     subprocess. Returns the recorded _run_domain calls."""
     monkeypatch.setattr(config, "WEB_TOKEN", "")
-    monkeypatch.setattr(history, "HIST", os.path.join(str(tmp_path), "logs", "history.jsonl"))
     os.makedirs(os.path.join(str(tmp_path), "logs"), exist_ok=True)
     monkeypatch.setattr(web, "GYM_STATE_FILE", os.path.join(str(tmp_path), "logs", "gym_state.json"))
     monkeypatch.setattr(web, "GYM_BLOCKS_FILE", os.path.join(str(tmp_path), "logs", "gym_blocks.json"))

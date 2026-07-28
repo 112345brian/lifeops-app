@@ -5,10 +5,10 @@ gym, discretionary money) into a fully deterministic text (attention's own
 headline + deadline phrases + notable events, no LLM -- see run_briefing's
 docstring), alerts once/day, and persists it for the panel.
 """
-import datetime, json, os
+import datetime, os
 import pytest
 
-from lifeops import briefing_service, runner, history, gather
+from lifeops import briefing_service, runner, history, gather, state_store
 
 NOW = datetime.datetime(2026, 7, 8, 8, 0, 0)   # Wed morning
 
@@ -36,8 +36,7 @@ def sandbox(tmp_path, monkeypatch):
 
 
 def _briefing_file(tmp):
-    p = os.path.join(str(tmp), "private", "logs", "briefing.json")
-    return json.load(open(p, encoding="utf-8")) if os.path.exists(p) else None
+    return state_store.load_json(state_store.logs_path("briefing.json"))
 
 
 def test_briefing_builds_facts_alerts_and_persists(sandbox):

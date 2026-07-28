@@ -1,10 +1,10 @@
 """load_engine.deadline_risk (generalized 'won't fit' watchdog) and
 runner.run_cashflow (panel-only discretionary projection, no notifications)."""
-import datetime, json, os
+import datetime, os
 import pytest
 
 from lifeops.engines import load_engine
-from lifeops import runner, history, gather
+from lifeops import runner, history, gather, state_store
 
 
 # ── deadline_risk ────────────────────────────────────────────────────────────────
@@ -59,8 +59,7 @@ def sandbox(tmp_path, monkeypatch):
 
 
 def _cashflow_file(tmp):
-    p = os.path.join(str(tmp), "private", "logs", "cashflow.json")
-    return json.load(open(p, encoding="utf-8")) if os.path.exists(p) else None
+    return state_store.load_json(state_store.logs_path("cashflow.json"))
 
 
 def test_cashflow_projects_weekly_and_never_notifies(sandbox, monkeypatch):

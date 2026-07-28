@@ -5,10 +5,10 @@ ALL scheduling logic lives here — counting, date math, week-solving, slot rule
 consecutive-day cap, urgency — so it is identical every run and never
 hallucinated. `plan(inp)` is pure; the runner (or CLI) handles I/O + logging.
 """
-import json, sys, os, datetime
+import json, sys, datetime
 
-ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-LOG = os.path.join(ROOT, "private", "logs", "gym_log.jsonl")
+from .. import state_store
+
 DAY = datetime.timedelta(days=1)
 
 def D(s):
@@ -135,9 +135,7 @@ def log(inp, out):
     line = {"ts": inp.get("now"), "summary": out["summary"],
             "n_actions": len(out["actions"]), "alert": out["alert"]["level"]}
     try:
-        os.makedirs(os.path.dirname(LOG), exist_ok=True)
-        with open(LOG, "a", encoding="utf-8") as f:
-            f.write(json.dumps(line) + "\n")
+        state_store.append_line(state_store.logs_path("gym_log.jsonl"), json.dumps(line))
     except Exception:
         pass
 

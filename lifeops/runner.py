@@ -6,7 +6,7 @@ The LLM (lifeops.llm) is touched only for the judgment slivers.
 Run:  python -m lifeops.runner          # all wired domains
       python -m lifeops.runner gym      # one domain
 """
-import sys, os, re, io, json, datetime, contextlib, requests, subprocess
+import sys, os, re, io, json, datetime, contextlib, requests
 from . import config, ntfy, notify, gather, lock, history, adherence, actions, fcm
 from . import briefing_service, push_state, state_store
 from .flowsavvy import FlowSavvy
@@ -96,10 +96,7 @@ def check_panel_health(now):
     the panel doesn't)."""
     sp = os.path.join(history.ROOT, "private", "logs", "panel_health_state.json")
     st = {"down_since": None, "alerted": False}
-    try:
-        st.update(json.load(open(sp, encoding="utf-8")))
-    except Exception:
-        pass
+    st.update(state_store.load_json(sp, default={}))
     try:
         # Any HTTP response at all (even a 401 with no token) proves the
         # process is up and listening -- this isn't checking auth, just
@@ -143,10 +140,7 @@ def ingest(fs, now):
     permanent history log. Runs every cycle; cheap and deduped."""
     sp = os.path.join(history.ROOT, "private", "logs", "ingest_state.json")
     st = {"ntfy_ts": 0, "logged_ids": [], "handled_ntfy_msg_ids": []}
-    try:
-        st.update(json.load(open(sp, encoding="utf-8")))
-    except Exception:
-        pass
+    st.update(state_store.load_json(sp, default={}))
     # Same ordered-list + set pairing as handled_msg_ids below, and for the
     # same reason: a plain set has no guaranteed order, so truncating one to
     # "the last 1000" after converting back to a list doesn't reliably keep
@@ -324,11 +318,7 @@ def _alert_once(key, text, priority="default", tags=None, actions=None, click_an
     "" links to the panel root, which is still useful (opens the app).
     Omitted entirely if PANEL_URL isn't configured."""
     sp = os.path.join(history.ROOT, "private", "logs", "alert_state.json")
-    st = {}
-    try:
-        st = json.load(open(sp, encoding="utf-8"))
-    except Exception:
-        pass
+    st = state_store.load_json(sp, default={})
     today = datetime.date.today().isoformat()
     if st.get(key) == today:
         return
@@ -368,10 +358,7 @@ def _gym_backfill(fs, now, gym_tasks):
     not misses to delete).
     """
     sp = os.path.join(history.ROOT, "private", "logs", "gym_state.json")
-    try:
-        st = json.load(open(sp, encoding="utf-8"))
-    except Exception:
-        st = {}
+    st = state_store.load_json(sp, default={})
     logged = dict(st.get("logged_backfills", {}))   # id -> date logged (iso)
     today_iso = now.date().isoformat()
     now_iso = now.isoformat()
@@ -499,10 +486,7 @@ def run_gym(fs, yn, now):
             except Exception as e:
                 delete_errors.append(f"{t['id']}: {e}")
     gym_state_path = os.path.join(history.ROOT, "private", "logs", "gym_state.json")
-    try:
-        sick_until = json.load(open(gym_state_path, encoding="utf-8")).get("sick_until")
-    except Exception:
-        sick_until = None
+    sick_until = state_store.load_json(gym_state_path, default={}).get("sick_until")
     inp = gather.gym_input(fs, now, sick_until=sick_until, gym_open=gym_open)
     out = gym_engine.plan(inp)
     gym_engine.log(inp, out)
@@ -583,8 +567,7 @@ def run_ynab(fs, yn, now):
 def run_chore(fs, yn, now):
     sp = os.path.join(history.ROOT, "private", "logs", "chore_state.json")
     st = {"processed": [], "lastRunUtc": "1970-01-01T00:00:00Z"}
-    try: st.update(json.load(open(sp, encoding="utf-8")))
-    except Exception: pass
+    st.update(state_store.load_json(sp, default={}))
     from .engines import chore_engine
     comp = fs.list_items(itemType="task", completed=True, modifiedAfter=st["lastRunUtc"]).get("items", [])
     completed = []
@@ -615,8 +598,7 @@ def run_chore(fs, yn, now):
 def run_catchup(fs, yn, now):
     sp = os.path.join(history.ROOT, "private", "logs", "catchup_state.json")
     st = {"lastHandled": 0}
-    try: st.update(json.load(open(sp, encoding="utf-8")))
-    except Exception: pass
+    st.update(state_store.load_json(sp, default={}))
     fired = any((m.get("message") or "").strip().lower() == "catchup"
                 for m in ntfy.poll(since=st["lastHandled"]))
     if fired:
@@ -667,8 +649,7 @@ def run_social(fs, yn, now):
     # deleting the mechanism that turns a completed plan into a real task.
     sp = os.path.join(history.ROOT, "private", "logs", "social_state.json")
     st = {"lastLock": "1970-01-01T00:00:00Z"}
-    try: st.update(json.load(open(sp, encoding="utf-8")))
-    except Exception: pass
+    st.update(state_store.load_json(sp, default={}))
     open_tasks = fs.list_items(itemType="task", completed=False).get("items", [])
     for d in fs.list_items(itemType="task", completed=True, query="Plan",
                            modifiedAfter=st["lastLock"]).get("items", []):
@@ -723,8 +704,7 @@ def run_meal(fs, yn, now):
     # flips true again, spuriously wiping that week's freshly-created tasks.
     sp = os.path.join(history.ROOT, "private", "logs", "meal_state.json")
     st = {"lastSkip": 0}
-    try: st.update(json.load(open(sp, encoding="utf-8")))
-    except Exception: pass
+    st.update(state_store.load_json(sp, default={}))
     skipped = any((m.get("message") or "").strip().lower() == "meal-skip"
                   for m in ntfy.poll(since=st["lastSkip"]))
     st["lastSkip"] = int(now.timestamp())
@@ -896,10 +876,7 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now):
     page/announcements interface, so this logic doesn't care which."""
     sp = os.path.join(history.ROOT, "private", "logs", "canvas_state.json")
     st = {"synced_modules": [], "task_titles": []}
-    try:
-        st.update(json.load(open(sp, encoding="utf-8")))
-    except Exception:
-        pass
+    st.update(state_store.load_json(sp, default={}))
     synced  = set(st["synced_modules"])                 # legacy dedup key: module NUMBER (rename/collision-fragile)
     synced_ids = set(st.get("synced_module_ids", []))   # stable dedup key: Canvas module id
     # `task_titles` persists ONLY the titles THIS engine actually created (see the save block
@@ -1085,11 +1062,9 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now):
                     f"Review + approve in the panel.", "high", click_anchor="settings#canvas")
         print(f"[canvas] HELD {len(creates)} creates (flood guard > {_CANVAS_FLOOD_MAX})")
         return
-    # Cleared the guard: consume the one-shot ack and drop any stale pending file.
+    # Cleared the guard: consume the one-shot ack and drop any stale pending state.
     st.pop("flood_ack", None)
-    if os.path.exists(pp):
-        try: os.remove(pp)
-        except Exception: pass
+    state_store.delete_key(pp)
 
     # apply: create tasks in FlowSavvy
     created_titles = {}   # title → id (for dependency wiring)
@@ -1240,58 +1215,61 @@ def _capture(fn, *args):
                 pass
     return txt.strip()
 
-RUNS_LOG_MAX = 2_000_000   # ~2MB before trimming to the newest 2000 runs
+RUNS_LOG_MAX_ROWS = 2000   # trim to the newest N runs every call -- cheap as a DELETE, unlike the old byte-size rewrite-whole-file check
 
 def _append_run_log(rec):
     """Durable per-run audit trail: what each domain actually did every cycle."""
     p = os.path.join(history.ROOT, "private", "logs", "runs.jsonl")
     try:
-        os.makedirs(os.path.dirname(p), exist_ok=True)
-        with open(p, "a", encoding="utf-8") as f:
-            f.write(json.dumps(rec) + "\n")
-        if os.path.getsize(p) > RUNS_LOG_MAX:
-            lines = open(p, encoding="utf-8").read().splitlines()
-            with open(p, "w", encoding="utf-8") as f:
-                f.write("\n".join(lines[-2000:]) + "\n")
+        state_store.append_line(p, json.dumps(rec))
+        state_store.trim_log(p, keep_newest=RUNS_LOG_MAX_ROWS)
     except Exception:
         pass
 
-_GIT_TIMEOUT = 20   # seconds — a hung push must not hang the whole run
+def _backup_state_db():
+    """Copies private/logs/state.db out to config.SQLITE_BACKUP_DIR (a
+    OneDrive folder by default) as a timestamped snapshot, then prunes to
+    the newest SQLITE_BACKUP_KEEP snapshots. Replaces the old git
+    auto-commit-to-the-private-submodule sync: a single binary state.db
+    doesn't diff/compact in git the way many small JSON files' appends did,
+    so backup moved out-of-git per the user's own call (2026-07-28) rather
+    than accepting ever-growing opaque-diff commits.
 
-def _git(args, cwd):
-    return subprocess.run(["git"] + args, cwd=cwd, capture_output=True,
-                           text=True, timeout=_GIT_TIMEOUT,
-                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    Uses sqlite3's built-in online-backup API (Connection.backup), not a
+    raw file copy -- safe to call against a live WAL-mode DB that web.py's
+    long-running server process may be reading/writing concurrently, unlike
+    copying the file directly which could grab a torn snapshot mid-write.
 
-def _sync_private_submodule(rec):
-    """Commit + push this run's state (private/logs/) so it's tracked and
-    backed up instead of living only on local disk. Best-effort: a git
-    failure (offline, auth, conflict) must never fail the run that just
-    completed successfully — it just means this run's state syncs on the
-    next run instead, since an uncommitted diff (or an already-committed but
-    unpushed commit) is picked up again next time this runs.
+    Best-effort and daily-tier only (called once/day, not every run): this
+    is a full snapshot, not an incremental diff, so it doesn't need
+    every-run cadence the way the state writes themselves do.
     """
-    priv = os.path.join(history.ROOT, "private")
-    # .git here is a FILE (a "gitdir: ../.git/modules/private" pointer), not a
-    # directory, since `private` is a submodule -- os.path.isdir would always
-    # be False and silently skip every sync. exists() covers both shapes.
-    if not os.path.exists(os.path.join(priv, ".git")):
-        return   # submodule not checked out (e.g. a fresh clone) -- skip quietly
+    src_path = os.path.join(history.private_logs_dir(), "state.db")
+    if not os.path.exists(src_path):
+        return
     try:
-        _git(["add", "-A", "--", "logs"], cwd=priv)
-        staged = _git(["diff", "--cached", "--quiet", "--", "logs"], cwd=priv)
-        if staged.returncode != 0:   # non-zero == there IS a staged diff
-            names = ",".join(rec.get("ran", [])) or "tick"
-            msg = f"state sync: {rec['ts']} ({names})"
-            commit = _git(["commit", "-q", "-m", msg], cwd=priv)
-            if commit.returncode != 0:
-                print(f"[sync] private commit failed: {commit.stderr.strip()[:200]}")
-        push = _git(["push", "-q"], cwd=priv)
-        if push.returncode != 0:
-            print(f"[sync] private push failed (will retry next run): "
-                  f"{push.stderr.strip()[:200]}")
+        import sqlite3
+        os.makedirs(config.SQLITE_BACKUP_DIR, exist_ok=True)
+        stamp = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
+        dest_path = os.path.join(config.SQLITE_BACKUP_DIR, f"state-{stamp}.db")
+        src = sqlite3.connect(src_path)
+        dest = sqlite3.connect(dest_path)
+        try:
+            src.backup(dest)
+        finally:
+            dest.close()
+            src.close()
+        snapshots = sorted(
+            f for f in os.listdir(config.SQLITE_BACKUP_DIR)
+            if f.startswith("state-") and f.endswith(".db")
+        )
+        for stale in snapshots[:-config.SQLITE_BACKUP_KEEP]:
+            try:
+                os.remove(os.path.join(config.SQLITE_BACKUP_DIR, stale))
+            except OSError:
+                pass
     except Exception as e:
-        print(f"[sync] private submodule sync error: {e}")
+        print(f"[backup] state.db snapshot failed: {e}")
 
 def main():
     try:
@@ -1314,7 +1292,7 @@ def _run():
 
     # resume-gap detection: if we'd been down a while, say so on the way back up
     try:
-        prev = datetime.datetime.fromisoformat(json.load(open(hp))["ts"])
+        prev = datetime.datetime.fromisoformat(state_store.load_json(hp)["ts"])
         gap_h = (now - prev).total_seconds() / 3600
         if gap_h > 6:
             _alert_once("gap:" + now.date().isoformat(),
@@ -1337,10 +1315,8 @@ def _run():
 
     args = sys.argv[1:] or ["tick"]
 
-    try:
-        enabled = json.load(open(os.path.join(history.ROOT, "private", "logs", "domains.json"), encoding="utf-8"))
-    except Exception:
-        enabled = {}
+    enabled = state_store.load_json(
+        os.path.join(history.ROOT, "private", "logs", "domains.json"), default={})
     names, unknown = _selected_domains(args, enabled)
     if unknown:
         errors["dispatch"] = "unknown domain/tier: " + ", ".join(unknown)
@@ -1381,10 +1357,10 @@ def _run():
     _heartbeat(not errors)
     rec = {"ts": now.isoformat(timespec="seconds"), "args": sys.argv[1:],
            "ran": names, "errors": errors, "details": details}
-    os.makedirs(os.path.dirname(hp), exist_ok=True)
-    json.dump(rec, open(hp, "w", encoding="utf-8"))
+    state_store.save_json_atomic(hp, rec)
     _append_run_log(rec)
-    _sync_private_submodule(rec)
+    if "daily" in args:
+        _backup_state_db()
 
 if __name__ == "__main__":
     main()

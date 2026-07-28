@@ -5,10 +5,10 @@ tries to create the whole course (~59). The guard HOLDS when a run would create
 more than _CANVAS_FLOOD_MAX, writing a pending file + alert instead of flooding,
 and only proceeds once approved (flood_ack).
 """
-import datetime, json, os
+import datetime, os
 import pytest
 
-from lifeops import runner, history, config
+from lifeops import runner, history, config, state_store
 from lifeops.engines import canvas_engine
 
 NOW = datetime.datetime(2026, 7, 8, 9, 0, 0)
@@ -82,17 +82,15 @@ def sandbox(tmp_path, monkeypatch):
 
 
 def _sp(tmp):
-    return os.path.join(str(tmp), "private", "logs", "canvas_state.json")
+    return state_store.logs_path("canvas_state.json")
 
 
 def _pending(tmp):
-    p = os.path.join(str(tmp), "private", "logs", "canvas_pending.json")
-    return json.load(open(p, encoding="utf-8")) if os.path.exists(p) else None
+    return state_store.load_json(state_store.logs_path("canvas_pending.json"))
 
 
 def _run(tmp, fs, n_readings):
-    with open(_sp(tmp), "w", encoding="utf-8") as f:
-        json.dump({"synced_modules": [], "task_titles": []}, f)
+    state_store.save_json_atomic(_sp(tmp), {"synced_modules": [], "task_titles": []})
     runner._canvas_sync(_FakeCanvas(n_readings), _strip_html, canvas_engine,
                         _FakeLLM(n_readings), fs, NOW)
 
@@ -106,7 +104,7 @@ def test_big_run_is_held_not_flooded(sandbox):
     assert p and p["count"] == 12                       # held, with a pending receipt
     assert any(k.startswith("canvas:flood:") for k in alerts)
     # state NOT advanced — module 9 must not be marked synced while held
-    st = json.load(open(_sp(tmp), encoding="utf-8"))
+    st = state_store.load_json(_sp(tmp))
     assert 9 not in st.get("synced_modules", [])
 
 
@@ -123,15 +121,13 @@ def test_approved_run_bypasses_guard_and_clears_pending(sandbox):
     tmp, alerts = sandbox
     fs = _FakeFS()
     # a stale pending file + a same-day ack (what the panel's approve writes)
-    with open(os.path.join(str(tmp), "private", "logs", "canvas_pending.json"), "w") as f:
-        json.dump({"count": 12}, f)
-    with open(_sp(tmp), "w", encoding="utf-8") as f:
-        json.dump({"synced_modules": [], "task_titles": [],
-                   "flood_ack": NOW.date().isoformat()}, f)
+    state_store.save_json_atomic(state_store.logs_path("canvas_pending.json"), {"count": 12})
+    state_store.save_json_atomic(_sp(tmp), {"synced_modules": [], "task_titles": [],
+                                            "flood_ack": NOW.date().isoformat()})
     runner._canvas_sync(_FakeCanvas(12), _strip_html, canvas_engine,
                         _FakeLLM(12), fs, NOW)
     assert len(fs.created) == 12                        # bypassed → created
     assert _pending(tmp) is None                        # pending cleared
-    st = json.load(open(_sp(tmp), encoding="utf-8"))
+    st = state_store.load_json(_sp(tmp))
     assert "flood_ack" not in st                        # one-shot ack consumed
     assert 9 in st.get("synced_modules", [])

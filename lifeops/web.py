@@ -12,7 +12,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, File
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup, escape
-from . import config, history, gather, actions, lock, fcm, location, weather
+from . import config, history, gather, actions, lock, fcm, location, weather, state_store
 from .flowsavvy import FlowSavvy
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -127,25 +127,10 @@ ACTION_COLOR = {"gym": "#4ade80", "gym_skip": "#6b7280", "chore_done": "#60a5fa"
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _domains():
-    try:
-        return json.load(open(DOMAINS_FILE, encoding="utf-8"))
-    except Exception:
-        return {}
+    return state_store.load_json(DOMAINS_FILE, default={})
 
 def _write_json(path, value):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=Path(path).name + "-", dir=os.path.dirname(path))
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(value, f)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, path)
-    finally:
-        try:
-            os.remove(tmp)
-        except FileNotFoundError:
-            pass
+    state_store.save_json_atomic(path, value)
 
 @contextmanager
 def _exclusive():
@@ -351,64 +336,45 @@ def _days_since_event(events, action, today):
 def _gym_blocks():
     """Future-only blocked dates, sorted."""
     today = datetime.date.today().isoformat()
-    try:
-        dates = json.load(open(GYM_BLOCKS_FILE, encoding="utf-8"))
-    except Exception:
-        dates = []
+    dates = state_store.load_json(GYM_BLOCKS_FILE, default=[])
     return sorted(d for d in dates if d >= today)
 
 def _save_gym_blocks(dates):
     today = datetime.date.today().isoformat()
     pruned = sorted({d for d in dates if d >= today})
-    os.makedirs(os.path.dirname(GYM_BLOCKS_FILE), exist_ok=True)
     _write_json(GYM_BLOCKS_FILE, pruned)
 
 def _gym_sick_until():
-    try:
-        return json.load(open(GYM_STATE_FILE, encoding="utf-8")).get("sick_until") or ""
-    except Exception:
-        return ""
+    return state_store.load_json(GYM_STATE_FILE, default={}).get("sick_until") or ""
 
 def _save_gym_sick_until(date_str):
-    state = {}
-    try:
-        state = json.load(open(GYM_STATE_FILE, encoding="utf-8"))
-    except Exception:
-        pass
+    state = state_store.load_json(GYM_STATE_FILE, default={})
     if date_str:
         state["sick_until"] = date_str
     else:
         state.pop("sick_until", None)
-    os.makedirs(os.path.dirname(GYM_STATE_FILE), exist_ok=True)
     _write_json(GYM_STATE_FILE, state)
 
 def _sched_blocks():
     """General FlowSavvy busy-event blocks: [{date, event_id, label}]."""
     today = datetime.date.today().isoformat()
-    try:
-        entries = json.load(open(SCHED_BLOCKS_FILE, encoding="utf-8"))
-    except Exception:
-        entries = []
+    entries = state_store.load_json(SCHED_BLOCKS_FILE, default=[])
     return sorted((e for e in entries if e.get("date", "") >= today), key=lambda e: e["date"])
 
 def _save_sched_blocks(entries):
     today = datetime.date.today().isoformat()
     pruned = [e for e in entries if e.get("date", "") >= today]
-    os.makedirs(os.path.dirname(SCHED_BLOCKS_FILE), exist_ok=True)
     _write_json(SCHED_BLOCKS_FILE, pruned)
 
 def _canvas_status():
     """Cheap status for the Accounts card — reads the same dedup log runner.py
-    writes to (logs/alert_state.json) instead of launching a browser on every
-    page load. `needs_relogin` is only a same-day signal: it's set once the
+    writes to (private/logs/alert_state.json) instead of launching a browser on
+    every page load. `needs_relogin` is only a same-day signal: it's set once the
     daily sync alerts that the session expired, and cleared the next day
     regardless of whether you actually re-logged in."""
     from . import canvas_browser
     today = datetime.date.today().isoformat()
-    try:
-        st = json.load(open(ALERT_STATE_FILE, encoding="utf-8"))
-    except Exception:
-        st = {}
+    st = state_store.load_json(ALERT_STATE_FILE, default={})
     return {
         "profile_exists": canvas_browser.profile_exists(),
         "needs_relogin":  st.get("canvas:session:" + today) == today,
@@ -419,9 +385,8 @@ def _canvas_pending():
     HOLDS creation when a sync would make an implausible number of tasks (the
     state-loss re-sync signature). Surface it so the panel can show what was
     held and offer a one-tap approve. Returns None when nothing is pending."""
-    try:
-        p = json.load(open(os.path.join(ROOT, "private", "logs", "canvas_pending.json"), encoding="utf-8"))
-    except Exception:
+    p = state_store.load_json(state_store.logs_path("canvas_pending.json"))
+    if not p:
         return None
     return {"count": p.get("count"), "at": p.get("at"),
             "titles": (p.get("titles") or [])[:30]}
@@ -1225,16 +1190,9 @@ def canvas_approve_sync():
     (today) in canvas_state.json, then re-runs canvas — the guard bypasses for
     the day and creates the held tasks through the normal path (no replay)."""
     sp = os.path.join(ROOT, "private", "logs", "canvas_state.json")
-    try:
-        st = json.load(open(sp, encoding="utf-8"))
-    except Exception:
-        st = {}
+    st = state_store.load_json(sp, default={})
     st["flood_ack"] = datetime.date.today().isoformat()
-    tmp = sp + ".tmp"
-    os.makedirs(os.path.dirname(sp), exist_ok=True)
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(st, f)
-    os.replace(tmp, sp)
+    state_store.save_json_atomic(sp, st)
     _run_domain("canvas")
     return RedirectResponse(f"/settings?msg={quote('Approved — creating the held Canvas tasks.')}#canvas", 303)
 
@@ -1242,10 +1200,7 @@ def canvas_approve_sync():
 def canvas_dismiss_pending():
     """Discard a held Canvas sync without creating anything (e.g. you restored
     canvas_state.json instead). Just removes the pending file."""
-    try:
-        os.remove(os.path.join(ROOT, "private", "logs", "canvas_pending.json"))
-    except Exception:
-        pass
+    state_store.delete_key(state_store.logs_path("canvas_pending.json"))
     return RedirectResponse(f"/settings?msg={quote('Dismissed the held Canvas sync.')}#canvas", 303)
 
 @app.post("/action/undo")

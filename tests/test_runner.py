@@ -1,8 +1,6 @@
 import datetime
-import json
-import os
 
-from lifeops import config, runner
+from lifeops import config, runner, state_store
 from lifeops.engines import canvas_engine
 
 
@@ -67,14 +65,13 @@ def test_canvas_failed_creation_still_marks_module_synced(tmp_path, monkeypatch)
     This test documents current upstream behavior; it isn't asserting that
     behavior is correct. Worth a follow-up fix upstream."""
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
-    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "private" / "logs" / "history.jsonl"))
     monkeypatch.setattr(config, "LIST_COURSE", "course-list")
     monkeypatch.setattr(config, "SH_COURSE", "course-hours")
 
     runner._canvas_sync(_Canvas(), lambda value: value, canvas_engine, _LLM(),
                         _FlowSavvy(), datetime.datetime(2026, 7, 9, 9, 0))
 
-    state = json.loads((tmp_path / "private" / "logs" / "canvas_state.json").read_text(encoding="utf-8"))
+    state = state_store.load_json(state_store.logs_path("canvas_state.json"))
     assert state["synced_modules"] == [1]
 
 
@@ -98,13 +95,12 @@ def test_ingest_handled_msg_ids_keeps_most_recent_not_arbitrary(tmp_path, monkey
     order, so truncating `list(a_set)[-1000:]` doesn't reliably keep the
     most-recently-handled ids (see runner.py's comment on this)."""
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
-    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "private" / "logs" / "history.jsonl"))
     (tmp_path / "private" / "logs").mkdir(parents=True, exist_ok=True)
 
     old_ids = [f"old-{i}" for i in range(1000)]
-    state_path = tmp_path / "private" / "logs" / "ingest_state.json"
-    state_path.write_text(json.dumps({"ntfy_ts": 0, "logged_ids": [],
-                                      "handled_ntfy_msg_ids": old_ids}), encoding="utf-8")
+    state_path = state_store.logs_path("ingest_state.json")
+    state_store.save_json_atomic(state_path, {"ntfy_ts": 0, "logged_ids": [],
+                                              "handled_ntfy_msg_ids": old_ids})
 
     fake_message = {"id": "new-msg", "time": 100, "message": "complete:t1"}
     monkeypatch.setattr(runner.ntfy, "poll", lambda since: [fake_message])
@@ -113,7 +109,7 @@ def test_ingest_handled_msg_ids_keeps_most_recent_not_arbitrary(tmp_path, monkey
     runner.ingest(fs, datetime.datetime(2026, 7, 13, 9, 0))
 
     assert fs.completed == ["t1"]
-    saved = json.loads(state_path.read_text(encoding="utf-8"))
+    saved = state_store.load_json(state_path)
     # The oldest id (old-0) must be the one evicted, and the new id must
     # survive at the end -- not an arbitrary member of the old set.
     assert saved["handled_ntfy_msg_ids"] == old_ids[1:] + ["new-msg"]
@@ -121,7 +117,6 @@ def test_ingest_handled_msg_ids_keeps_most_recent_not_arbitrary(tmp_path, monkey
 
 def test_ingest_token_signal_registers_fcm_token(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
-    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "private" / "logs" / "history.jsonl"))
     (tmp_path / "private" / "logs").mkdir(parents=True, exist_ok=True)
 
     token = "d" * 20 + ":APA91b" + "x" * 100
@@ -135,7 +130,6 @@ def test_ingest_token_signal_registers_fcm_token(tmp_path, monkeypatch):
 
 def test_ingest_token_signal_with_malformed_token_does_not_raise(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
-    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "private" / "logs" / "history.jsonl"))
     (tmp_path / "private" / "logs").mkdir(parents=True, exist_ok=True)
 
     fake_message = {"id": "msg-1", "time": 100, "message": "token:too-short"}
@@ -156,7 +150,6 @@ class _NextTasksFakeFlowSavvy:
 
 def test_push_next_tasks_skipped_on_signal_tier(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
-    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "private" / "logs" / "history.jsonl"))
     (tmp_path / "private" / "logs").mkdir(parents=True, exist_ok=True)
     calls = []
     monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, gym_ring, version: calls.append((tasks, events, version)) or True)
@@ -168,7 +161,6 @@ def test_push_next_tasks_skipped_on_signal_tier(tmp_path, monkeypatch):
 
 def test_push_next_tasks_fires_on_tick_tier(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
-    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "private" / "logs" / "history.jsonl"))
     (tmp_path / "private" / "logs").mkdir(parents=True, exist_ok=True)
     calls = []
     monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, gym_ring, version: calls.append((tasks, events, version)) or True)
@@ -186,7 +178,6 @@ def test_push_next_tasks_retries_unacked_push_even_if_unchanged(tmp_path, monkey
     identical content -- "unacked" is exactly the signal the last attempt
     may not have landed (see _push_with_ack)."""
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
-    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "private" / "logs" / "history.jsonl"))
     (tmp_path / "private" / "logs").mkdir(parents=True, exist_ok=True)
     calls = []
     monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, gym_ring, version: calls.append((tasks, events, version)) or True)
@@ -201,7 +192,6 @@ def test_push_next_tasks_retries_unacked_push_even_if_unchanged(tmp_path, monkey
 
 def test_push_next_tasks_skips_send_when_unchanged_and_acked(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
-    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "private" / "logs" / "history.jsonl"))
     (tmp_path / "private" / "logs").mkdir(parents=True, exist_ok=True)
     calls = []
     monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, gym_ring, version: calls.append((tasks, events, version)) or True)
@@ -217,7 +207,6 @@ def test_push_next_tasks_skips_send_when_unchanged_and_acked(tmp_path, monkeypat
 
 def test_push_next_tasks_sends_again_when_changed(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
-    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "private" / "logs" / "history.jsonl"))
     (tmp_path / "private" / "logs").mkdir(parents=True, exist_ok=True)
     calls = []
     monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, gym_ring, version: calls.append((tasks, events, version)) or True)
@@ -239,7 +228,6 @@ def test_push_next_tasks_sends_again_when_changed(tmp_path, monkeypatch):
 
 def test_ingest_ack_signal_marks_push_acked(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
-    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "private" / "logs" / "history.jsonl"))
     (tmp_path / "private" / "logs").mkdir(parents=True, exist_ok=True)
     calls = []
     monkeypatch.setattr(runner.notify, "push_next_tasks", lambda tasks, events, gym_ring, version: calls.append(version) or True)
@@ -251,7 +239,7 @@ def test_ingest_ack_signal_marks_push_acked(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.ntfy, "poll", lambda since: [fake_message])
     runner.ingest(_CompleteFakeFlowSavvy(), datetime.datetime(2026, 7, 13, 9, 5))
 
-    state = json.loads((tmp_path / "private" / "logs" / "push_ack_next_tasks.json").read_text(encoding="utf-8"))
+    state = state_store.load_json(runner._push_ack_state_file("next_tasks"))
     assert state["acked"] is True
     assert state["version"] == version
 
@@ -268,14 +256,13 @@ def test_mark_push_acked_ignores_superseded_version(tmp_path, monkeypatch):
 
     runner._mark_push_acked("next_tasks", "stale-version")
 
-    state = json.loads(open(runner._push_ack_state_file("next_tasks"), encoding="utf-8").read())
+    state = state_store.load_json(runner._push_ack_state_file("next_tasks"))
     assert state["acked"] is False
     assert state["version"] == "current-version"
 
 
 def test_ingest_malformed_ack_signal_does_not_raise(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
-    monkeypatch.setattr(runner.history, "HIST", str(tmp_path / "private" / "logs" / "history.jsonl"))
     (tmp_path / "private" / "logs").mkdir(parents=True, exist_ok=True)
 
     fake_message = {"id": "msg-1", "time": 100, "message": "ack:not-enough-parts"}
@@ -295,7 +282,7 @@ def test_push_with_ack_writes_no_state_when_nothing_was_sent(tmp_path, monkeypat
 
     runner._push_with_ack("next_tasks", {"tasks": []}, lambda version: False)
 
-    assert not os.path.exists(runner._push_ack_state_file("next_tasks"))
+    assert state_store.load_json(runner._push_ack_state_file("next_tasks")) is None
 
 
 def test_push_with_ack_retries_cheaply_every_call_when_nothing_was_sent(tmp_path, monkeypatch):
@@ -364,3 +351,37 @@ def test_mark_push_acked_ignores_non_dict_state(tmp_path, monkeypatch):
     runner._save_json_atomic(runner._push_ack_state_file("next_tasks"), ["not", "a", "dict"])
 
     runner._mark_push_acked("next_tasks", "some-version")  # must not raise
+
+
+def test_backup_state_db_snapshots_and_prunes_old_ones(tmp_path, monkeypatch):
+    """_backup_state_db copies the live state.db out to SQLITE_BACKUP_DIR
+    (replacing the old git-commit-to-private-submodule sync) and keeps only
+    the newest SQLITE_BACKUP_KEEP snapshots."""
+    monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
+    backup_dir = tmp_path / "backups"
+    monkeypatch.setattr(config, "SQLITE_BACKUP_DIR", str(backup_dir))
+    monkeypatch.setattr(config, "SQLITE_BACKUP_KEEP", 2)
+
+    # a real write establishes state.db on disk
+    state_store.save_json_atomic(state_store.logs_path("meal_state.json"), {"lastSkip": 1})
+
+    # pre-seed 2 fake older snapshots so pruning has something to remove
+    backup_dir.mkdir(parents=True)
+    (backup_dir / "state-20260101T000000.db").write_bytes(b"old")
+    (backup_dir / "state-20260102T000000.db").write_bytes(b"old2")
+
+    runner._backup_state_db()
+
+    snapshots = sorted(p.name for p in backup_dir.glob("state-*.db"))
+    assert len(snapshots) == 2   # pruned down to SQLITE_BACKUP_KEEP
+    assert snapshots[-1] not in ("state-20260101T000000.db", "state-20260102T000000.db")
+
+
+def test_backup_state_db_is_a_noop_when_state_db_does_not_exist_yet(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
+    backup_dir = tmp_path / "backups"
+    monkeypatch.setattr(config, "SQLITE_BACKUP_DIR", str(backup_dir))
+
+    runner._backup_state_db()  # must not raise, must not create the dir
+
+    assert not backup_dir.exists()

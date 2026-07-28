@@ -4,7 +4,7 @@ exercise the JSON-boundary parsing, error handling, and usage logging
 against a fake Anthropic client."""
 import json
 
-from lifeops import config, history, llm
+from lifeops import config, history, llm, state_store
 
 
 class _FakeMessage:
@@ -136,7 +136,7 @@ def test_usage_is_logged_per_call(tmp_path, monkeypatch):
 
     llm.categorize_unknown("Trader Joe's", 42.10, ["Groceries"])
 
-    lines = (tmp_path / "private" / "logs" / "llm_usage.jsonl").read_text(encoding="utf-8").strip().splitlines()
+    lines = state_store.recent_lines(state_store.logs_path("llm_usage.jsonl"), 10)
     assert len(lines) == 1
     rec = json.loads(lines[0])
     assert rec["fn"] == "categorize_unknown"

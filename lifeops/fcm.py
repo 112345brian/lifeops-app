@@ -6,8 +6,8 @@ implicit third-party broadcasts, so the widget listens for FCM instead
 android/app/src/main/kotlin/com/lifeops/briefing/BriefingFcmService.kt for the
 receiving side and the token-registration flow.
 """
-import json, os, tempfile
-from . import config, history
+import json, os
+from . import config, db
 
 _app = None
 
@@ -20,18 +20,8 @@ def _firebase_app():
         _app = firebase_admin.initialize_app(cred)
     return _app
 
-def _token_file():
-    # Resolved from history.ROOT at call time (not import time) so tests
-    # that monkeypatch history.ROOT to a sandbox dir actually redirect this
-    # -- a previous version computed the path once at import, which read the
-    # real on-disk token during every test run and sent live pushes.
-    return os.path.join(history.ROOT, "logs", "fcm_token.json")
-
 def _device_token():
-    try:
-        return json.load(open(_token_file(), encoding="utf-8")).get("token") or ""
-    except Exception:
-        return ""
+    return db.local_get("fcm_token", default={}).get("token") or ""
 
 def register_token(token):
     """Persists a fresh FCM device token. Single-user app -- one token on
@@ -45,28 +35,7 @@ def register_token(token):
     # hardcoding Firebase's exact format.
     if not isinstance(token, str) or not (10 <= len(token) <= 4096):
         return False
-    path = _token_file()
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    # Temp file + fsync + os.replace, not a direct write -- a kill/crash
-    # mid-write must not leave a truncated token file (same reasoning as
-    # every other durable state write in this codebase). Uses
-    # tempfile.mkstemp() for a unique name, not a fixed "path + .tmp" --
-    # this function is called from TWO separate OS processes (web.py's
-    # long-running server and runner.py's periodic subprocess, via the
-    # ntfy token: signal relay), so a fixed temp name risks one process's
-    # in-flight write getting clobbered by the other's.
-    fd, tmp = tempfile.mkstemp(prefix="fcm_token-", suffix=".tmp", dir=os.path.dirname(path))
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump({"token": token}, f)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, path)
-    finally:
-        try:
-            os.remove(tmp)
-        except FileNotFoundError:
-            pass
+    db.local_set("fcm_token", {"token": token})
     return True
 
 def _send(msg_type, payload_dict, version):

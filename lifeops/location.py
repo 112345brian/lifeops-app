@@ -3,8 +3,8 @@
 Single-user app -- one location on file, last write wins, same pattern as
 fcm.py's device token.
 """
-import json, os, tempfile, time
-from . import history
+import time
+from . import state_store
 
 # A fix older than this is treated as stale (phone off, app uninstalled,
 # permission revoked) -- better to fall back to the static WEATHER_LAT/LON
@@ -14,14 +14,10 @@ _MAX_AGE_SECONDS = 24 * 3600
 
 
 def _location_file():
-    # A function, not a module-level constant -- history.ROOT is
-    # monkeypatched per-test (see fcm.py's _token_file for the same
-    # pattern); a constant would freeze in the real ROOT at import time and
-    # tests would silently share one real location file on disk.
-    # Lives in the private submodule (tracked/backed up), not gitignored
-    # top-level logs/ -- this is GPS history, the most sensitive state file
+    # Lives in the tracked/backed-up state (private/logs), not the local-only
+    # gitignored logs/ -- this is GPS history, the most sensitive state file
     # in the app, so it belongs wherever the rest of durable state lives.
-    return os.path.join(history.private_logs_dir(), "phone_location.json")
+    return state_store.logs_path("phone_location.json")
 
 
 def set_location(lat, lon):
@@ -33,24 +29,8 @@ def set_location(lat, lon):
         return False
     if not (-90 <= lat_f <= 90) or not (-180 <= lon_f <= 180):
         return False
-    path = _location_file()
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    # Temp file + fsync + os.replace, not a direct write -- same reasoning
-    # as fcm.py's register_token (a kill/crash mid-write must not leave a
-    # truncated location file). Unique temp name via mkstemp since this is
-    # reachable from web.py's long-running server process.
-    fd, tmp = tempfile.mkstemp(prefix="phone_location-", suffix=".tmp", dir=os.path.dirname(path))
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump({"lat": lat_f, "lon": lon_f, "reported_at": time.time()}, f)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, path)
-    finally:
-        try:
-            os.remove(tmp)
-        except FileNotFoundError:
-            pass
+    state_store.save_json_atomic(_location_file(),
+                                 {"lat": lat_f, "lon": lon_f, "reported_at": time.time()})
     return True
 
 
@@ -59,9 +39,8 @@ def get_location():
     string type so weather.py can treat either source identically -- from
     the most recent phone report, or None if there's never been one or the
     latest one is older than _MAX_AGE_SECONDS."""
-    try:
-        data = json.load(open(_location_file(), encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError):
+    data = state_store.load_json(_location_file())
+    if not data:
         return None
     if time.time() - data.get("reported_at", 0) > _MAX_AGE_SECONDS:
         return None

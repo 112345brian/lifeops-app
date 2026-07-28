@@ -10,10 +10,10 @@ Two historical failure modes these lock down:
      interstitial "Module 6.5", or "Supplementary readings for Module 5" and
      "Module 5"). Keyed on num, the second one is silently skipped forever.
 """
-import os, json, datetime
+import datetime
 import pytest
 
-from lifeops import runner, history
+from lifeops import runner, history, state_store
 from lifeops.engines import canvas_engine
 
 
@@ -54,11 +54,8 @@ def _run_sync(tmp_path, monkeypatch, modules, state):
     were actually selected for syncing this run (i.e. handed to plan())."""
     # Point history's durable-file root at a throwaway dir.
     monkeypatch.setattr(history, "ROOT", str(tmp_path))
-    monkeypatch.setattr(history, "HIST", str(tmp_path / "private" / "logs" / "history.jsonl"))
 
-    sp = tmp_path / "private" / "logs" / "canvas_state.json"
-    sp.parent.mkdir(parents=True, exist_ok=True)
-    sp.write_text(json.dumps(state), encoding="utf-8")
+    state_store.save_json_atomic(state_store.logs_path("canvas_state.json"), state)
 
     # Spy on plan() to capture which modules survived dedup, without running
     # the real task-planning/creation machinery.
@@ -72,7 +69,7 @@ def _run_sync(tmp_path, monkeypatch, modules, state):
     runner._canvas_sync(_FakeCanvas(modules), lambda s: s, canvas_engine,
                         _FakeLLM(), _FakeFlowSavvy(), now)
 
-    saved = json.loads(sp.read_text(encoding="utf-8"))
+    saved = state_store.load_json(state_store.logs_path("canvas_state.json"))
     return synced_this_run, saved
 
 
