@@ -207,9 +207,8 @@ def _run_domain(name):
                      creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
 def _last_run():
-    try:
-        lr = json.load(open(os.path.join(ROOT, "private", "logs", "last_run.json"), encoding="utf-8"))
-    except Exception:
+    lr = state_store.load_json(os.path.join(ROOT, "private", "logs", "last_run.json"))
+    if lr is None:
         return None
     ts = lr.get("ts")
     age_mins = None
@@ -398,13 +397,10 @@ def _format_briefing_text(text):
     return Markup(html)
 
 def _today_briefing():
-    """The daily briefing (run_briefing) writes logs/briefing.json. Show it only
-    if it's from today — a stale briefing is worse than none."""
-    try:
-        b = json.load(open(os.path.join(ROOT, "private", "logs", "briefing.json"), encoding="utf-8"))
-    except Exception:
-        return None
-    if b.get("date") != datetime.date.today().isoformat():
+    """The daily briefing (run_briefing) writes private/logs/briefing.json.
+    Show it only if it's from today — a stale briefing is worse than none."""
+    b = state_store.load_json(os.path.join(ROOT, "private", "logs", "briefing.json"))
+    if not b or b.get("date") != datetime.date.today().isoformat():
         return None
     facts = b.get("facts") or {}
     return {"text": _format_briefing_text(b.get("text", "")), "facts": facts,
@@ -414,11 +410,8 @@ def _today_briefing_raw():
     """Same staleness check as _today_briefing(), but without the HTML
     formatting step — for API clients (e.g. the Android widget) that want the
     raw **bold**/\\n markup to style themselves rather than <strong>/<br>."""
-    try:
-        b = json.load(open(os.path.join(ROOT, "private", "logs", "briefing.json"), encoding="utf-8"))
-    except Exception:
-        return None
-    if b.get("date") != datetime.date.today().isoformat():
+    b = state_store.load_json(os.path.join(ROOT, "private", "logs", "briefing.json"))
+    if not b or b.get("date") != datetime.date.today().isoformat():
         return None
     return {"date": b.get("date"), "text": b.get("text", ""), "facts": b.get("facts") or {}}
 
@@ -444,13 +437,11 @@ def _current_attention(briefing=None, lr=None):
 
 def _cashflow():
     """Panel-only forward discretionary-balance projection (run_cashflow writes
-    logs/cashflow.json; no notifications by design). Adds a `bar_pct` per week
-    for a simple inline bar, scaled to the starting balance. Today's only."""
-    try:
-        c = json.load(open(os.path.join(ROOT, "private", "logs", "cashflow.json"), encoding="utf-8"))
-    except Exception:
-        return None
-    if c.get("date") != datetime.date.today().isoformat():
+    private/logs/cashflow.json; no notifications by design). Adds a `bar_pct`
+    per week for a simple inline bar, scaled to the starting balance. Today's
+    only."""
+    c = state_store.load_json(os.path.join(ROOT, "private", "logs", "cashflow.json"))
+    if not c or c.get("date") != datetime.date.today().isoformat():
         return None
     peak = max([c.get("start_balance", 0)] + [w.get("balance", 0) for w in c.get("weeks", [])] + [1])
     for w in c.get("weeks", []):

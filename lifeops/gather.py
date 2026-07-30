@@ -2,7 +2,7 @@
 All personal identifiers come from config (.env) — none hardcoded here.
 """
 import datetime, json, os, re
-from . import history, config, adherence
+from . import history, config, adherence, state_store
 
 # Canonical path — web.py imports this instead of re-deriving it, so the
 # writer (web UI "block this day") and reader (this module's engine feed)
@@ -140,10 +140,7 @@ def sleep_minutes_last_night(now):
 
 def _gym_blocked_dates():
     """Dates manually marked 'no gym' via the web UI."""
-    try:
-        return set(json.load(open(GYM_BLOCKS_FILE, encoding="utf-8")))
-    except Exception:
-        return set()
+    return set(state_store.load_json(GYM_BLOCKS_FILE, default=[]))
 
 def gym_ring(gym_last_7d, gym_target, today_needed, today_done):
     """Deterministic {fill, color} for the widget's gym ring.
