@@ -6,6 +6,13 @@ change matter more here than semver strictness.
 
 <!-- towncrier release notes start -->
 
+## [1.26.0] — 2026-07-30
+
+### Added
+
+- Ported 6 of LifeOps's core decision engines from Python to Kotlin (routine due-check math, YNAB categorization/cover-overspend, gym scheduling, chore recurrence, social nudges, deadline-risk watchdog) as the first concrete step of the on-device migration plan. 83 new Android unit tests, one-to-one against the existing Python suites. Standalone, tested, not yet wired into any widget/worker/persistence path.
+
+
 ## [1.25.1] — 2026-07-30
 
 ### Fixed
