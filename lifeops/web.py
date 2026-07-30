@@ -86,7 +86,6 @@ DOMAINS_FILE      = os.path.join(ROOT, "private", "logs", "domains.json")
 GYM_BLOCKS_FILE   = gather.GYM_BLOCKS_FILE
 GYM_STATE_FILE    = os.path.join(ROOT, "private", "logs", "gym_state.json")
 SCHED_BLOCKS_FILE = os.path.join(ROOT, "private", "logs", "schedule_blocks.json")
-ALERT_STATE_FILE  = os.path.join(ROOT, "private", "logs", "alert_state.json")
 ENV               = str(config.ENV_FILE)
 
 ALL_DOMAINS  = ["gym", "ynab", "chore", "catchup", "homework", "spend", "social", "meal", "digest",
@@ -363,17 +362,18 @@ def _save_sched_blocks(entries):
     _write_json(SCHED_BLOCKS_FILE, pruned)
 
 def _canvas_status():
-    """Cheap status for the Accounts card — reads the same dedup log runner.py
-    writes to (private/logs/alert_state.json) instead of launching a browser on
-    every page load. `needs_relogin` is only a same-day signal: it's set once the
-    daily sync alerts that the session expired, and cleared the next day
-    regardless of whether you actually re-logged in."""
+    """Cheap status for the Accounts card — reads the same alert-dedup record
+    runner.py's _alert_once/notify.alert(dedup_key=...) writes to instead of
+    launching a browser on every page load. `needs_relogin` is only a
+    same-day signal: it's set once the daily sync alerts that the session
+    expired, and cleared the next day regardless of whether you actually
+    re-logged in."""
     from . import canvas_browser
     today = datetime.date.today().isoformat()
-    st = state_store.load_json(ALERT_STATE_FILE, default={})
+    dedup = db.local_get(f"alert_dedup:canvas:session:{today}", default={})
     return {
         "profile_exists": canvas_browser.profile_exists(),
-        "needs_relogin":  st.get("canvas:session:" + today) == today,
+        "needs_relogin":  dedup.get("date") == today,
     }
 
 def _canvas_pending():

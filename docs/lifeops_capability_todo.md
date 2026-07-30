@@ -76,11 +76,29 @@ item below; this isn't a backend gap, it's a client-UI gap).
 Shipped (2026-07-30): `notify.alert` now takes an optional `msg_type`
 (`"system_health"` in active use; `"urgent_alert"`/`"action_result"` are
 available names, not yet called by any domain) threaded onto ntfy's tags.
-`notify.push_briefing`/`push_next_tasks` fall back to an ntfy alert
-(deduped once/day per push type, matching `runner.py`'s `_alert_once`
-cadence) when FCM no-ops, so a broken/unconfigured FCM no longer silently
-drops the briefing/next-tasks push. Tests cover the routing, the fallback,
-and the once/day dedup (`tests/test_notify.py`).
+`notify.push_next_tasks` falls back to a deduped ntfy alert when FCM
+no-ops, so a broken/unconfigured FCM no longer silently drops the
+next-tasks push (`push_briefing` deliberately has no fallback --
+`runner.py`'s `run_briefing` already sends the full briefing text over
+ntfy unconditionally, so a second alert would just be redundant noise).
+
+Hardened the same day (2026-07-30, in direct response to finding this
+exact redundant-alert bug): every notification in the codebase -- both
+`runner.py`'s ~15 tick-driven per-domain alerts (gym, homework, spend,
+social, meal, briefing, deadlines, canvas, digest, health, resume-gap) and
+`notify.py`'s own push-unavailable fallback -- now goes through one single
+dedup mechanism: `notify.alert(..., dedup_key=...)`, once/day per key,
+storage-backed by `db.local_get`/`local_set` (previously `runner.py` kept
+its own separate file-based dedup log while `notify.py` kept a second,
+independent db-based one -- two mechanisms is exactly how the redundant
+briefing alert happened, since neither had any idea the other existed).
+`runner.py`'s `_alert_once` is now a thin wrapper that forwards its `key`
+straight into `notify.alert`'s `dedup_key`, so every call site and its
+tests are unaffected. `web.py`'s `_canvas_status` (needs_relogin) was
+migrated to read the same shared `alert_dedup:<key>` storage instead of
+its own copy of the old file. Tests cover the routing, the fallback, the
+once/day dedup, and dedup-only-on-a-successful-send (`tests/test_notify.py`,
+`tests/test_web.py`).
 
 Still open:
 - Web Push as a third channel (only an aspirational docstring mention

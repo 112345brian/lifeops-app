@@ -318,17 +318,16 @@ def _alert_once(key, text, priority="default", tags=None, actions=None, click_an
     10 min — without this, advisory alerts would spam. click_anchor: panel
     section to deep-link into when the notification is tapped (e.g. "gym") —
     "" links to the panel root, which is still useful (opens the app).
-    Omitted entirely if PANEL_URL isn't configured."""
-    sp = os.path.join(history.ROOT, "private", "logs", "alert_state.json")
-    st = state_store.load_json(sp, default={})
-    today = datetime.date.today().isoformat()
-    if st.get(key) == today:
-        return
+    Omitted entirely if PANEL_URL isn't configured.
+
+    Thin wrapper: the dedup logic itself lives in notify.alert's dedup_key
+    param -- the single dedup mechanism for every notification in this
+    codebase (shared with notify.py's own push-unavailable fallback,
+    see notify.alert's docstring) -- kept as a local name/signature here so
+    the ~15 call sites below (and their tests, which monkeypatch
+    runner._alert_once directly) don't need to change."""
     notify.alert(text, priority=priority, tags=tags, actions=actions,
-                 click_anchor=click_anchor)
-    st[key] = today
-    os.makedirs(os.path.dirname(sp), exist_ok=True)
-    _save_json_atomic(sp, st)
+                 click_anchor=click_anchor, dedup_key=key)
 
 _GYM_AUTO_MARKER = "Auto-scheduled by LifeOps"          # system-created gym blocks carry this
 _GYM_DONE_KW = ("completed", "went", "did it", "attended", "✅")

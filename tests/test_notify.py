@@ -1,3 +1,5 @@
+import pytest
+
 from lifeops import notify
 
 
@@ -101,25 +103,29 @@ def test_push_next_tasks_no_fallback_when_fcm_sends(monkeypatch):
 
 def test_push_next_tasks_fallback_dedups_within_the_same_day(monkeypatch):
     """push_next_tasks runs on the ~10-min tick cadence (runner.py) -- a
-    persistently no-oping FCM must not spam an ntfy alert every tick."""
+    persistently no-oping FCM must not spam an ntfy alert every tick. This
+    exercises the real dedup path (notify.alert's dedup_key), so it mocks
+    the transport (ntfy.alert) rather than notify.alert itself -- mocking
+    notify.alert away would bypass the dedup logic entirely."""
     monkeypatch.setattr(notify.fcm, "send_next_tasks",
                         lambda tasks, events, gym_ring, version: False)
-    alert_calls = []
-    monkeypatch.setattr(notify, "alert", lambda *a, **k: alert_calls.append((a, k)))
+    ntfy_calls = []
+    monkeypatch.setattr(notify.ntfy, "alert", lambda *a, **k: ntfy_calls.append((a, k)))
 
     notify.push_next_tasks([{"id": "1"}], [], {"fill": 0.5, "color": "yellow"}, "v1")
     notify.push_next_tasks([{"id": "1"}], [], {"fill": 0.5, "color": "yellow"}, "v2")
     notify.push_next_tasks([{"id": "1"}], [], {"fill": 0.5, "color": "yellow"}, "v3")
 
-    assert len(alert_calls) == 1
+    assert len(ntfy_calls) == 1
 
 
-def test_push_next_tasks_fallback_swallows_alert_failure_and_does_not_dedup(monkeypatch):
+def test_push_next_tasks_fallback_swallows_alert_failure(monkeypatch):
     """A failure sending the fallback itself (e.g. ntfy.sh briefly down)
-    must not raise out of push_next_tasks (side-channel only, its return
-    value contract is untouched) and must not persist the dedup key --
-    otherwise a transient ntfy outage would silently suppress the fallback
-    for the rest of the day even though it never actually landed."""
+    must not raise out of push_next_tasks -- side-channel only, its return
+    value contract is untouched. (notify.alert's own dedup_key logic
+    separately guarantees it isn't marked sent on a failed send -- see
+    test_alert_dedup_key_only_marks_sent_after_a_successful_send -- this
+    test is specifically about push_next_tasks's own try/except.)"""
     monkeypatch.setattr(notify.fcm, "send_next_tasks",
                         lambda tasks, events, gym_ring, version: False)
     calls = []
@@ -129,10 +135,57 @@ def test_push_next_tasks_fallback_swallows_alert_failure_and_does_not_dedup(monk
     monkeypatch.setattr(notify, "alert", _boom)
 
     result = notify.push_next_tasks([{"id": "1"}], [], {"fill": 0.5, "color": "yellow"}, "v1")
+
     assert result is False
     assert len(calls) == 1
 
-    # A second call the same day retries (no dedup key was persisted).
-    result = notify.push_next_tasks([{"id": "1"}], [], {"fill": 0.5, "color": "yellow"}, "v2")
-    assert result is False
-    assert len(calls) == 2
+
+def test_alert_dedup_key_suppresses_repeat_calls_same_day(monkeypatch):
+    ntfy_calls = []
+    monkeypatch.setattr(notify.ntfy, "alert", lambda *a, **k: ntfy_calls.append((a, k)))
+
+    notify.alert("gym behind", dedup_key="gym:normal")
+    notify.alert("gym behind", dedup_key="gym:normal")
+    notify.alert("gym behind", dedup_key="gym:normal")
+
+    assert len(ntfy_calls) == 1
+
+
+def test_alert_dedup_key_does_not_cross_suppress_different_keys(monkeypatch):
+    """gym/homework/social/etc. each dedup on their own key -- a homework
+    alert firing today must not suppress a same-day gym alert."""
+    ntfy_calls = []
+    monkeypatch.setattr(notify.ntfy, "alert", lambda *a, **k: ntfy_calls.append((a, k)))
+
+    notify.alert("gym behind", dedup_key="gym:normal")
+    notify.alert("hw due", dedup_key="hw:some-task")
+
+    assert len(ntfy_calls) == 2
+
+
+def test_alert_without_dedup_key_always_sends(monkeypatch):
+    ntfy_calls = []
+    monkeypatch.setattr(notify.ntfy, "alert", lambda *a, **k: ntfy_calls.append((a, k)))
+
+    notify.alert("one-off")
+    notify.alert("one-off")
+
+    assert len(ntfy_calls) == 2
+
+
+def test_alert_dedup_key_only_marks_sent_after_a_successful_send(monkeypatch):
+    """A failed send (ntfy.alert raising) must not mark the dedup key --
+    otherwise a transient ntfy outage would silently suppress the alert for
+    the rest of the day even though it never actually landed."""
+    def _boom(*a, **k):
+        raise RuntimeError("ntfy.sh unreachable")
+    monkeypatch.setattr(notify.ntfy, "alert", _boom)
+
+    with pytest.raises(RuntimeError):
+        notify.alert("gym behind", dedup_key="gym:normal")
+
+    ntfy_calls = []
+    monkeypatch.setattr(notify.ntfy, "alert", lambda *a, **k: ntfy_calls.append((a, k)))
+    notify.alert("gym behind", dedup_key="gym:normal")
+
+    assert len(ntfy_calls) == 1

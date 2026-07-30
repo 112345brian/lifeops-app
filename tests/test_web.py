@@ -281,6 +281,25 @@ def test_api_health_reports_registered_token_and_last_send(tmp_path, monkeypatch
     assert body["fcm_last_send"] == {"type": "briefing", "ok": False, "at": body["fcm_last_send"]["at"]}
 
 
+def test_canvas_status_reads_needs_relogin_from_the_shared_alert_dedup_store(tmp_path, monkeypatch):
+    """_canvas_status's needs_relogin now reads the same alert_dedup:<key>
+    storage notify.alert(dedup_key=...) writes to (migrated off the old
+    private/logs/alert_state.json file as part of unifying every
+    notification's dedup behind notify.py) -- confirms it reflects a
+    same-day canvas:session alert and nothing else."""
+    from lifeops import canvas_browser, notify
+    monkeypatch.setattr(history, "ROOT", str(tmp_path))
+    monkeypatch.setattr(canvas_browser, "profile_exists", lambda: True)
+    monkeypatch.setattr(notify.ntfy, "alert", lambda *a, **k: None)
+
+    today = datetime.date.today().isoformat()
+    assert web._canvas_status()["needs_relogin"] is False
+
+    notify.alert("Canvas session expired", dedup_key=f"canvas:session:{today}")
+
+    assert web._canvas_status() == {"profile_exists": True, "needs_relogin": True}
+
+
 def test_api_location_persists_valid_coordinates(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "WEB_TOKEN", "")
     monkeypatch.setattr(history, "ROOT", str(tmp_path))
