@@ -59,7 +59,11 @@ def test_alert_default_msg_type_adds_no_tag(monkeypatch):
     assert calls[0][1]["tags"] is None
 
 
-def test_push_briefing_falls_back_to_ntfy_when_fcm_noops(monkeypatch):
+def test_push_briefing_never_falls_back_to_ntfy(monkeypatch):
+    """Unlike push_next_tasks, push_briefing has no ntfy fallback --
+    runner.py's run_briefing already sends the full briefing text over ntfy
+    unconditionally before this runs, so a second "FCM unavailable" alert
+    on top would just be redundant noise, not a genuine fallback."""
     monkeypatch.setattr(notify.fcm, "send_briefing", lambda date, text, facts, version: False)
     alert_calls = []
     monkeypatch.setattr(notify, "alert", lambda *a, **k: alert_calls.append((a, k)))
@@ -67,18 +71,6 @@ def test_push_briefing_falls_back_to_ntfy_when_fcm_noops(monkeypatch):
     result = notify.push_briefing("2026-07-12", "text", {"gym": 2}, "abc123")
 
     assert result is False
-    assert len(alert_calls) == 1
-    assert alert_calls[0][1]["msg_type"] == "system_health"
-
-
-def test_push_briefing_no_fallback_when_fcm_sends(monkeypatch):
-    monkeypatch.setattr(notify.fcm, "send_briefing", lambda date, text, facts, version: True)
-    alert_calls = []
-    monkeypatch.setattr(notify, "alert", lambda *a, **k: alert_calls.append((a, k)))
-
-    result = notify.push_briefing("2026-07-12", "text", {"gym": 2}, "abc123")
-
-    assert result is True
     assert alert_calls == []
 
 
@@ -122,28 +114,25 @@ def test_push_next_tasks_fallback_dedups_within_the_same_day(monkeypatch):
     assert len(alert_calls) == 1
 
 
-def test_push_briefing_fallback_dedups_within_the_same_day(monkeypatch):
-    monkeypatch.setattr(notify.fcm, "send_briefing",
-                        lambda date, text, facts, version: False)
-    alert_calls = []
-    monkeypatch.setattr(notify, "alert", lambda *a, **k: alert_calls.append((a, k)))
-
-    notify.push_briefing("2026-07-12", "text", {"gym": 2}, "v1")
-    notify.push_briefing("2026-07-12", "text", {"gym": 2}, "v2")
-
-    assert len(alert_calls) == 1
-
-
-def test_push_briefing_and_push_next_tasks_fallback_dedup_independently(monkeypatch):
-    """The two push types must not share a dedup key -- a broken briefing
-    push shouldn't suppress the (separately useful) next-tasks fallback."""
-    monkeypatch.setattr(notify.fcm, "send_briefing", lambda date, text, facts, version: False)
+def test_push_next_tasks_fallback_swallows_alert_failure_and_does_not_dedup(monkeypatch):
+    """A failure sending the fallback itself (e.g. ntfy.sh briefly down)
+    must not raise out of push_next_tasks (side-channel only, its return
+    value contract is untouched) and must not persist the dedup key --
+    otherwise a transient ntfy outage would silently suppress the fallback
+    for the rest of the day even though it never actually landed."""
     monkeypatch.setattr(notify.fcm, "send_next_tasks",
                         lambda tasks, events, gym_ring, version: False)
-    alert_calls = []
-    monkeypatch.setattr(notify, "alert", lambda *a, **k: alert_calls.append((a, k)))
+    calls = []
+    def _boom(*a, **k):
+        calls.append((a, k))
+        raise RuntimeError("ntfy.sh unreachable")
+    monkeypatch.setattr(notify, "alert", _boom)
 
-    notify.push_briefing("2026-07-12", "text", {"gym": 2}, "v1")
-    notify.push_next_tasks([{"id": "1"}], [], {"fill": 0.5, "color": "yellow"}, "v1")
+    result = notify.push_next_tasks([{"id": "1"}], [], {"fill": 0.5, "color": "yellow"}, "v1")
+    assert result is False
+    assert len(calls) == 1
 
-    assert len(alert_calls) == 2
+    # A second call the same day retries (no dedup key was persisted).
+    result = notify.push_next_tasks([{"id": "1"}], [], {"fill": 0.5, "color": "yellow"}, "v2")
+    assert result is False
+    assert len(calls) == 2

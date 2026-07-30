@@ -83,6 +83,33 @@ def test_send_records_last_send_outcome_on_success(tmp_path, monkeypatch):
     assert last_send["at"]
 
 
+def test_send_records_ok_false_when_messaging_send_raises(tmp_path, monkeypatch):
+    """A real send failure (e.g. the "Message is too large" case this repo
+    has hit in production, or a stale/UnregisteredError token) must still
+    update fcm_last_send to ok=False -- otherwise the health record keeps
+    reporting the previous call's "ok": True indefinitely, exactly the
+    failure mode this record exists to surface."""
+    monkeypatch.setattr(history, "ROOT", str(tmp_path))
+    fcm.register_token("d" * 20)
+    fake_cred_file = tmp_path / "service-account.json"
+    fake_cred_file.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(config, "FCM_SERVICE_ACCOUNT_FILE", str(fake_cred_file))
+    monkeypatch.setattr(fcm, "_firebase_app", lambda: "fake-app")
+
+    messaging = pytest.importorskip("firebase_admin.messaging")
+    def _raise(message, app):
+        raise RuntimeError("simulated send failure")
+    monkeypatch.setattr(messaging, "send", _raise)
+
+    with pytest.raises(RuntimeError):
+        fcm.send_next_tasks([{"id": "1"}], [], {"fill": 0.0, "color": "red"}, "abc123")
+
+    last_send = db.local_get("fcm_last_send")
+    assert last_send["type"] == "next_tasks"
+    assert last_send["ok"] is False
+    assert last_send["at"]
+
+
 def test_send_next_tasks_noop_without_registered_token(tmp_path, monkeypatch):
     monkeypatch.setattr(history, "ROOT", str(tmp_path))
 

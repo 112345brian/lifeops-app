@@ -40,16 +40,28 @@ def alert(text, priority="default", tags=None, actions=None, click_anchor="", ms
 
 
 def _fallback_alert_once(key, text, click_anchor=""):
-    """Sends the "FCM push unavailable" fallback at most once per calendar
-    day per key -- mirrors runner.py's _alert_once, needed here (rather than
-    left to a caller) because push_next_tasks runs on the ~10-min tick
-    cadence (runner.py's push_next_tasks/_push_with_ack), so a persistently
-    broken FCM would otherwise spam an ntfy alert every tick forever."""
+    """Sends a "push unavailable" fallback at most once per calendar day per
+    key -- mirrors runner.py's _alert_once, needed here (rather than left to
+    a caller) because push_next_tasks runs on the ~10-min tick cadence
+    (runner.py's push_next_tasks/_push_with_ack), so a persistently broken
+    FCM would otherwise spam an ntfy alert every tick forever.
+
+    Swallows (logs, doesn't raise) any failure sending the fallback itself
+    -- e.g. ntfy.sh briefly down -- rather than letting it escape: this is a
+    best-effort side channel (see push_next_tasks's docstring, "the returned
+    bool is untouched"), and an ntfy hiccup here must not turn an otherwise
+    successful push cycle into an error. The dedup key is deliberately only
+    persisted on a successful send, so a swallowed failure retries next
+    call instead of silently giving up for the rest of the day."""
     today = datetime.date.today().isoformat()
     dedup_key = f"push_fallback_alerted:{key}"
     if db.local_get(dedup_key, default={}).get("date") == today:
         return
-    alert(text, click_anchor=click_anchor, msg_type="system_health")
+    try:
+        alert(text, click_anchor=click_anchor, msg_type="system_health")
+    except Exception as e:
+        print(f"[notify] fallback alert for {key!r} failed: {e}")
+        return
     db.local_set(dedup_key, {"date": today})
 
 
@@ -57,19 +69,13 @@ def push_briefing(date, text, facts, version):
     """Push the structured daily briefing to rich clients. Returns whether a
     send was actually attempted -- see fcm.send_briefing's docstring.
 
-    If FCM no-oped (no registered device token, or no service-account file on
-    disk -- see fcm._send's docstring), falls back to a short ntfy alert (at
-    most once/day, see _fallback_alert_once) so the user still learns the
-    briefing is ready instead of the push silently vanishing. This is a
-    side-channel only: the returned bool still reflects the FCM attempt,
-    unchanged, so runner.py's ack-tracking bookkeeping (_push_with_ack)
-    keeps working exactly as before."""
-    sent = fcm.send_briefing(date, text, facts, version)
-    if not sent:
-        _fallback_alert_once("briefing",
-            "Briefing ready — FCM push unavailable, check the panel.",
-            click_anchor="#briefing")
-    return sent
+    No ntfy fallback here (unlike push_next_tasks): runner.py's run_briefing
+    already sends the full briefing text over ntfy unconditionally
+    (_alert_once("briefing:"+date, ...)) before this is even called, so an
+    FCM-unavailable install already gets the content -- a second "FCM push
+    unavailable" alert on top would just be redundant noise, not a genuine
+    fallback."""
+    return fcm.send_briefing(date, text, facts, version)
 
 
 def push_next_tasks(tasks, events, gym_ring, version):

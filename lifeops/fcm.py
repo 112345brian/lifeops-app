@@ -79,7 +79,20 @@ def _send(msg_type, payload_dict, version):
         data={"type": msg_type, "version": version, "payload": json.dumps(payload_dict)}, token=token,
         android=messaging.AndroidConfig(priority="high"),
     )
-    messaging.send(message, app=_firebase_app())
+    try:
+        messaging.send(message, app=_firebase_app())
+    except Exception:
+        # A real send failure (e.g. the "Message is too large" case above,
+        # or an UnregisteredError for a stale token) must still update the
+        # health record -- otherwise it keeps reporting the previous call's
+        # "ok": True indefinitely, which is exactly the failure mode this
+        # record exists to surface. Re-raised unchanged: callers up through
+        # runner.py's dispatch loop already fail loud on push errors.
+        db.local_set("fcm_last_send", {
+            "type": msg_type, "ok": False,
+            "at": datetime.datetime.now().isoformat(timespec="seconds"),
+        })
+        raise
     db.local_set("fcm_last_send", {
         "type": msg_type, "ok": True,
         "at": datetime.datetime.now().isoformat(timespec="seconds"),

@@ -637,7 +637,10 @@ def _fcm_health():
     if registered_at:
         try:
             delta = datetime.datetime.now() - datetime.datetime.fromisoformat(registered_at)
-            age_hours = round(delta.total_seconds() / 3600, 1)
+            # max(0, ...): naive-local-time subtraction can go slightly
+            # negative across a DST fall-back rather than reflect a
+            # meaningful negative age.
+            age_hours = max(0.0, round(delta.total_seconds() / 3600, 1))
         except Exception:
             pass
     return {
