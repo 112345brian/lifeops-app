@@ -112,3 +112,44 @@ def local_set(key, value):
         conn.commit()
     finally:
         conn.close()
+
+
+def state_get(key, default=None):
+    """Same shape as local_get, against the durable/backed-up state.db
+    instead -- for values that need a single atomic per-key upsert (one
+    SQL statement, no read-modify-write race) AND need to survive a
+    restore, unlike local_get/local_set's intentionally-ephemeral values.
+    state_store.py's load_json/save_json_atomic also write kv_state rows
+    in this same database, but key them off a `path` argument's basename;
+    this is for a caller with its own natural key string (notify.py's
+    alert-dedup marks) that would rather not force one through a
+    filesystem-path shape (a literal "/" in a task-title-derived key would
+    silently get truncated by os.path.basename)."""
+    try:
+        conn = state_conn()
+        try:
+            row = conn.execute("SELECT value FROM kv_state WHERE key=?", (key,)).fetchone()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return default
+    if row is None:
+        return default
+    try:
+        return json.loads(row[0])
+    except json.JSONDecodeError:
+        return default
+
+
+def state_set(key, value):
+    now = datetime.datetime.now().isoformat(timespec="seconds")
+    conn = state_conn()
+    try:
+        conn.execute(
+            "INSERT INTO kv_state(key, value, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+            (key, json.dumps(value), now),
+        )
+        conn.commit()
+    finally:
+        conn.close()

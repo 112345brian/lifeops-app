@@ -14,12 +14,20 @@ def panel_url(path=""):
     return ntfy.panel_url(path)
 
 
-def _alerted_today(key):
-    return db.local_get(f"alert_dedup:{key}", default={}).get("date") == datetime.date.today().isoformat()
+def _dedup_db_key(key):
+    return f"notify:alert_dedup:{key}"
+
+
+def alerted_today(key):
+    """Whether alert(dedup_key=key, ...) has already sent today -- exposed
+    (not just an internal helper) so a caller can check dedup state without
+    duplicating this module's storage format, e.g. web.py's _canvas_status
+    checking whether today's canvas-session alert already fired."""
+    return db.state_get(_dedup_db_key(key), default={}).get("date") == datetime.date.today().isoformat()
 
 
 def _mark_alerted_today(key):
-    db.local_set(f"alert_dedup:{key}", {"date": datetime.date.today().isoformat()})
+    db.state_set(_dedup_db_key(key), {"date": datetime.date.today().isoformat()})
 
 
 def alert(text, priority="default", tags=None, actions=None, click_anchor="", msg_type="alert", dedup_key=None):
@@ -40,15 +48,31 @@ def alert(text, priority="default", tags=None, actions=None, click_anchor="", ms
     runner.py's ~15 tick-driven per-domain alerts (via its `_alert_once`
     wrapper, which just forwards its own `key` here) and this module's own
     push-unavailable fallback (see push_next_tasks) both go through this
-    same parameter instead of each keeping separate dedup state/storage
-    (previously runner.py used a private/logs/alert_state.json file while
-    this module used a different db key -- two mechanisms that could
-    independently decide to alert about the same underlying event, which is
-    exactly how push_briefing's now-removed fallback ended up duplicating
-    run_briefing's existing ntfy alert). web.py's `_canvas_status` reads
-    this same `alert_dedup:<key>` storage to check whether today's canvas
-    session alert already fired -- keep that in sync with any key-naming
-    change here.
+    same parameter instead of each keeping separate dedup state (previously
+    runner.py kept its own private/logs/alert_state.json file while this
+    module kept a separate, independent mechanism -- two mechanisms that
+    could independently decide to alert about the same underlying event,
+    which is exactly how push_briefing's now-removed fallback ended up
+    duplicating run_briefing's existing ntfy alert).
+
+    Storage: db.state_set/state_get, one atomic per-key SQL upsert against
+    the durable, backed-up state.db (matching the old alert_state.json
+    file's own durability -- unlike db.local_get/local_set's ephemeral
+    local.db, which would silently lose dedup history across a restore).
+    Deliberately NOT one shared JSON blob holding every key (the earlier
+    shape this went through in review): web.py's control panel and
+    runner.py's scheduled tick are separate OS processes that can call
+    alert() for two DIFFERENT keys at the same moment (e.g. a user clicking
+    "run gym now" in the panel while the tick is mid-run) -- a shared
+    blob's read-modify-write would let the second writer's stale in-memory
+    copy silently clobber the first writer's key on save (a lost update
+    across UNRELATED keys, not just a same-key race). One row per key
+    avoids that entirely; each key's own mark-as-sent is a single atomic
+    SQL statement. (A same-key double-fire -- two processes racing the
+    exact same dedup_key -- is still possible in the narrow window between
+    the read and the write for THAT key; this existed in the original
+    file-based design too and is a much rarer, lower-consequence case than
+    the cross-key clobber above, so it's left alone for now.)
 
     The dedup key is only marked sent AFTER ntfy.alert succeeds: a failed
     send (e.g. ntfy.sh briefly down) leaves it unmarked so the NEXT call
@@ -59,7 +83,7 @@ def alert(text, priority="default", tags=None, actions=None, click_anchor="", ms
     never raise) catches it there instead, since for every other caller in
     this codebase a failed alert should fail loud, not be silently eaten.
     """
-    if dedup_key is not None and _alerted_today(dedup_key):
+    if dedup_key is not None and alerted_today(dedup_key):
         return
     if msg_type != "alert":
         tags = list(tags or []) + [msg_type]

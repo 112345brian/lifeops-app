@@ -45,3 +45,46 @@ def test_local_db_is_independent_of_state_db(tmp_path, monkeypatch):
     finally:
         conn.close()
     assert row is None
+
+
+def test_state_get_set_round_trip(tmp_path, monkeypatch):
+    monkeypatch.setattr(history, "ROOT", str(tmp_path))
+
+    db.state_set("notify:alert_dedup:gym:normal", {"date": "2026-07-30"})
+
+    assert db.state_get("notify:alert_dedup:gym:normal") == {"date": "2026-07-30"}
+
+
+def test_state_get_returns_default_when_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(history, "ROOT", str(tmp_path))
+
+    assert db.state_get("notify:alert_dedup:nothing-here", default={}) == {}
+
+
+def test_state_get_degrades_to_default_on_locked_database(tmp_path, monkeypatch):
+    monkeypatch.setattr(history, "ROOT", str(tmp_path))
+
+    def _boom():
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(db, "state_conn", _boom)
+
+    assert db.state_get("notify:alert_dedup:gym:normal", default={"fallback": True}) == {"fallback": True}
+
+
+def test_state_set_is_visible_through_the_durable_state_db_not_local_db(tmp_path, monkeypatch):
+    """The inverse of test_local_db_is_independent_of_state_db: state_set
+    must land in the tracked, backed-up state.db, not the ephemeral,
+    never-backed-up local.db -- this is the whole point of adding it
+    (notify.py's alert-dedup marks need to survive a restore, unlike FCM
+    token/weather cache, which don't)."""
+    monkeypatch.setattr(history, "ROOT", str(tmp_path))
+
+    db.state_set("notify:alert_dedup:gym:normal", {"date": "2026-07-30"})
+
+    conn = db.local_conn()
+    try:
+        row = conn.execute(
+            "SELECT value FROM kv_state WHERE key='notify:alert_dedup:gym:normal'").fetchone()
+    finally:
+        conn.close()
+    assert row is None

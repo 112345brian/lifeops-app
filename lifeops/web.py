@@ -362,18 +362,17 @@ def _save_sched_blocks(entries):
     _write_json(SCHED_BLOCKS_FILE, pruned)
 
 def _canvas_status():
-    """Cheap status for the Accounts card — reads the same alert-dedup record
-    runner.py's _alert_once/notify.alert(dedup_key=...) writes to instead of
-    launching a browser on every page load. `needs_relogin` is only a
-    same-day signal: it's set once the daily sync alerts that the session
-    expired, and cleared the next day regardless of whether you actually
-    re-logged in."""
-    from . import canvas_browser
+    """Cheap status for the Accounts card — asks notify.alerted_today the
+    same question runner.py's _alert_once/notify.alert(dedup_key=...)
+    answers when deciding whether to (re-)send, instead of launching a
+    browser on every page load. `needs_relogin` is only a same-day signal:
+    it's set once the daily sync alerts that the session expired, and
+    cleared the next day regardless of whether you actually re-logged in."""
+    from . import canvas_browser, notify
     today = datetime.date.today().isoformat()
-    dedup = db.local_get(f"alert_dedup:canvas:session:{today}", default={})
     return {
         "profile_exists": canvas_browser.profile_exists(),
-        "needs_relogin":  dedup.get("date") == today,
+        "needs_relogin":  notify.alerted_today("canvas:session:" + today),
     }
 
 def _canvas_pending():
