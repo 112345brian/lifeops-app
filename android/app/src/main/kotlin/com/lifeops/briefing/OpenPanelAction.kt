@@ -12,10 +12,12 @@ import androidx.glance.appwidget.action.ActionCallback
  * to jump into the full LifeOps control panel.
  *
  * If the widget hasn't been configured yet (no base URL saved), opens
- * [SettingsActivity] instead so the user can set one up. Otherwise deep-links
- * into the panel's briefing card using the same "#briefing" URL-fragment
- * convention the server's ntfy alerts already use via panel_url() in
- * lifeops/ntfy.py.
+ * [SettingsActivity] instead so the user can set one up. Otherwise opens
+ * [PanelActivity] (an in-app WebView) on the panel's briefing card, using the
+ * same "#briefing" URL-fragment convention the server's ntfy alerts already
+ * use via panel_url() in lifeops/ntfy.py -- in-app, not an external browser
+ * tab (Intent.ACTION_VIEW), so the panel reads as part of this app rather
+ * than kicking out to Chrome.
  *
  * Glance action callbacks run outside of an Activity context, so any Intent
  * that starts an Activity needs FLAG_ACTIVITY_NEW_TASK.
@@ -35,7 +37,7 @@ class OpenPanelAction : ActionCallback {
             // nothing (see ntfy.panel_url's matching fix server-side).
             val token = WidgetConfigStore.getToken(context)
             val url = if (token != null) "$baseUrl/?token=${Uri.encode(token)}#briefing" else "$baseUrl/#briefing"
-            Intent(Intent.ACTION_VIEW, Uri.parse(url))
+            PanelActivity.intent(context, url)
         }
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(intent)

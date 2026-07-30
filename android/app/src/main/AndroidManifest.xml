@@ -46,6 +46,15 @@
             </intent-filter>
         </activity>
 
+        <!-- Hosts the full control panel in an in-app WebView (see
+             PanelActivity.kt / OpenPanelAction.kt) instead of an external
+             browser tab. exported=true for the same reason as
+             SettingsActivity above: launched via an Intent from a Glance
+             action callback, which runs under the launcher/host process. -->
+        <activity
+            android:name=".PanelActivity"
+            android:exported="true" />
+
         <!-- Per-widget-instance display customization, launched by the
              App Widget host (a different process/UID, hence exported=true,
              same reasoning as SettingsActivity above) whenever a widget is
