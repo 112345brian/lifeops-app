@@ -243,6 +243,44 @@ def test_api_register_fcm_token_rejects_malformed_token(tmp_path, monkeypatch):
     assert web.fcm._device_token() == ""
 
 
+def test_api_health_reports_no_token_registered(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "WEB_TOKEN", "")
+    monkeypatch.setattr(history, "ROOT", str(tmp_path))
+    (tmp_path / "logs").mkdir(exist_ok=True)
+
+    response = TestClient(web.app).get("/api/health")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["fcm_token_registered"] is False
+    assert body["fcm_token_age_hours"] is None
+    assert body["fcm_last_send"] is None
+    assert "last_run" in body
+
+
+def test_api_health_reports_registered_token_and_last_send(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "WEB_TOKEN", "")
+    monkeypatch.setattr(history, "ROOT", str(tmp_path))
+    (tmp_path / "logs").mkdir(exist_ok=True)
+    # Pin to a definitely-nonexistent path so this deterministically hits
+    # _send's no-op branch regardless of whether real Firebase credentials
+    # happen to be on disk on the machine running the suite (they are, on
+    # the live server) -- otherwise this would attempt a real Firebase send
+    # with a fake token instead of the no-op path the test expects.
+    monkeypatch.setattr(config, "FCM_SERVICE_ACCOUNT_FILE", str(tmp_path / "no-such-cred.json"))
+    token = "d" * 20 + ":APA91b" + "x" * 100
+    web.fcm.register_token(token)
+    web.fcm.send_briefing("2026-07-13", "text", {"gym": 2}, "v1")  # no-ops, still records an attempt
+
+    response = TestClient(web.app).get("/api/health")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["fcm_token_registered"] is True
+    assert body["fcm_token_age_hours"] >= 0
+    assert body["fcm_last_send"] == {"type": "briefing", "ok": False, "at": body["fcm_last_send"]["at"]}
+
+
 def test_api_location_persists_valid_coordinates(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "WEB_TOKEN", "")
     monkeypatch.setattr(history, "ROOT", str(tmp_path))

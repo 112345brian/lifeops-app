@@ -21,7 +21,11 @@ def test_register_token_persists_and_round_trips(tmp_path, monkeypatch):
     assert fcm._device_token() == token
 
     saved = db.local_get("fcm_token")
-    assert saved == {"token": token}
+    assert saved["token"] == token
+    # registered_at is a real, parseable ISO-8601 timestamp -- this is what
+    # /api/health uses to compute token age.
+    import datetime
+    datetime.datetime.fromisoformat(saved["registered_at"])
 
 
 def test_register_token_last_write_wins(tmp_path, monkeypatch):
@@ -44,6 +48,39 @@ def test_send_briefing_noop_without_registered_token(tmp_path, monkeypatch):
     monkeypatch.setattr(history, "ROOT", str(tmp_path))
 
     assert fcm.send_briefing("2026-07-13", "text", {"gym": 2}, "v1") is False
+
+
+def test_send_records_last_send_outcome_on_noop(tmp_path, monkeypatch):
+    """Even a no-op (no token registered) should durably record the attempt
+    so /api/health can surface "sends have been no-oping" instead of just
+    silence."""
+    monkeypatch.setattr(history, "ROOT", str(tmp_path))
+
+    fcm.send_briefing("2026-07-13", "text", {"gym": 2}, "v1")
+
+    last_send = db.local_get("fcm_last_send")
+    assert last_send["type"] == "briefing"
+    assert last_send["ok"] is False
+    assert last_send["at"]
+
+
+def test_send_records_last_send_outcome_on_success(tmp_path, monkeypatch):
+    monkeypatch.setattr(history, "ROOT", str(tmp_path))
+    fcm.register_token("d" * 20)
+    fake_cred_file = tmp_path / "service-account.json"
+    fake_cred_file.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(config, "FCM_SERVICE_ACCOUNT_FILE", str(fake_cred_file))
+    monkeypatch.setattr(fcm, "_firebase_app", lambda: "fake-app")
+
+    messaging = pytest.importorskip("firebase_admin.messaging")
+    monkeypatch.setattr(messaging, "send", lambda message, app: None)
+
+    fcm.send_next_tasks([{"id": "1"}], [], {"fill": 0.0, "color": "red"}, "abc123")
+
+    last_send = db.local_get("fcm_last_send")
+    assert last_send["type"] == "next_tasks"
+    assert last_send["ok"] is True
+    assert last_send["at"]
 
 
 def test_send_next_tasks_noop_without_registered_token(tmp_path, monkeypatch):

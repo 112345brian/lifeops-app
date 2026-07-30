@@ -6,7 +6,7 @@ implicit third-party broadcasts, so the widget listens for FCM instead
 android/app/src/main/kotlin/com/lifeops/briefing/BriefingFcmService.kt for the
 receiving side and the token-registration flow.
 """
-import json, os
+import datetime, json, os
 from . import config, db
 
 _app = None
@@ -35,7 +35,12 @@ def register_token(token):
     # hardcoding Firebase's exact format.
     if not isinstance(token, str) or not (10 <= len(token) <= 4096):
         return False
-    db.local_set("fcm_token", {"token": token})
+    # Python-side local-time timestamp, matching db.local_set's own
+    # updated_at convention (see db.py) -- lets /api/health report token age
+    # without needing kv_state's row-level updated_at exposed through
+    # local_get.
+    now = datetime.datetime.now().isoformat(timespec="seconds")
+    db.local_set("fcm_token", {"token": token, "registered_at": now})
     return True
 
 def _send(msg_type, payload_dict, version):
@@ -60,6 +65,10 @@ def _send(msg_type, payload_dict, version):
     retried every tick indefinitely for no reason."""
     token = _device_token()
     if not token or not os.path.exists(config.FCM_SERVICE_ACCOUNT_FILE):
+        db.local_set("fcm_last_send", {
+            "type": msg_type, "ok": False,
+            "at": datetime.datetime.now().isoformat(timespec="seconds"),
+        })
         return False
     from firebase_admin import messaging
     # AndroidConfig priority="high" is required for prompt delivery -- the
@@ -71,6 +80,10 @@ def _send(msg_type, payload_dict, version):
         android=messaging.AndroidConfig(priority="high"),
     )
     messaging.send(message, app=_firebase_app())
+    db.local_set("fcm_last_send", {
+        "type": msg_type, "ok": True,
+        "at": datetime.datetime.now().isoformat(timespec="seconds"),
+    })
     return True
 
 # These are pure inputs to attention.compute() (see briefing_service.build)

@@ -1,0 +1,1 @@
+`notify.alert` now accepts a `msg_type` semantic tag (default `"alert"`), and `notify.push_briefing`/`push_next_tasks` fall back to an ntfy alert tagged `system_health` whenever the underlying FCM push no-ops (no registered device token, or no service-account file on disk), so the user still hears about a ready briefing or task refresh instead of the push silently vanishing.

@@ -12,7 +12,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, File
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup, escape
-from . import config, history, gather, actions, lock, fcm, location, weather, state_store
+from . import config, history, gather, actions, lock, fcm, location, weather, state_store, db
 from .flowsavvy import FlowSavvy
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -605,6 +605,7 @@ def _build_context(fs=None, include_cycle=False):
         "block_cal_set":    bool(config.BLOCK_CAL),
         "canvas_status":    _canvas_status(),
         "canvas_pending":   _canvas_pending(),
+        "fcm_health":       _fcm_health(),
         "recent_actions":   actions.recent(15),
         "briefing":         briefing,
         "attention":        current_attention,
@@ -623,6 +624,31 @@ def api_status():
         "domains":   {d: dom.get(d, True) for d in ALL_DOMAINS},
         "gym_stats": _gym_stats(),
     })
+
+def _fcm_health():
+    """Cheap widget-push health summary -- token presence/age plus the
+    outcome of the most recent send attempt (fcm._send persists both via
+    db.local_set). Not delivery confirmation, just enough to notice "no
+    token registered" or "sends have been no-oping" from the panel instead
+    of only discovering it from a silent widget."""
+    tok = db.local_get("fcm_token", default={}) or {}
+    registered_at = tok.get("registered_at")
+    age_hours = None
+    if registered_at:
+        try:
+            delta = datetime.datetime.now() - datetime.datetime.fromisoformat(registered_at)
+            age_hours = round(delta.total_seconds() / 3600, 1)
+        except Exception:
+            pass
+    return {
+        "fcm_token_registered": bool(tok.get("token")),
+        "fcm_token_age_hours":  age_hours,
+        "fcm_last_send":        db.local_get("fcm_last_send", default=None),
+    }
+
+@app.get("/api/health")
+def api_health():
+    return JSONResponse({**_fcm_health(), "last_run": _last_run()})
 
 @app.get("/api/history")
 def api_history(n: int = 50):

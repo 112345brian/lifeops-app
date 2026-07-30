@@ -1,6 +1,6 @@
 import pytest
 
-from lifeops import history
+from lifeops import config, history
 
 
 @pytest.fixture(autouse=True)
@@ -23,3 +23,26 @@ def _isolate_lifeops_state(tmp_path, monkeypatch):
     fixture's patch harmlessly -- same effect, still isolated.
     """
     monkeypatch.setattr(history, "ROOT", str(tmp_path))
+
+
+@pytest.fixture(autouse=True)
+def _block_real_outbound_notifications(monkeypatch):
+    """config.py loads private/.env's REAL secrets into os.environ at import
+    time (module-load, before any per-test monkeypatch can run), so
+    ntfy.alert's real, unauthenticated POST to https://ntfy.sh/<real topic>
+    and fcm._send's real Firebase send are both live by default in every
+    test process on this machine -- they only no-op if the topic/service
+    account happen to be unset, which they aren't here. This is the same
+    class of leak _isolate_lifeops_state fixed for local state on
+    2026-07-28, just for outbound network calls instead of on-disk state
+    (confirmed 2026-07-30: a routine full-suite run fired ~10 real ntfy
+    alerts to the real phone from tests that never intended to send
+    anything real). Blank/nonexistent values make both transports' own
+    no-op guards kick in (ntfy.py checks `if not config.NTFY_*_TOPIC`;
+    fcm._send checks `if not token or not os.path.exists(...)`), so a test
+    that wants to verify real-looking send behavior must still explicitly
+    monkeypatch these back (or mock the transport directly) -- this fixture
+    only removes the *unintentional* default exposure."""
+    monkeypatch.setattr(config, "NTFY_ALERTS_TOPIC", "")
+    monkeypatch.setattr(config, "NTFY_SIGNAL_TOPIC", "")
+    monkeypatch.setattr(config, "FCM_SERVICE_ACCOUNT_FILE", "")

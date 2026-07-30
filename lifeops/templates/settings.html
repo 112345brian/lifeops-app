@@ -79,4 +79,28 @@
   </form>
 </div>
 
+<!-- ── System Health ── -->
+<div class="card section" id="health">
+  <div class="card-title">System Health</div>
+  <div class="domain-row">
+    <span class="domain-icon">📲</span>
+    <span class="domain-name">Widget push (FCM)</span>
+    {% if fcm_health.fcm_token_registered %}
+      <span class="badge badge-on" style="cursor:default;">registered
+        {%- if fcm_health.fcm_token_age_hours is not none %} ({{ fcm_health.fcm_token_age_hours }}h old){% endif -%}
+      </span>
+    {% else %}
+      <span class="badge badge-off" style="cursor:default;">not registered</span>
+    {% endif %}
+  </div>
+  <div class="gym-note">
+    {% if fcm_health.fcm_last_send %}
+      Last push attempt: <b>{{ fcm_health.fcm_last_send.type }}</b> at {{ fcm_health.fcm_last_send.at }} —
+      {% if fcm_health.fcm_last_send.ok %}sent{% else %}no-op (no token or service account){% endif %}.
+    {% else %}
+      No push attempted yet.
+    {% endif %}
+  </div>
+</div>
+
 {% endblock %}

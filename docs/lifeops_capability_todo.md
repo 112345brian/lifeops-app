@@ -61,24 +61,32 @@ for fit, risk, and overlap with the existing codebase.
 
 ## Actions API
 
-- Add `POST /api/tasks/{id}/complete`.
-- Add `POST /api/gym/log`.
-- Add `POST /api/gym/skip`.
-- Add `POST /api/schedule/block-day`.
-- Add `POST /api/domains/{name}/run`.
-- Make Android use the direct API when reachable.
-- Keep ntfy signal path as fallback when the phone is not on tailnet.
-- Return fresh next-actions/attention state after mutations where practical.
+Shipped (confirmed 2026-07-30 against `lifeops/web.py`/`tests/test_web.py`, this
+section was stale): `POST /api/tasks/{id}/complete`, `/api/gym/log`,
+`/api/gym/skip`, `/api/schedule/block-day`, `/api/domains/{name}/run` all
+exist, are tested, and return fresh attention/next-actions state after
+mutating. Direct-call + ntfy-fallback plumbing (`SimpleHttp.kt`) exists on
+Android too, but only `/api/tasks/{id}/complete` has an Android caller
+(`CompleteTaskAction.kt`) — the other four have no client yet because there's
+no Android UI surface to trigger them from (see "Android App"'s Today-app
+item below; this isn't a backend gap, it's a client-UI gap).
 
 ## Notification Architecture
 
-- Expand `lifeops/notify.py` into real channels: `ntfy`, `fcm`, and possibly
-  Web Push later.
-- Give notifications semantic types: `briefing`, `urgent_alert`,
-  `action_result`, `system_health`.
-- Keep ntfy as cross-platform fallback and signal bus, not the primary UX.
-- Avoid leaking transport details into domain logic.
-- Add tests for routing and fallback behavior.
+Shipped (2026-07-30): `notify.alert` now takes an optional `msg_type`
+(`"system_health"` in active use; `"urgent_alert"`/`"action_result"` are
+available names, not yet called by any domain) threaded onto ntfy's tags.
+`notify.push_briefing`/`push_next_tasks` fall back to an ntfy alert
+(deduped once/day per push type, matching `runner.py`'s `_alert_once`
+cadence) when FCM no-ops, so a broken/unconfigured FCM no longer silently
+drops the briefing/next-tasks push. Tests cover the routing, the fallback,
+and the once/day dedup (`tests/test_notify.py`).
+
+Still open:
+- Web Push as a third channel (only an aspirational docstring mention
+  today, nothing implemented).
+- Real per-domain use of `urgent_alert`/`action_result` types beyond the
+  new fallback's `system_health` — today only one call site exists.
 
 ## Android App
 
@@ -212,6 +220,18 @@ approach — not top-level modules. Titles, cadence, and nudge-vs-task
 choice move from `config.py` constants (`PARTNER_TASK`, `FRIENDS_TASK`,
 hardcoded gym target) into user-editable `Routine` records.
 
+Settled UI principle for whenever a routine editor gets built (settled
+2026-07-30, not yet implemented — `lifeops/routine_store.py`'s `load_routine`
+returning `(Routine, extra)` already draws this exact boundary at the data
+layer): default every routine editor to a **basic view** — the plain
+`times`/`per_days`/`anchor` fields plus known simple `extra` keys (gym's
+`floor`/`max_consecutive`) — with an opt-in **advanced view** for actual
+code (the `constraints` script escape hatch above, and eventually the
+cross-routine gate expressions below). Same reasoning as Liftosaur shipping
+canned progressions so most users never touch raw Liftoscript: simple
+fields cover the common case, a script covers the rest, and the UI should
+not force everyone through the scripting surface to change a number.
+
 ### Cross-routine gating ("meta logic")
 
 Real gap in the model above: every recurrence system researched (Loop,
@@ -321,6 +341,9 @@ the on-phone execution move discussed elsewhere in this doc/CHANGELOG.
 - Do not make the widget a mini dashboard.
 - Make the full app dense but calm.
 - Avoid marketing-page composition; this is an operational tool.
+- Any editor for routines/recurring items defaults to a basic view (simple
+  fields); scripting/expressions are an opt-in advanced view, never the
+  only way to change a plain number.
 
 ## Suggested Sequence
 
@@ -329,3 +352,7 @@ the on-phone execution move discussed elsewhere in this doc/CHANGELOG.
 3. Redesign the full app home around Today/Attention/Actions.
 4. Add the direct action API.
 5. Turn the Android launcher into a tiny Today app.
+6. Build a routine editor (basic view: simple fields over
+   `routine_store.load_routine`/`save_routine`; advanced view: the
+   `constraints` script escape hatch, later cross-routine gate
+   expressions) — not yet scoped, no UI/page/endpoint exists today.
