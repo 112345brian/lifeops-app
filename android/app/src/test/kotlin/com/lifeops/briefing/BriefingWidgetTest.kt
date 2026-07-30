@@ -135,6 +135,45 @@ class BriefingWidgetTest {
     }
 
     @Test
+    fun bucketFor_squareSizes_matchHeightTierAtEachBucket() {
+        assertEquals(WidgetSizeBucket.SMALL, bucketFor(DpSize(130.dp, 90.dp)))
+        assertEquals(WidgetSizeBucket.MEDIUM, bucketFor(DpSize(250.dp, 150.dp)))
+        assertEquals(WidgetSizeBucket.LARGE, bucketFor(DpSize(250.dp, 250.dp)))
+    }
+
+    @Test
+    fun bucketFor_narrowButTall_readsAsSmall() {
+        // A launcher that grants a narrow-but-tall footprint (confirmed on
+        // Smart Launcher, see bucketFor's own comment) used to read as
+        // MEDIUM/LARGE purely because it was tall enough -- must now be
+        // capped by the constrained width axis instead.
+        assertEquals(WidgetSizeBucket.SMALL, bucketFor(DpSize(100.dp, 250.dp)))
+    }
+
+    @Test
+    fun bucketFor_shortButWide_readsAsSmall() {
+        assertEquals(WidgetSizeBucket.SMALL, bucketFor(DpSize(250.dp, 80.dp)))
+    }
+
+    @Test
+    fun bucketFor_heightBoundariesAreExclusive() {
+        // bucketFor's `<` comparisons mean the boundary value itself belongs
+        // to the LARGER bucket, not the smaller one. Width is held past its
+        // own LARGE threshold (>= MEDIUM_SIZE.width) so only the height axis
+        // can constrain the result.
+        assertEquals(WidgetSizeBucket.MEDIUM, bucketFor(DpSize(300.dp, 150.dp)))  // height == MEDIUM_SIZE.height
+        assertEquals(WidgetSizeBucket.LARGE, bucketFor(DpSize(300.dp, 250.dp)))   // height == LARGE_SIZE.height
+    }
+
+    @Test
+    fun bucketFor_widthBoundariesAreExclusive() {
+        // Height held past its own LARGE threshold (>= LARGE_SIZE.height) so
+        // only the width axis can constrain the result.
+        assertEquals(WidgetSizeBucket.MEDIUM, bucketFor(DpSize(130.dp, 300.dp)))  // width == SMALL_SIZE.width
+        assertEquals(WidgetSizeBucket.LARGE, bucketFor(DpSize(250.dp, 300.dp)))   // width == MEDIUM_SIZE.width
+    }
+
+    @Test
     fun smallSize_showsBadgeAndCompactTiles_butNotParagraphOrFreshness() = runGlanceAppWidgetUnitTest {
         setAppWidgetSize(DpSize(120.dp, 90.dp))
         provideComposable {
