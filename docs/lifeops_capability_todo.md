@@ -457,29 +457,46 @@ biometric gate before each API call was considered and rejected for
 background-worker reads specifically (breaks unattended refresh); reserve
 that idea for a future user-initiated write action instead.
 
-**Core engine logic is mostly pure and cleanly portable to Kotlin.**
-Portability order (easiest/highest-leverage first, since gym/chore/social/
-meal/deadline all build on the shared primitive):
-1. `lifeops/routine.py` — fully pure, no I/O, the shared due-check math
-   everything else depends on. Port and test this first.
-2. `lifeops/engines/ynab_engine.py` — fully pure and fully self-contained
-   (only needs `defaultdict(Counter)`/`most_common` idiom translation).
-3. `lifeops/engines/gym_engine.py`, `chore_engine.py`, `social_engine.py` —
-   all pure `plan()` functions; the I/O (logging, file reads) each does
-   today is trivially dropped/replaced.
-4. `runner.py`'s meal-prep due-check (`routine_store.load_routine("meal")` +
-   simple date math) is a small pure core buried inside a larger function
-   that's otherwise genuinely I/O-entangled (FlowSavvy create/delete, ntfy
-   polling for skip signals) — extract the core, redesign the rest.
-5. Deadline-risk watchdog (`load_engine.py`'s `deadline_risk`/
-   `_deadline_crunch` family) — fully pure, shared by two call sites today
-   so they can't already disagree, good sign for a clean single Kotlin port.
-6. `lifeops/attention.py` — fully pure compute, but it's the capstone: it
-   only becomes useful once everything above already runs on-device, AND
-   its `system.errors`/`age_mins` inputs assume a *server automation
-   process* being monitored, which has no on-device meaning as-is. Needs a
+**Core engine logic is mostly pure and cleanly portable to Kotlin — 6/7
+ported (2026-07-30).** Portability order (easiest/highest-leverage first,
+since gym/chore/social/meal/deadline all build on the shared primitive):
+1. **Shipped**: `lifeops/routine.py` → `Routine.kt` — fully pure, no I/O,
+   the shared due-check math everything else depends on. 11 tests.
+2. **Shipped**: `lifeops/engines/ynab_engine.py` → `YnabEngine.kt` — fully
+   pure and fully self-contained. 16 tests.
+3. **Shipped**: `lifeops/engines/gym_engine.py`, `chore_engine.py`,
+   `social_engine.py` → `GymEngine.kt`/`ChoreEngine.kt`/`SocialEngine.kt` —
+   all pure `plan()` functions, I/O dropped. 19/12/7 tests respectively.
+   (Confirmed during porting: `gym_engine.py` has zero dependency on
+   `routine.py` — its due concept is inseparable from slot-picking, not a
+   simple cadence check — so `GymEngine.kt` correctly has none on
+   `Routine.kt` either, while chore/social genuinely do and use it.)
+4. **Not yet ported**: `runner.py`'s meal-prep due-check
+   (`routine_store.load_routine("meal")` + simple date math) is a small
+   pure core buried inside a larger function that's otherwise genuinely
+   I/O-entangled (FlowSavvy create/delete, ntfy polling for skip signals)
+   — extract the core, redesign the rest.
+5. **Shipped**: deadline-risk watchdog (`load_engine.py`'s `deadline_risk`/
+   `_deadline_crunch` family) → `DeadlineRisk.kt` — fully pure, shared by
+   two call sites so they can't disagree. 18 tests.
+6. **Not yet ported, deliberately last**: `lifeops/attention.py` — fully
+   pure compute, but it's the capstone: it only becomes useful once
+   everything above is actually wired into a real on-device data-fetch +
+   compute tick (see "actual bottleneck" below — none of that wiring
+   exists yet, only the standalone decision functions), AND its
+   `system.errors`/`age_mins` inputs assume a *server automation process*
+   being monitored, which has no on-device meaning as-is. Needs a
    genuinely new concept ("when did I last successfully sync with
    FlowSavvy/YNAB/Canvas") designed, not a line-for-line port.
+
+All 6 shipped ports (83 new JUnit tests total, one-to-one against the
+existing Python test suites) live under
+`android/app/src/main/kotlin/com/lifeops/briefing/` — `Routine.kt`,
+`YnabEngine.kt`, `GymEngine.kt`, `ChoreEngine.kt`, `SocialEngine.kt`,
+`DeadlineRisk.kt` (+ matching `*Test.kt` files). **None of them are wired
+into any widget/worker/persistence path yet** — they're standalone, tested,
+unused Kotlin equivalents of the Python decision logic, deliberately
+scoped as pure ports before any integration work.
 
 **The actual bottleneck isn't the engines — it's `gather.py`.** None of the
 engines fetch their own data today; a separate server-side `gather.py`
