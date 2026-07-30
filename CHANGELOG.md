@@ -6,6 +6,13 @@ change matter more here than semver strictness.
 
 <!-- towncrier release notes start -->
 
+## [1.22.0] — 2026-07-30
+
+### Added
+
+- Added `lifeops/routine.py`, a shared "is this recurring thing due" primitive, and ported the duplicated cadence math out of `social_engine.py`, the meal-planning logic, and `chore_engine.py`'s due-date computation onto it — a first, intentionally small step toward a unified recurring-routine model (see `docs/lifeops_capability_todo.md`). Each domain's actual action when due (gym's slot-picking, meal's grocery-then-cook dependency chain, chore's tag-driven discovery) is unchanged; `gym_engine.py` itself wasn't touched this pass.
+
+
 ## [1.21.1] — 2026-07-30
 
 ### Fixed
