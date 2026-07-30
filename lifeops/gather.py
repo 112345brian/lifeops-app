@@ -719,22 +719,8 @@ def social_input(fs, now):
                         partner_next = ed
         except Exception:
             pass
-    # Never propose the next weekly social hold inside the current 7-day
-    # cadence window; it should reserve capacity for the next cycle.
-    # `hi` is derived from the (already-floored) `lo`, not independently
-    # from PROPOSE_AHEAD_DAYS -- deriving it independently let a small
-    # configured PROPOSE_AHEAD_DAYS (<=3, editable via the panel's own
-    # Settings page) produce `hi < lo`, silently emptying `good_days` and
-    # disabling all future hangout proposals with no error anywhere
-    # (confirmed 2026-07-14 via code review). Fixed width keeps the same
-    # ~7-day candidate window the unclamped math always produced.
-    lo = max(7, config.PROPOSE_AHEAD_DAYS - 3); hi = lo + 7
-    days = [now.date() + datetime.timedelta(days=i) for i in range(lo, hi)]
-    days.sort(key=lambda d: (d.weekday() < 5, d))   # weekends first, ~3 weeks out
     def _until(d):
         return (d - now.date()).days if d else None
     return {"partner_days": ago(history.last("partner")), "friend_days": ago(history.last("friends")),
             "has_partner": has_partner, "has_friend": has_friend,
-            "partner_days_until": _until(partner_next), "friend_days_until": _until(friend_next),
-            "good_days": [d.isoformat() for d in days],
-            "is_protect_day": now.strftime("%a") in ("Sun", "Thu")}
+            "partner_days_until": _until(partner_next), "friend_days_until": _until(friend_next)}

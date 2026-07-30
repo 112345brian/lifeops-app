@@ -95,7 +95,6 @@ DOMAIN_ICON  = {"gym": "🏋️", "ynab": "💰", "chore": "🧹", "catchup": "�
                 "homework": "📚", "spend": "💸", "social": "👫", "meal": "🍽️", "digest": "📝",
                 "canvas": "🎓", "briefing": "☀️", "deadlines": "⏰", "cashflow": "📈"}
 EDITABLE     = ["PARTNER_NAME", "PARTNER_TASK", "PARTNER_SIGNAL", "FRIENDS_TASK", "FRIEND_NAMES",
-                "PROPOSE_AHEAD_DAYS", "PLAN_LEAD_DAYS",
                 "DISCRETIONARY", "OUTING_COSTS", "YNAB_COVER_ORDER", "YNAB_NO_ASSIGN",
                 "EVENT_CALS", "SOCIAL_CAL", "BLOCK_CAL"]
 # Human-readable label + one-line help per EDITABLE key, grouped for
@@ -108,8 +107,6 @@ CONFIG_META = {
     "PARTNER_SIGNAL":     ("Partner", "Partner-seen signal phrase", "ntfy signal body that marks partner time done."),
     "FRIENDS_TASK":       ("Friends", "Friends task title", "FlowSavvy task title that counts as a friend hangout."),
     "FRIEND_NAMES":       ("Friends", "Friend names", "Comma-separated names that also count as a hangout."),
-    "PROPOSE_AHEAD_DAYS": ("Scheduling", "Propose hangouts (days ahead)", "How far ahead to suggest a hangout slot."),
-    "PLAN_LEAD_DAYS":     ("Scheduling", "\"Plan it\" lead time (days)", "How early the planning nudge fires before a hangout."),
     "DISCRETIONARY":      ("Money", "Discretionary categories", "YNAB category names counted as fun money."),
     "OUTING_COSTS":       ("Money", "Per-outing cost estimates", "type:dollars pairs, e.g. concert:40,date:50."),
     "YNAB_COVER_ORDER":   ("Money", "Overspend cover order", "Category drain order when something overspends."),

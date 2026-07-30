@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-"""Social-balance engine. Protects weekly partner + friend time and nudges when
-overdue. Recency from the durable history log. Pure logic — no names baked in
-(the runner maps 'kind' to the configured task titles / partner name)."""
+"""Social-balance engine. Nudges when partner/friend time is overdue.
+Recency from the durable history log. Pure logic — no names baked in (the
+runner maps the configured partner name into the nudge text).
 
-def plan(partner_days, friend_days, has_partner, has_friend, good_days, is_protect_day,
-         partner_name="Partner"):
-    creates, nudges = [], []
-    def due(days):
-        return days is None or days >= 7
-    if is_protect_day and good_days:
-        if not has_partner and due(partner_days):
-            creates.append({"kind": "partner", "date": good_days[0]})
-        if not has_friend and due(friend_days):
-            creates.append({"kind": "friends", "date": good_days[1 if len(good_days) > 1 else 0]})
+Used to also auto-create "X (proposed)"/"Plan X" FlowSavvy placeholder
+tasks on a protect day, reserving a slot for a hangout that hadn't actually
+been arranged with anyone yet. Dropped 2026-07-29 (user's own call): unlike
+a solo commitment (gym), a hangout requires another person's agreement
+first, so a fabricated task reading as a real commitment was actively
+misleading rather than useful. Nudge-only now -- the user arranges it and
+logs it themselves."""
+
+def plan(partner_days, friend_days, partner_name="Partner"):
+    nudges = []
     if partner_days is not None and partner_days >= 7:
         nudges.append(f"It's been {partner_days} days since {partner_name} — put a slot in for you two.")
     if friend_days is not None and friend_days >= 7:
         nudges.append(f"{friend_days} days since you saw a friend — reach out.")
-    return {"creates": creates, "nudges": nudges}
+    return {"nudges": nudges}

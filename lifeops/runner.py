@@ -647,6 +647,14 @@ def run_social(fs, yn, now):
     # workflow the widget-display fix was meant to introduce; separating
     # "planned" from "tentative" for DISPLAY purposes never required
     # deleting the mechanism that turns a completed plan into a real task.
+    #
+    # Legacy-only as of 2026-07-29: social_engine.plan() no longer proposes
+    # new "X (proposed)"/"Plan X" tasks at all (a hangout needs another
+    # person's agreement first, unlike a solo commitment like gym, so a
+    # fabricated task reading as an already-arranged plan was actively
+    # misleading). This block still exists purely to correctly resolve any
+    # such tasks that were already open before that change shipped -- it
+    # naturally goes inert once those are gone.
     sp = os.path.join(history.ROOT, "private", "logs", "social_state.json")
     st = {"lastLock": "1970-01-01T00:00:00Z"}
     st.update(state_store.load_json(sp, default={}))
@@ -671,30 +679,10 @@ def run_social(fs, yn, now):
     os.makedirs(os.path.dirname(sp), exist_ok=True); _save_json_atomic(sp, st)
 
     inp = gather.social_input(fs, now)
-    out = social_engine.plan(inp["partner_days"], inp["friend_days"], inp["has_partner"],
-                             inp["has_friend"], inp["good_days"], inp["is_protect_day"],
-                             partner_name=config.PARTNER_NAME)
-    for c in out["creates"]:
-        base = config.PARTNER_TASK if c["kind"] == "partner" else config.FRIENDS_TASK
-        date = c["date"]
-        _logged_create(fs, "social", op=f"proposed {base} {date}",
-                       title=f"{base} (proposed)", listId=config.LIST_PERSONAL,
-                       schedulingHoursId=config.SH_EVENINGS, durationMinutes=120,
-                       priority=config.PRIO_SOCIAL_PROPOSED,
-                       dueDateTime=f"{date}T21:00:00", canBeStartedAt=f"{date}T17:00:00",
-                       isAutoIgnored=False, notes="Tentative scheduling hold. Complete the 'Plan ...' task to lock it in.")
-        plan_due = (datetime.date.fromisoformat(date) - datetime.timedelta(days=config.PLAN_LEAD_DAYS)).isoformat()
-        _logged_create(fs, "social", op=f"plan-task for {base}",
-                       title=f"Plan {base}", listId=config.LIST_PERSONAL,
-                       schedulingHoursId=config.SH_EVENINGS, durationMinutes=15,
-                       priority=config.PRIO_SOCIAL_PLAN,
-                       dueDateTime=f"{plan_due}T21:00:00", isAutoIgnored=False,
-                       notes="Reach out + arrange it. Completing this LOCKS IN the hangout.")
-    if out["creates"]:
-        _touch()
+    out = social_engine.plan(inp["partner_days"], inp["friend_days"], partner_name=config.PARTNER_NAME)
     for n in out["nudges"]:
         _alert_once("social:" + n[:24], n)
-    print(f"[social] lock-check done; proposed {len(out['creates'])}; nudges {len(out['nudges'])}")
+    print(f"[social] lock-check done; nudges {len(out['nudges'])}")
 
 def run_meal(fs, yn, now):
     # Always drain the ntfy "meal-skip" cursor every tick, even when not due —

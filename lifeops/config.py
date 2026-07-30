@@ -127,17 +127,13 @@ CANVAS_TOKEN     = os.environ.get("CANVAS_TOKEN", "")
 CANVAS_BASE_URL  = os.environ.get("CANVAS_BASE_URL", "https://jhu.instructure.com")
 CANVAS_COURSE_ID = os.environ.get("CANVAS_COURSE_ID", "124987")
 SH_COURSE        = os.environ.get("SH_COURSE", "428026")  # FlowSavvy scheduling hours for coursework
-PROPOSE_AHEAD_DAYS = _env_int("PROPOSE_AHEAD_DAYS", 21)  # propose hangouts ~3 weeks out
-PLAN_LEAD_DAYS = _env_int("PLAN_LEAD_DAYS", 14)          # "Plan it" task ~2 weeks before
 HEARTBEAT_URL = os.environ.get("HEARTBEAT_URL", "")   # healthchecks.io ping (dead-man's switch)
 SLEEP_OK_MIN = _env_int("SLEEP_OK_MIN", 330)  # min minutes of real sleep to count "rested"
 
 # Deliberate priority hierarchy (FlowSavvy: asap > high > normal > low).
 # Intended order: hard deadlines (Canvas, bumped by load-watcher) > gym (fixed
-# block, immovable) > meal/coordination (normal) > chores & tentative social (low).
+# block, immovable) > meal/coordination (normal) > chores (low).
 PRIO_MEAL = os.environ.get("PRIO_MEAL", "normal")
-PRIO_SOCIAL_PLAN = os.environ.get("PRIO_SOCIAL_PLAN", "normal")      # the "go arrange it" to-do
-PRIO_SOCIAL_PROPOSED = os.environ.get("PRIO_SOCIAL_PROPOSED", "low")  # tentative, unconfirmed
 
 # Event calendars that block evenings / drive social spend: "id:type,id:type"
 EVENT_CALS = dict(p.split(":") for p in os.environ.get("EVENT_CALS", "").split(",") if ":" in p)
