@@ -1,1 +1,0 @@
-Removed the "Propose hangouts (days ahead)" setting and the good_days/is_protect_day plumbing behind it — both stopped doing anything once the social engine stopped auto-proposing hangout tasks, so they were dead code and a dead settings-page control.

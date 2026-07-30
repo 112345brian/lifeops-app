@@ -1,1 +1,0 @@
-Removed the "Plan it" lead time setting from the control panel — it stopped doing anything once the social engine stopped auto-creating "Plan X" placeholder tasks, so it was a dead control that silently had no effect.

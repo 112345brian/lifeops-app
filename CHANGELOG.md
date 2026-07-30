@@ -6,6 +6,16 @@ change matter more here than semver strictness.
 
 <!-- towncrier release notes start -->
 
+## [1.21.1] — 2026-07-30
+
+### Fixed
+
+- Fixed the panel showing "LifeOps data is stale" and silently dropping today's briefing/cashflow display even though the automation was running fine — `web.py`'s last-run health check, briefing display, and cashflow projection, plus `gather.py`'s gym-blocked-days check, were still reading the old flat JSON files directly instead of the SQLite-backed state store, so they were frozen at whatever those files contained right before the SQLite migration finished.
+- LifeOps no longer auto-creates "Partner time (proposed)"/"Plan Partner time" and "Friends (proposed)"/"Plan Friends" placeholder tasks when partner or friend time is overdue — a hangout needs another person's agreement first, unlike a solo commitment like gym, so a fabricated task that read as an already-arranged plan was actively misleading. You just get a notification nudge now; arranging and logging the hangout is on you.
+- Removed the "Plan it" lead time setting from the control panel — it stopped doing anything once the social engine stopped auto-creating "Plan X" placeholder tasks, so it was a dead control that silently had no effect.
+- Removed the "Propose hangouts (days ahead)" setting and the good_days/is_protect_day plumbing behind it — both stopped doing anything once the social engine stopped auto-proposing hangout tasks, so they were dead code and a dead settings-page control.
+
+
 ## [1.21.0] — 2026-07-28
 
 ### Added
