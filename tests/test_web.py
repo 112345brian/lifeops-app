@@ -1,9 +1,10 @@
+import datetime
 import os
 
 import pytest
 from fastapi.testclient import TestClient
 
-from lifeops import config, history, web, runner, weather
+from lifeops import config, history, state_store, web, runner, weather
 
 
 def test_settings_writer_uses_same_env_file_as_runtime():
@@ -279,6 +280,82 @@ def test_current_attention_treats_missing_last_run_as_no_system_data(monkeypatch
 
     assert result["state"] == "ok"
     assert result["reasons"] == []
+
+
+def test_last_run_reads_through_state_store_not_the_stale_flat_file(tmp_path):
+    """Regression test: _last_run used to do a raw json.load(open(...)) on
+    private/logs/last_run.json, a leftover from before the SQLite migration
+    -- since runner.py now writes last_run exclusively via
+    state_store.save_json_atomic, that raw read was frozen forever at
+    whatever the flat file contained right when the migration finished
+    (confirmed live 2026-07-30: last_run's age kept climbing past the panel's
+    stale-data threshold even though the automation was running fine)."""
+    ts = datetime.datetime.now().isoformat(timespec="seconds")
+    state_store.save_json_atomic(
+        os.path.join(str(tmp_path), "private", "logs", "last_run.json"),
+        {"ts": ts, "ran": ["gym"], "errors": {}, "details": {}},
+    )
+
+    lr = web._last_run()
+
+    assert lr is not None
+    assert lr["ts"] == ts
+    assert lr["age_mins"] <= 1
+
+
+def test_last_run_returns_none_when_never_run():
+    assert web._last_run() is None
+
+
+def test_today_briefing_reads_through_state_store(tmp_path):
+    """Same regression as _last_run -- _today_briefing/_today_briefing_raw
+    must read whatever run_briefing actually wrote via state_store, not a
+    frozen flat file."""
+    today = datetime.date.today().isoformat()
+    state_store.save_json_atomic(
+        os.path.join(str(tmp_path), "private", "logs", "briefing.json"),
+        {"date": today, "text": "All clear.", "facts": {"gym_last_7d": 3}},
+    )
+
+    b = web._today_briefing()
+    raw = web._today_briefing_raw()
+
+    assert b is not None and "All clear." in b["text"]
+    assert b["facts"]["gym_last_7d"] == 3
+    assert raw == {"date": today, "text": "All clear.", "facts": {"gym_last_7d": 3}}
+
+
+def test_today_briefing_is_none_when_stale(tmp_path):
+    state_store.save_json_atomic(
+        os.path.join(str(tmp_path), "private", "logs", "briefing.json"),
+        {"date": "2020-01-01", "text": "Old news.", "facts": {}},
+    )
+
+    assert web._today_briefing() is None
+    assert web._today_briefing_raw() is None
+
+
+def test_cashflow_reads_through_state_store(tmp_path):
+    today = datetime.date.today().isoformat()
+    state_store.save_json_atomic(
+        os.path.join(str(tmp_path), "private", "logs", "cashflow.json"),
+        {"date": today, "start_balance": 100, "weeks": [{"balance": 50}, {"balance": -20}]},
+    )
+
+    cf = web._cashflow()
+
+    assert cf is not None
+    assert cf["weeks"][1]["negative"] is True
+
+
+def test_cashflow_is_none_when_stale_or_missing(tmp_path):
+    assert web._cashflow() is None
+
+    state_store.save_json_atomic(
+        os.path.join(str(tmp_path), "private", "logs", "cashflow.json"),
+        {"date": "2020-01-01", "start_balance": 100, "weeks": []},
+    )
+    assert web._cashflow() is None
 
 
 def test_api_task_complete_returns_fresh_tasks_and_events(monkeypatch):

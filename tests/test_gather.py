@@ -1,6 +1,21 @@
 import datetime
 
-from lifeops import config, gather, history
+from lifeops import config, gather, history, state_store
+
+
+def test_gym_blocked_dates_reads_through_state_store(tmp_path):
+    """Regression test: _gym_blocked_dates used to do a raw json.load(open(
+    GYM_BLOCKS_FILE)) -- a leftover from before the SQLite migration -- so
+    days blocked via the panel UI (written through state_store.save_json_atomic
+    by web.py's _save_gym_blocks) were silently never honored by the
+    scheduling engine (confirmed 2026-07-30)."""
+    state_store.save_json_atomic(gather.GYM_BLOCKS_FILE, ["2026-08-01", "2026-08-02"])
+
+    assert gather._gym_blocked_dates() == {"2026-08-01", "2026-08-02"}
+
+
+def test_gym_blocked_dates_empty_when_nothing_blocked():
+    assert gather._gym_blocked_dates() == set()
 
 
 def test_gym_ring_red_when_zero_sessions_in_trailing_week():
