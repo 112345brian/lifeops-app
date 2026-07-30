@@ -374,3 +374,141 @@ the on-phone execution move discussed elsewhere in this doc/CHANGELOG.
    `routine_store.load_routine`/`save_routine`; advanced view: the
    `constraints` script escape hatch, later cross-routine gate
    expressions) — not yet scoped, no UI/page/endpoint exists today.
+
+## On-Device Migration (reduce Tailscale/home-server dependency)
+
+Motivation (established 2026-07-30): the driving reason to keep moving logic
+onto the phone isn't "Tailscale could be more reliable" — it's that Tailscale
+is *not* trusted as reliably reachable, so the goal is to minimize how much
+depends on reaching the home server at all, over any transport (Tailscale,
+ntfy, FCM). This is NOT yet scoped as an implementation task — the below is
+a research-backed plan (6 parallel research passes, 2026-07-30) to inform
+that scoping conversation, not a commitment to build all of it.
+
+### Already true today (confirmed by research, not new work)
+
+The phone already bypasses the home server for several things, proving this
+direction works in production: `PhoneWeather.kt`/`LocationReporter.kt` (NOAA
++ GPS, direct from device) and `YnabRefresh.kt` (direct bearer-token YNAB
+category-balance reads, gated by `WidgetConfigStore`'s existing
+`EncryptedSharedPreferences`, which already holds both `WEB_TOKEN` and
+`YNAB_TOKEN` side by side). `NextTasksRefreshWorker` is a proven 15-min
+WorkManager tick already doing exactly this kind of direct-from-phone,
+self-gated background fetch for those three things.
+
+### What's genuinely portable vs. what must stay server-side
+
+**Must stay server-side: Canvas only.** `canvas_browser.py` needs a real
+Playwright browser session for two stacked reasons: JHU disables
+self-service Canvas API tokens (institutional policy, not a technical gap —
+`CANVAS_TOKEN`/`canvas.py` is real, load-bearing code, just dormant for this
+institution), and Canvas's session cookie is `httpOnly` (confirmed
+unreadable from JS in an earlier attempt, per commit `89d81d9`). The login
+step additionally sits behind Cloudflare Bot Fight Mode, which blocks any
+CDP-attached browser (verified against vanilla Playwright, patchright, and
+manual anti-detection args) — only a bare non-debugged `chrome.exe`
+subprocess survives it (`4db0552`). None of this is Android-portable: JHU
+SSO+Duo login can't be automated on any platform, and an embedded WebView is
+plausibly *worse* against Cloudflare's detection, not better. `weather.py`/
+`location.py` have zero browser-automation dependency and are already
+migrated. No other hidden server-only constraints were found.
+
+**FlowSavvy and YNAB are both clean, portable, stateless bearer-token REST
+clients** — no session/cookie state, no OAuth dance, directly portable to
+OkHttp/Retrofit. Specific porting hazards to get right, not blockers:
+- `flowsavvy.py`'s retry policy is deliberately asymmetric (retries a bare
+  `ConnectionError` and 429s, but NOT other HTTP errors, specifically to
+  avoid double-submitting non-idempotent POST/PUT after an ambiguous
+  response) — a naive Kotlin retry-everything port would recreate the
+  duplicate-task bug this was built to prevent.
+- FlowSavvy endpoint paths are self-admittedly *inferred*, not confirmed
+  against official docs (`flowsavvy.py`'s own header comment) — verify
+  before hardcoding into Kotlin.
+- `ynab_engine.py`'s cover/assign logic is fully pure and portable, but the
+  full pipeline also calls out to the Anthropic API mid-flow (novel-payee
+  categorization, `runner.py:539-549`) — a second network dependency to
+  design around (port it too, defer novel payees to a future server sync,
+  or drop it for the on-device path).
+- The YNAB client never uses YNAB's `server_knowledge` delta-sync — it does
+  a rolling 120-day refetch every time. Nothing to "port" here since it
+  isn't used today, but worth doing properly (real delta-sync) rather than
+  copying the existing full-refetch behavior.
+- FlowSavvy is write-capable (`complete_task`, `create_task`, `update_task`,
+  `delete_item`), unlike YNAB's current read-mostly phone usage — porting
+  `complete_task` means also re-designing `CompleteTaskAction.kt`'s
+  optimistic-local-removal/`PendingRemovals` reconciliation for a direct
+  on-device call instead of the current ntfy-fallback round trip. **This is
+  the one that actually resolves the original ntfy question**: once task
+  completion calls FlowSavvy directly, neither the home server nor ntfy
+  needs to be reachable for it at all — there's no more "phone not on
+  Tailscale" case to fall back for.
+
+**Secrets**: adding `FLOWSAVVY_TOKEN` is mechanical, not new
+infrastructure — `WidgetConfigStore.kt`/`WidgetKeys.kt`/`SettingsActivity.kt`
+already prove out this exact pattern for `YNAB_TOKEN`, same file, same
+`MasterKey`-backed `EncryptedSharedPreferences`, same backup-exclusion via
+`data_extraction_rules.xml`, same wipe-and-retry corrupt-file defense. Real,
+not theoretical, risk to weigh: a leaked `YNAB_TOKEN`/`FLOWSAVVY_TOKEN`
+grants full read/write against a real financial/task account (YNAB has no
+scoped/read-only token option), and a phone is a meaningfully larger
+loss/theft/unlock-attack surface than one hardened home server — this is a
+real increase in exposure, not just a storage-mechanism question. A
+biometric gate before each API call was considered and rejected for
+background-worker reads specifically (breaks unattended refresh); reserve
+that idea for a future user-initiated write action instead.
+
+**Core engine logic is mostly pure and cleanly portable to Kotlin.**
+Portability order (easiest/highest-leverage first, since gym/chore/social/
+meal/deadline all build on the shared primitive):
+1. `lifeops/routine.py` — fully pure, no I/O, the shared due-check math
+   everything else depends on. Port and test this first.
+2. `lifeops/engines/ynab_engine.py` — fully pure and fully self-contained
+   (only needs `defaultdict(Counter)`/`most_common` idiom translation).
+3. `lifeops/engines/gym_engine.py`, `chore_engine.py`, `social_engine.py` —
+   all pure `plan()` functions; the I/O (logging, file reads) each does
+   today is trivially dropped/replaced.
+4. `runner.py`'s meal-prep due-check (`routine_store.load_routine("meal")` +
+   simple date math) is a small pure core buried inside a larger function
+   that's otherwise genuinely I/O-entangled (FlowSavvy create/delete, ntfy
+   polling for skip signals) — extract the core, redesign the rest.
+5. Deadline-risk watchdog (`load_engine.py`'s `deadline_risk`/
+   `_deadline_crunch` family) — fully pure, shared by two call sites today
+   so they can't already disagree, good sign for a clean single Kotlin port.
+6. `lifeops/attention.py` — fully pure compute, but it's the capstone: it
+   only becomes useful once everything above already runs on-device, AND
+   its `system.errors`/`age_mins` inputs assume a *server automation
+   process* being monitored, which has no on-device meaning as-is. Needs a
+   genuinely new concept ("when did I last successfully sync with
+   FlowSavvy/YNAB/Canvas") designed, not a line-for-line port.
+
+**The actual bottleneck isn't the engines — it's `gather.py`.** None of the
+engines fetch their own data today; a separate server-side `gather.py`
+assembles each engine's input dict from FlowSavvy/YNAB/Canvas/calendar/
+weather once per run and hands it over. Porting an engine to Kotlin also
+means porting (or newly writing) its `gather`-equivalent data assembly on
+the phone — that's the real work, not the pure decision functions.
+
+**Local persistence gap**: no Room/SQLite exists on Android today (grep
+confirmed zero hits) — everything is `EncryptedSharedPreferences`/plain
+`SharedPreferences`/Glance's `PreferencesGlanceStateDefinition`, all
+key-value. Gym/chore/social history (needed for adherence math) and
+`routine_store`'s override records would need a real local store (Room is
+the natural fit, extending established Android conventions here, not a new
+architecture). WorkManager (`NextTasksRefreshWorker`'s existing 15-min
+periodic pattern) is the natural home for an on-device compute tick once
+data + persistence exist.
+
+### Not yet decided (needs a product decision, not more research)
+
+- Does the home server keep running non-Canvas domains as a redundant
+  backup/fallback, or fully retire them once the phone can compute
+  independently?
+- Do LLM calls (Anthropic API: briefing text, weekly digest, YNAB
+  novel-payee categorization) move on-device too (another secret + direct
+  API cost on the phone), or stay server-side (meaning some domains keep a
+  server round-trip regardless)?
+- Staged rollout order and how to run old+new in parallel without breaking
+  daily use of a system that's actively relied on every day.
+- What's left for ntfy/FCM once task completion and app→phone alerts both
+  move fully on-device: likely nothing beyond signals tied to the
+  still-server-side Canvas domain (e.g. "Canvas session needs re-login").
