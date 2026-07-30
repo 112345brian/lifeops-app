@@ -6,6 +6,13 @@ change matter more here than semver strictness.
 
 <!-- towncrier release notes start -->
 
+## [1.25.0] — 2026-07-30
+
+### Added
+
+- Every notification in the codebase now goes through one dedup mechanism (`notify.alert(dedup_key=...)`) instead of two independent ones that had no idea about each other -- `runner.py`'s ~15 per-domain alerts and `notify.py`'s own push-unavailable fallback previously kept separate dedup state, which is exactly how a redundant briefing-alert bug slipped through code review. Dedup now only marks a key sent after a successful send, so a transient ntfy outage retries instead of silently giving up for the day.
+
+
 ## [1.24.1] — 2026-07-30
 
 ### Fixed
