@@ -6,6 +6,13 @@ change matter more here than semver strictness.
 
 <!-- towncrier release notes start -->
 
+## [1.24.1] — 2026-07-30
+
+### Fixed
+
+- Fixed 3 real issues found in a post-release code review of v1.24.0's FCM health tracking and notification fallback: a send failure no longer leaves the health record stuck reporting a stale "sent" outcome, the briefing push no longer double-alerts (it already gets a full-content ntfy alert elsewhere), and a failure sending the fallback alert itself no longer raises out of the push cycle or gives up silently for the day.
+
+
 ## [1.24.0] — 2026-07-30
 
 ### Added
