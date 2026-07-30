@@ -112,6 +112,191 @@ for fit, risk, and overlap with the existing codebase.
 - Add Android unit tests for JSON parsing and widget status rendering.
 - Add at least one fake-FlowSavvy integration-style test for complete-task API.
 
+## Recurring Items as User-Configured Data
+
+**v1 shipped 2026-07-30**: `lifeops/routine.py` — a shared `Routine`
+(id/times/per_days/anchor) + `status()`/`status_since_last()`/
+`next_due_date()` primitive, consolidating the duplicated "is this due"
+math out of `social_engine.py`, `runner.py`'s `run_meal`, and
+`chore_engine.py`'s due-date computation. Deliberately does NOT include
+`on_due`, cross-routine gating, variable contracts, or a scripting escape
+hatch — everything below this point is still future work, not done.
+`gym_engine.py` was left untouched (its "due" concept is inseparable from
+slot-picking/consecutive-day-cap, not a simple cadence check, and has 19
+tests locking down exact behavior) — the optional gather.py count-source
+swap discussed during planning was skipped for v1 rather than risking that
+suite for marginal consolidation value.
+
+Context: `gym_engine.py`, `chore_engine.py`, `social_engine.py`, and the
+meal-planning logic in `runner.py` are each a bespoke Python module with
+domain names, cadence targets, and task titles hardcoded (env config, not
+user-editable data). Researched how mainstream apps model user-defined
+recurring items, to move toward one generic "routine" record + one shared
+engine instead of one module per domain.
+
+Findings:
+- RFC 5545 RRULE (Google/Apple/Outlook's standard) expresses calendar-day
+  patterns (`FREQ`, `INTERVAL`, `BYDAY`, `COUNT`/`UNTIL`) but has no concept
+  of "N times per rolling window, any day" — not a good fit for gym/social/
+  chores, which are exactly that.
+- Loop Habit Tracker (OSS, Kotlin) is the closest real match: one `Habit`
+  record + a tiny `Frequency(numerator, denominator)` value object (e.g.
+  `Frequency(4, 7)` = "4x per 7 days"), evaluated by one shared
+  recompute/scoring engine against a completion-history list. LifeOps's
+  existing `history.events`/`history.days_with` log is already
+  structurally Loop's `EntryList`.
+- Todoist/Things anchor recurrence to user-facing text, but the one
+  semantic lesson worth keeping: due-again date can anchor to the
+  *original* due date or to the *completion* date — a real behavioral
+  switch, not something RRULE/Loop expose, and something LifeOps's
+  per-domain code likely already hardcodes one way per domain today.
+- Habitica's task types (Habit/Daily/Todo) each carry their own recurrence
+  shape rather than one shared schema — the anti-pattern to avoid here.
+
+Case study: Liftosaur/Liftoscript (workout tracker + its progression DSL) —
+directly validates the escape-hatch shape below, so researched it
+specifically rather than by analogy:
+- A Liftosaur "program" is stored as plain text and regenerates itself
+  after each workout by re-running its embedded scripts — a workout isn't
+  a separate synced record, it's the current rendered output of a stateful
+  generator. Same relationship LifeOps wants between a `Routine` and its
+  next scheduled instance.
+- Liftoscript itself is a real, small, Turing-complete scripting language
+  (JS-like syntax, loops, `if/else`, variables) — not a config schema and
+  not a constrained expression grammar. It exposes reps/weights/RPE
+  (current + completed), 1RM, bodyweight, and week/day position as
+  readable state; scripts write future weeks' weights/reps/set-counts,
+  which is how deloads and periodization get expressed. It runs entirely
+  client-side (~51KB TypeScript evaluator shipped in the app, parsed via a
+  formal Lezer grammar) — no server needed to compute the next session.
+- The creator's own reasoning for a full scripting language over dropdowns:
+  a fixed-field schema is closed-world (only covers progressions the
+  author anticipated); a small Turing-complete language is open-world by
+  construction. He needed it once his own program outgrew what dropdowns
+  could express.
+- The mitigation that matters most here: Liftosaur ships built-in canned
+  progressions (linear, double progression) so most users never touch raw
+  Liftoscript at all — it's reserved as an escape hatch for the tail of
+  genuinely custom cases, not the primary interface. Simple fields cover
+  the common case; a script covers the rest.
+- Sources: [liftosaur.com/doc/liftoscript](https://www.liftosaur.com/doc/liftoscript),
+  [Liftosaur overview blog](https://www.liftosaur.com/blog/posts/liftosaur-overview/),
+  [Indie Hackers interview](https://www.indiehackers.com/post/liftosaur-weightlifting-tracker-app-for-coders-0f2c1d3837),
+  [github.com/astashov/liftosaur](https://github.com/astashov/liftosaur) (AGPL-3.0,
+  interpreter fully inspectable: `src/liftoscript.grammar`,
+  `src/liftoscriptEvaluator.ts`, `src/liftoscriptFns.ts`).
+
+Proposed shape (not yet implemented):
+
+```
+Routine {
+  id, title,                        # user-editable — "Gym", "See Sarah", "Vacuum"
+  frequency: {times, per_days},     # Loop's model; covers gym/social/chores uniformly
+  anchor: "window" | "since_last_completion",
+  on_due: "notify" | "schedule_task",  # nudge-only (social) vs. create a task (gym/chore)
+  constraints: {...}                # simple fields for the common case; an optional
+                                     # small script escape hatch (Liftoscript-style, not
+                                     # a vague dict) for the genuinely custom tail: gym's
+                                     # consecutive-day cap/slot-picking, meal's
+                                     # grocery-then-cook dependency chain
+}
+```
+
+One `evaluate(routine, history_for_it, now) -> {due, next_due, action}`
+engine replaces `gym_engine.plan`/`chore_engine.plan`/`social_engine.plan`'s
+separate "is this due" implementations. The few genuinely unique behaviors
+(gym's slot-picking algorithm, meal's dependency chain) become small
+pluggable pieces keyed off `constraints` — most routines never need more
+than the simple fields, matching Liftosaur's canned-progressions-first
+approach — not top-level modules. Titles, cadence, and nudge-vs-task
+choice move from `config.py` constants (`PARTNER_TASK`, `FRIENDS_TASK`,
+hardcoded gym target) into user-editable `Routine` records.
+
+### Cross-routine gating ("meta logic")
+
+Real gap in the model above: every recurrence system researched (Loop,
+Habitica, Liftosaur) evaluates each recurring item independently — none
+has a concept of "don't surface B while A is behind" (e.g. don't propose
+a friend hangout while gym is behind target). This is a genuinely
+different problem than recurrence: cross-routine *gating*, not "is this
+one thing due."
+
+LifeOps already has the seed of this in `attention.py`'s
+`_DOMAIN_PRIORITY = {"coursework": 0, "system": 1, "money": 2, "gym": 3}`
+— a cross-domain priority ranking — but it's wired only for *display*
+(which reason wins the headline/badge color), not for *suppressing
+actions*. The gym-behind/suppress-friends case needs the same kind of
+cross-routine awareness, extended from ranking to actually withholding a
+nudge/task.
+
+Settled direction: genuinely Liftosaur-shaped, not a fixed enum-comparison
+gate. The point of referencing another routine isn't one hardcoded
+comparison — it's that a routine's condition can reference *other routines
+or conditions* generally (`friends.caught_up AND gym.days_behind <= 2`,
+or whatever a given routine actually needs). That requires each routine
+*type* (gym, chore, social) to declare a fixed **variable contract** — the
+named variables it computes and exposes (`caught_up`, `days_behind`,
+`times_this_week`) — exactly Liftoscript's model of exposing a defined set
+of variables per exercise (`reps[n]`, `week`, `RPE[n]`), just applied to
+routines instead of exercises. Any expression — a routine's own scheduling
+logic, or another routine's gate — reads `other_routine.variable` by name
+against that contract.
+
+One load-bearing distinction from Liftoscript, worth keeping the scope
+honest: Liftoscript has to be Turing-complete (loops, assignment) because
+it **writes** future state — it assigns weights to arbitrary future weeks.
+A routine's gate only ever **reads** other routines' exposed variables to
+produce one boolean. That's a much smaller thing to build — a read-only
+boolean expression grammar (`AND`/`OR`/comparisons over named variables),
+not a full interpreter with loops and mutation. Get Liftosaur's actual
+idea (typed variable exposure + referential composability) without its
+actual implementation scale.
+
+References aren't only single-routine-by-name — a gate needs to quantify
+over a *set*, and the set selector shouldn't be a special-cased "tags"
+mechanism: it's the same expression language filtering on *any* exposed
+variable, including arbitrary user-defined ones (`all(routine =>
+routine.is_important == true).caught_up`, not a hardcoded `tags` field
+with its own bolted-on syntax). A "tag" is just a convention some routines
+might expose as a boolean/string variable like any other (`has_tag ==
+"fitness"`) — not a distinct first-class mechanism. One expression
+grammar does both the per-routine logic and the set-selection filtering;
+`all()`/`any()` are quantifiers over that same language, not a separate
+feature.
+
+Two requirements that fall directly out of "routines can reference other
+routines (or sets of them)," not optional hardening:
+- **Circularity protection.** Routine A's gate reads B's variable, B's
+  gate reads A's — needs real cycle detection over the reference graph at
+  definition time (reject/flag a cycle when a gate is saved, not discover
+  it via infinite recursion at evaluation time). A predicate-selected set
+  (`all(routine => routine.is_important == true)`) makes this a dynamic
+  fan-out, not a fixed pairwise edge — which routines match a predicate
+  can change whenever any routine is added, removed, or edited, so the
+  cycle check has to re-run against current matches, not just at save
+  time for the one routine being edited. Default `all()`/`any()` to
+  excluding the routine being evaluated from its own matched set (a
+  routine matching its own gate's predicate is the common case, not a
+  cycle).
+- **Auditing.** When a routine is suppressed, the *reason* (which gate,
+  which variable, what it evaluated to) needs to be visible somewhere a
+  user can see it — otherwise "why didn't LifeOps schedule this?" is
+  undebuggable. Same spirit as `actions.py`'s existing "what did LifeOps
+  do" audit log; a suppressed routine needs an equivalent "why didn't
+  LifeOps do this" trail, not just silence. For an `all()`/`any()` gate
+  over a predicate-selected set specifically, the trail needs to name
+  *which member of the set* failed the condition (e.g. "held:
+  gym.caught_up was false"), not just log the aggregate boolean —
+  otherwise a multi-routine set hits the same silent-failure problem one
+  level up.
+
+Not scoped yet: where `Routine` records (and their variable contracts)
+live (local SQLite/Room on-device vs. synced list), the migration path off
+the four existing engines, the exact grammar/parser for the read-only
+expression language, where the audit trail is surfaced (panel page? part
+of the existing actions feed?), and whether this ships before or after
+the on-phone execution move discussed elsewhere in this doc/CHANGELOG.
+
 ## Docs / Cleanup
 
 - Keep Android README current.

@@ -9,6 +9,7 @@ Run:  python -m lifeops.runner          # all wired domains
 import sys, os, re, io, json, datetime, contextlib, requests
 from . import config, ntfy, notify, gather, lock, history, adherence, actions, fcm
 from . import briefing_service, push_state, state_store
+from .routine import Routine, status as routine_status
 from .flowsavvy import FlowSavvy
 from .ynab import YNAB
 from .engines import gym_engine, ynab_engine
@@ -684,6 +685,8 @@ def run_social(fs, yn, now):
         _alert_once("social:" + n[:24], n)
     print(f"[social] lock-check done; nudges {len(out['nudges'])}")
 
+_MEAL_ROUTINE = Routine(id="meal", times=1, per_days=6, anchor="since_last")
+
 def run_meal(fs, yn, now):
     # Always drain the ntfy "meal-skip" cursor every tick, even when not due —
     # it's a single cheap poll, and freezing st["lastSkip"] while not due (an
@@ -705,7 +708,7 @@ def run_meal(fs, yn, now):
     # delete yet, and honoring it here would incorrectly reset the "handled
     # this week" timer for a week that hasn't started.
     last = history.last("meal")
-    due = not last or (now - datetime.datetime.fromisoformat(last)).days >= 6
+    due = routine_status(_MEAL_ROUTINE, [last] if last else [], now)["due"]
     if not due:
         print("[meal] not due"); return
 

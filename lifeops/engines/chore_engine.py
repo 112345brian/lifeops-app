@@ -6,6 +6,14 @@ the next occurrence: due = completion date + N days. Pure date math — no
 judgment, no API. The LLM only gathers the completed tasks and creates whatever
 this returns.
 
+A [cycle:Nd] tag IS a routine definition (frequency = 1 per N days, anchored
+to last completion) -- same object type as gym/social/meal's cadence (see
+lifeops/routine.py's module docstring), just currently discovered from a
+FlowSavvy task's note text instead of being a stored record. The due-DATE
+math (v1 consolidation, 2026-07-30) goes through that shared primitive; the
+per-task discovery loop below (parsing the tag, tracking `processed`) stays
+chore-specific -- that's the "discovery mechanism," not the recurrence math.
+
 Usage: python chore_engine.py <input.json> <output.json>
 Input: {"completed":[{"id","title","notes","completed_date","durationMinutes",
          "minLengthMinutes","listId","priority","schedulingHoursId","dueTime"}],
@@ -14,6 +22,9 @@ Output:{"creates":[{title,listId,durationMinutes,minLengthMinutes,priority,
          schedulingHoursId,notes,dueDateTime,canBeStartedAt}], "processed":[...]}
 """
 import json, sys, re, datetime
+
+from ..routine import Routine, next_due_date
+
 DAY = datetime.timedelta(days=1)
 
 def plan(inp):
@@ -37,7 +48,8 @@ def plan(inp):
             # exact record isn't refetched and re-skipped on every future run.
             processed.append(cid); seen.add(cid)
             continue
-        nextd = comp + n * DAY
+        routine = Routine(id=cid, times=1, per_days=n, anchor="since_last")
+        nextd = next_due_date(routine, comp)
         t = c.get("dueTime") or "20:00"
         lead = min(3, max(0, n - 1))
         creates.append({
