@@ -6,6 +6,13 @@ change matter more here than semver strictness.
 
 <!-- towncrier release notes start -->
 
+## [1.23.0] — 2026-07-30
+
+### Added
+
+- Routine targets and thresholds (gym's weekly target/floor/consecutive-day cap, partner/friend nudge cadence, meal's weekly cadence) are now persisted, overridable records (`lifeops/routine_store.py`) instead of hardcoded Python constants — prep work for an eventual settings UI. Nothing changes by default; every routine still starts at exactly today's values until explicitly overridden.
+
+
 ## [1.22.0] — 2026-07-30
 
 ### Added
