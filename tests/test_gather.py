@@ -1,6 +1,6 @@
 import datetime
 
-from lifeops import config, gather, history, state_store
+from lifeops import config, gather, history, routine_store, state_store
 
 
 def test_gym_blocked_dates_reads_through_state_store(tmp_path):
@@ -137,6 +137,35 @@ class _FakeFlowSavvy:
         if not self._gym_task_today:
             return {"items": []}
         return {"items": [{"title": "Gym", "startDateTime": "2026-07-12T18:00:00"}]}
+
+
+def test_gym_input_rules_default_to_gym_engines_original_hardcoded_values(tmp_path, monkeypatch):
+    """gather.gym_input never used to populate target/floor/max_consecutive
+    in `rules` at all -- gym_engine.py's own defaults (4/3/2) always won.
+    Now that gym_input sources these from routine_store, a fresh sandbox
+    with nothing persisted must reproduce those exact same numbers."""
+    monkeypatch.setattr(history, "ROOT", str(tmp_path))
+    now = datetime.datetime(2026, 7, 12, 9, 0)
+    fs = _FakeFlowSavvy(gym_task_today=False)
+
+    inp = gather.gym_input(fs, now)
+
+    assert inp["rules"]["target"] == 4
+    assert inp["rules"]["floor"] == 3
+    assert inp["rules"]["max_consecutive"] == 2
+
+
+def test_gym_input_rules_reflect_a_persisted_override(tmp_path, monkeypatch):
+    monkeypatch.setattr(history, "ROOT", str(tmp_path))
+    now = datetime.datetime(2026, 7, 12, 9, 0)
+    fs = _FakeFlowSavvy(gym_task_today=False)
+
+    routine_store.save_routine("gym", times=5, floor=4)
+    inp = gather.gym_input(fs, now)
+
+    assert inp["rules"]["target"] == 5
+    assert inp["rules"]["floor"] == 4
+    assert inp["rules"]["max_consecutive"] == 2   # untouched default preserved
 
 
 def test_gym_ring_now_reflects_trailing_history_and_todays_schedule(tmp_path, monkeypatch):

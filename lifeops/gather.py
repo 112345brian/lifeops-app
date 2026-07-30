@@ -1,8 +1,8 @@
 """Turn live FlowSavvy data + history into the structured inputs engines expect.
 All personal identifiers come from config (.env) — none hardcoded here.
 """
-import datetime, json, os, re
-from . import history, config, adherence, state_store
+import datetime, os, re
+from . import history, config, adherence, state_store, routine_store
 
 # Canonical path — web.py imports this instead of re-deriving it, so the
 # writer (web UI "block this day") and reader (this module's engine feed)
@@ -314,6 +314,14 @@ def gym_input(fs, now, sick_until=None, gym_open=None):
     es = f"{eh:02d}:00" if eh and 17 <= eh <= 20 else "19:00"
     rules = {"allow_morning": allow_morning, "evening_start": es,
              "evening_end": f"{int(es[:2]) + 1:02d}:00"}
+    # gym_engine.plan()'s own defaults (target=4, floor=3, max_consecutive=2)
+    # were never overridden before this -- gather.py just didn't populate
+    # these keys. Persisted overrides (see routine_store.py) now flow
+    # through the SAME rules.update() merge gym_engine.py already does;
+    # gym_engine.py itself needs no changes for this.
+    gym_routine, gym_extra = routine_store.load_routine("gym")
+    rules["target"] = gym_routine.times
+    rules.update(gym_extra)
     return {"today": today.isoformat(), "now": now.isoformat(timespec="seconds"),
             "sick_until": sick_until, "completed_count": completed_count,
             "completed_dates": completed_dates,

@@ -9,7 +9,8 @@ Run:  python -m lifeops.runner          # all wired domains
 import sys, os, re, io, json, datetime, contextlib, requests
 from . import config, ntfy, notify, gather, lock, history, adherence, actions, fcm
 from . import briefing_service, push_state, state_store
-from .routine import Routine, status as routine_status
+from .routine import status as routine_status
+from . import routine_store
 from .flowsavvy import FlowSavvy
 from .ynab import YNAB
 from .engines import gym_engine, ynab_engine
@@ -680,12 +681,13 @@ def run_social(fs, yn, now):
     os.makedirs(os.path.dirname(sp), exist_ok=True); _save_json_atomic(sp, st)
 
     inp = gather.social_input(fs, now)
-    out = social_engine.plan(inp["partner_days"], inp["friend_days"], partner_name=config.PARTNER_NAME)
+    partner_routine, _ = routine_store.load_routine("partner")
+    friends_routine, _ = routine_store.load_routine("friends")
+    out = social_engine.plan(inp["partner_days"], inp["friend_days"],
+                             partner_routine, friends_routine, partner_name=config.PARTNER_NAME)
     for n in out["nudges"]:
         _alert_once("social:" + n[:24], n)
     print(f"[social] lock-check done; nudges {len(out['nudges'])}")
-
-_MEAL_ROUTINE = Routine(id="meal", times=1, per_days=6, anchor="since_last")
 
 def run_meal(fs, yn, now):
     # Always drain the ntfy "meal-skip" cursor every tick, even when not due —
@@ -708,7 +710,8 @@ def run_meal(fs, yn, now):
     # delete yet, and honoring it here would incorrectly reset the "handled
     # this week" timer for a week that hasn't started.
     last = history.last("meal")
-    due = routine_status(_MEAL_ROUTINE, [last] if last else [], now)["due"]
+    meal_routine, _ = routine_store.load_routine("meal")
+    due = routine_status(meal_routine, [last] if last else [], now)["due"]
     if not due:
         print("[meal] not due"); return
 
