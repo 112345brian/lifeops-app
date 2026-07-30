@@ -6,6 +6,18 @@ change matter more here than semver strictness.
 
 <!-- towncrier release notes start -->
 
+## [1.24.0] — 2026-07-30
+
+### Added
+
+- FCM token registration now records a timestamp and every push attempt now records its outcome, both surfaced through a new `/api/health` endpoint and a System Health block on the Settings page.
+- `notify.alert` now accepts a `msg_type` semantic tag (default `"alert"`), and `notify.push_briefing`/`push_next_tasks` fall back to an ntfy alert tagged `system_health` whenever the underlying FCM push no-ops (no registered device token, or no service-account file on disk), so the user still hears about a ready briefing or task refresh instead of the push silently vanishing.
+
+### Fixed
+
+- Tests no longer send real ntfy alerts or Firebase pushes: `private/.env`'s real `NTFY_ALERTS_TOPIC`/`NTFY_SIGNAL_TOPIC`/`FCM_SERVICE_ACCOUNT_FILE` loaded into every test process at import time, before any per-test sandboxing could intervene, so any test exercising an alert path without its own explicit mock fired a real notification. A new autouse fixture blanks these by default for every test.
+
+
 ## [1.23.0] — 2026-07-30
 
 ### Added
