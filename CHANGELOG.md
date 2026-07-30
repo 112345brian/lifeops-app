@@ -6,6 +6,13 @@ change matter more here than semver strictness.
 
 <!-- towncrier release notes start -->
 
+## [1.25.1] — 2026-07-30
+
+### Fixed
+
+- Fixed the notification dedup unification shipped earlier today: it was writing to the ephemeral, never-backed-up local database instead of the durable one, and an intermediate fix introduced a cross-key race where two concurrent alerts (e.g. the web panel and the scheduled tick firing at once) could clobber each other's dedup state. Added `db.state_get`/`state_set` for a durable, atomic per-key upsert and switched the dedup mechanism to use it.
+
+
 ## [1.25.0] — 2026-07-30
 
 ### Added
