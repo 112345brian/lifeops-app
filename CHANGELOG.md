@@ -6,6 +6,13 @@ change matter more here than semver strictness.
 
 <!-- towncrier release notes start -->
 
+## [1.27.0] — 2026-07-30
+
+### Added
+
+- Added LifeScript, a small bounded expression/predicate engine for expressing routine scheduling windows and cross-routine gates as data instead of code, designed in the spirit of Liftosaur's Liftoscript DSL. 65 new Android unit tests. Not yet wired into anything -- foundational piece for re-deriving the gym engine as pure Routine data.
+
+
 ## [1.26.0] — 2026-07-30
 
 ### Added
