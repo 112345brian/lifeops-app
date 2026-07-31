@@ -83,7 +83,11 @@ package com.lifeops.briefing
  *   -- so `all(routines, r => sleepOk && r.caughtUp)` can reference both the
  *   outer `sleepOk` and the per-element `r.caughtUp` in the same predicate.
  *   The bound variable name itself (`r`) is additionally available as a
- *   whole-map value, solely for `.field` access.
+ *   whole-map value, solely for `.field` access. When quantifiers are
+ *   *nested* and both bound elements carry a field of the same name, the
+ *   innermost binding wins, exactly as a nested loop variable shadows an
+ *   outer one in any lexically-scoped language; write `outer.field` to
+ *   reach past the shadow.
  * - **String literals**: the formal literal list above (integers, decimals,
  *   booleans, identifiers) doesn't mention strings, but section 1 of the
  *   spec says context values can themselves be strings, and the
@@ -98,7 +102,16 @@ package com.lifeops.briefing
  *   `daysSinceLast` as a Kotlin `Int` failing to `==` a literal `4`) at the
  *   cost of not preserving integer-vs-decimal identity in results --
  *   acceptable here since every documented use case is a boolean window
- *   condition, not numeric output.
+ *   condition, not numeric output. "Number" means anything implementing
+ *   `java.lang.Number` (so `Byte`/`BigDecimal`/`BigInteger` and JSON
+ *   decoders' own `Number` subclasses all count) plus Kotlin's unsigned
+ *   types, not a hand-listed subset of Kotlin's numeric classes.
+ * - **`null` is not a value in this language**: context and element maps
+ *   are typed `Map<String, Any>`, and a `null` smuggled through that
+ *   (easy from Java or a JSON decoder) raises a
+ *   [LifeScriptEvaluateException] on read rather than propagating. A
+ *   missing key and a present-but-null key are both errors, just with
+ *   different messages.
  * - **`all()`/`any()` over an empty set**: vacuous truth, matching the
  *   spec's explicit instruction and Liftoscript/standard convention --
  *   `all()` of nothing is `true`, `any()` of nothing is `false`. The
@@ -170,14 +183,23 @@ internal class Scope(
     /** Resolves a bare identifier, per the quantifier-predicate scoping rule
      * documented on [LifeScript]: locals bind the whole-map value for
      * `.field` access; otherwise the element map of any active local
-     * (falling back to [context]) is checked field-by-field, then
-     * [context] itself. */
+     * (innermost binding first) is checked field-by-field, then [context]
+     * itself. */
     fun resolve(name: String): Any {
         locals[name]?.let { return it }
-        for (elementMap in locals.values) {
-            if (elementMap.containsKey(name)) return elementMap.getValue(name)
+        // Innermost-first. `locals` is built by appending each nested
+        // quantifier's binding onto its parent's map (see
+        // Quantifier.childScope), so its insertion order is
+        // outermost-to-innermost; it must be walked in reverse so that an
+        // inner element's field shadows an outer element's field of the
+        // same name, the way every other lexically-scoped language binds
+        // a nested loop variable. `locals` holds at most one entry per
+        // enclosing quantifier (realistically 0-2), so reversing it here
+        // is not a meaningful cost.
+        for (elementMap in locals.values.reversed()) {
+            if (elementMap.containsKey(name)) return requireNonNullValue(elementMap[name], "Variable '$name'")
         }
-        if (context.containsKey(name)) return context.getValue(name)
+        if (context.containsKey(name)) return requireNonNullValue(context[name], "Variable '$name'")
         throw LifeScriptEvaluateException("Undefined variable '$name'")
     }
 }
@@ -223,8 +245,7 @@ sealed class LifeScriptExpr {
             if (!map.containsKey(member)) {
                 throw LifeScriptEvaluateException("Field '$member' not found in scope")
             }
-            @Suppress("UNCHECKED_CAST")
-            return normalizeIfNumber((map as Map<String, Any>).getValue(member))
+            return normalizeIfNumber(requireNonNullValue(map[member], "Field '$member'"))
         }
     }
 
@@ -287,8 +308,17 @@ sealed class LifeScriptExpr {
         val predicate: LifeScriptExpr,
     ) : LifeScriptExpr() {
         override fun eval(scope: Scope): Any {
-            val elements = scope.sets[setName]
-                ?: throw LifeScriptEvaluateException("Unknown routine set '$setName'")
+            val elements = scope.sets[setName] ?: throw LifeScriptEvaluateException(
+                // A quantifier with no `sets` at all is overwhelmingly
+                // likely to be a caller that forgot the argument (it
+                // defaults to empty on both evaluate() overloads), not a
+                // typo'd set name -- say so rather than making them guess.
+                if (scope.sets.isEmpty()) {
+                    "Unknown routine set '$setName': no sets were provided to evaluate()"
+                } else {
+                    "Unknown routine set '$setName' (available sets: ${scope.sets.keys.joinToString(", ")})"
+                }
+            )
             return when (kind) {
                 // Vacuous truth over an empty set: all() of nothing is
                 // true, any() of nothing is false -- see LifeScript's kdoc.
@@ -306,26 +336,37 @@ sealed class LifeScriptExpr {
     }
 }
 
+/** The single place that decides "is this caller-supplied value a number,
+ * and if so what `Double` is it?" -- returns null for anything non-numeric.
+ *
+ * Deliberately keyed off [Number] rather than an explicit list of Kotlin's
+ * own numeric classes: a `Map<String, Any>` handed in by a caller routinely
+ * comes out of JSON/Java interop, so `Byte`, `BigDecimal`, `BigInteger`,
+ * `AtomicInteger` and JSON libraries' own lazy `Number` subclasses (e.g.
+ * Gson's `LazilyParsedNumber`) all reach this language in practice. An
+ * explicit `is Int || is Long || ...` list silently mis-handled all of
+ * them: `==` against such a value returned `false` rather than throwing,
+ * which is exactly the "silently produces a wrong value" outcome
+ * [LifeScript]'s error-handling contract promises never happens.
+ * Kotlin's unsigned types are not [Number]s, so they are listed
+ * explicitly for the same reason. */
+private fun numericValue(value: Any): Double? = when (value) {
+    is Number -> value.toDouble()
+    is UInt -> value.toDouble()
+    is ULong -> value.toDouble()
+    is UShort -> value.toDouble()
+    is UByte -> value.toDouble()
+    else -> null
+}
+
 /** Coerces a resolved value to `Double` if it's any numeric type, leaving
  * booleans/strings/maps untouched -- see the "numeric representation"
  * design note on [LifeScript]. */
-private fun normalizeIfNumber(value: Any): Any = when (value) {
-    is Double -> value
-    is Float -> value.toDouble()
-    is Int -> value.toDouble()
-    is Long -> value.toDouble()
-    is Short -> value.toDouble()
-    else -> value
-}
+private fun normalizeIfNumber(value: Any): Any = numericValue(value) ?: value
 
-private fun asNumber(value: Any, opDescription: String): Double = when (value) {
-    is Double -> value
-    is Float -> value.toDouble()
-    is Int -> value.toDouble()
-    is Long -> value.toDouble()
-    is Short -> value.toDouble()
-    else -> throw LifeScriptEvaluateException("'$opDescription' requires a number, got ${describe(value)}")
-}
+private fun asNumber(value: Any, opDescription: String): Double =
+    numericValue(value)
+        ?: throw LifeScriptEvaluateException("'$opDescription' requires a number, got ${describe(value)}")
 
 private fun asBoolean(value: Any, opDescription: String): Boolean = when (value) {
     is Boolean -> value
@@ -333,11 +374,21 @@ private fun asBoolean(value: Any, opDescription: String): Boolean = when (value)
 }
 
 private fun valuesEqual(a: Any, b: Any): Boolean {
-    val aIsNumber = a is Double || a is Float || a is Int || a is Long || a is Short
-    val bIsNumber = b is Double || b is Float || b is Int || b is Long || b is Short
-    if (aIsNumber && bIsNumber) return asNumber(a, "==") == asNumber(b, "==")
+    val aNumber = numericValue(a)
+    val bNumber = numericValue(b)
+    if (aNumber != null && bNumber != null) return aNumber == bNumber
     return a == b
 }
+
+/** Guards against a `null` smuggled into a nominally `Map<String, Any>`
+ * context/element map (trivial to do from Java or a JSON decoder, since
+ * Kotlin's non-null types are not enforced across that boundary). Without
+ * this the null would either escape [LifeScriptExpr.evaluate]'s non-null
+ * `Any` return type or blow up later as a raw `NullPointerException`
+ * inside [describe] -- neither of which is the clear, typed failure this
+ * language promises. */
+private fun requireNonNullValue(value: Any?, description: String): Any =
+    value ?: throw LifeScriptEvaluateException("$description is null; LifeScript has no null value")
 
 private fun describe(value: Any): String = "${value::class.simpleName}($value)"
 
@@ -524,10 +575,21 @@ private class Parser(private val tokens: List<Token>, private val source: String
         return false
     }
 
+    /** Renders a token for an error message. Keyed off the token *type*,
+     * not off emptiness of its text: an empty string literal (`""`) is a
+     * real token with empty text, and reporting it as "<end of input>"
+     * (as an `ifEmpty` check on the text does) points the reader at
+     * entirely the wrong problem. */
+    private fun describeToken(token: Token): String = when (token.type) {
+        TokenType.EOF -> "<end of input>"
+        TokenType.STRING -> "the string \"${token.text}\""
+        else -> "'${token.text}'"
+    }
+
     private fun expect(type: TokenType, description: String): Token {
         if (!check(type)) {
             throw LifeScriptParseException(
-                "Expected $description at position ${peek().pos}, found '${peek().text.ifEmpty { "<end of input>" }}'"
+                "Expected $description at position ${peek().pos}, found ${describeToken(peek())}"
             )
         }
         return advance()
@@ -536,7 +598,7 @@ private class Parser(private val tokens: List<Token>, private val source: String
     fun expectEnd() {
         if (!check(TokenType.EOF)) {
             throw LifeScriptParseException(
-                "Unexpected trailing input '${peek().text}' at position ${peek().pos}"
+                "Unexpected trailing input ${describeToken(peek())} at position ${peek().pos}"
             )
         }
     }
@@ -659,7 +721,7 @@ private class Parser(private val tokens: List<Token>, private val source: String
             }
             TokenType.IDENTIFIER -> parseIdentifierLed(token)
             else -> throw LifeScriptParseException(
-                "Expected an expression at position ${token.pos}, found '${token.text.ifEmpty { "<end of input>" }}'"
+                "Expected an expression at position ${token.pos}, found ${describeToken(token)}"
             )
         }
     }
