@@ -6,6 +6,13 @@ change matter more here than semver strictness.
 
 <!-- towncrier release notes start -->
 
+## [1.28.0] — 2026-07-30
+
+### Added
+
+- Extended `Routine.kt` with a generic scheduling layer (time-of-day slots with LifeScript condition strings, consecutive-day-cap greedy selection, viability simulation), extracted from `gym_engine.py`'s slot-picking algorithm with every gym-specific concept removed. Gym itself was then re-derived as pure `Routine` + `TimeSlot` data instead of bespoke code -- `GymEngine.kt` is gone, replaced by `GymSchedule.kt`. Verified against all 19 original gym test scenarios reproduced through the new data-driven path.
+
+
 ## [1.27.0] — 2026-07-30
 
 ### Added
