@@ -328,12 +328,54 @@ routines (or sets of them)," not optional hardening:
   otherwise a multi-routine set hits the same silent-failure problem one
   level up.
 
-Not scoped yet: where `Routine` records (and their variable contracts)
-live (local SQLite/Room on-device vs. synced list), the migration path off
-the four existing engines, the exact grammar/parser for the read-only
-expression language, where the audit trail is surfaced (panel page? part
-of the existing actions feed?), and whether this ships before or after
-the on-phone execution move discussed elsewhere in this doc/CHANGELOG.
+**Shipped (2026-07-30/31), ahead of the rest of this section**: the
+read-only expression grammar — `LifeScript`
+(`android/app/src/main/kotlin/com/lifeops/briefing/LifeScript.kt`),
+researched and designed against Liftosaur's actual Liftoscript
+documentation (liftosaur.com/doc/liftoscript), not just the earlier
+paraphrase. Arithmetic/comparison/logical/ternary operators, `all()`/
+`any()` quantifiers over a caller-supplied named set of element contexts
+(the direct analog of Liftoscript's bounded `for`-loop-over-a-known-array
+— the actual reason it stays non-Turing-complete: no user-defined
+functions, no open recursion, only iteration over an already-finite
+collection), a small built-in function set. 65 tests, parse-once/
+evaluate-repeatedly API. LifeOps's capability model (Sleep, Calendar, YNAB
+as genuinely separate external data sources with real fetch/auth cost) is
+a deliberate *superset* of Liftoscript's flat always-available variable
+space, not a deviation from it — Liftoscript never needed a "which
+capabilities does this exercise depend on" concept because it only ever
+has one local database to read from.
+
+Also shipped: `Routine.kt` gained a generic scheduling layer (`TimeSlot`,
+`slotFor`, `runLength`, `scheduleRoutine`) extracted from `gym_engine.py`'s
+actual algorithm with every gym-specific concept removed — proven generic
+against a synthetic non-gym routine (`RoutineSchedulingTest.kt`). Gym
+itself was re-derived as data: a `Routine` + two `TimeSlot`s whose
+conditions are LifeScript expression strings, evaluated by the engine
+above, verified against all 19 of the original `GymEngineTest.kt`
+scenarios reproduced through the new path (`GymSchedule.kt`,
+`GymScheduleTest.kt`). `GymEngine.kt` no longer exists. This is the
+concrete proof-of-concept the rest of this section's "variable contract /
+predicate-based set selection" design was describing in the abstract —
+gym was the hardest case (real algorithm, not just a threshold check), and
+it reduced cleanly to data.
+
+Still not scoped: where `Routine` records (and their variable contracts)
+live (local SQLite/Room on-device vs. synced list) — `Routine`/`TimeSlot`
+are still plain in-memory data classes, nothing persists them yet; whether
+chore/social get re-derived through the same windows+LifeScript model next
+(both are thin enough that they plausibly should, per the same reasoning
+that dissolved gym) or stay as their current standalone engines; the
+migration path for the OTHER three original engines (chore/social/ynab —
+ynab stays genuinely bespoke, see the "On-Device Migration" section
+above); where the audit trail is surfaced (panel page? part of the
+existing actions feed?); and whether any of this ships to a real
+widget/worker before or after the on-phone execution move discussed
+elsewhere in this doc/CHANGELOG. Cross-routine gating itself (a routine's
+condition referencing *other* routines by name or by predicate-selected
+set, circularity protection, the audit trail) is not yet implemented —
+LifeScript's `all()`/`any()` quantifiers are the mechanism it would use,
+but nothing wires a routine's own gate through them yet.
 
 ## Docs / Cleanup
 
