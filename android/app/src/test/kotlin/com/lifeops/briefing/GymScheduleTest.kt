@@ -6,13 +6,21 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** Kotlin port of `tests/test_gym_engine.py` -- see `GymEngine.kt`'s kdoc
- * for why this exists (on-device migration, gym_engine.py's turn). One test
- * per Python test case (19 total, matching the Python suite's count), each
- * annotated with which Python test it corresponds to. No Robolectric
- * needed: `GymEngine.kt` has zero Android-framework dependency (pure
- * java.time), so plain JUnit is enough, same as `RoutineTest.kt`. */
-class GymEngineTest {
+/**
+ * Reproduces `tests/test_gym_engine.py`'s (and the former `GymEngineTest.kt`'s)
+ * 19 test cases, unchanged in assertion, against the NEW data-driven gym
+ * (`GymSchedule.kt`'s `plan()`, built on a [Routine] + two [TimeSlot]s
+ * evaluated by `Routine.kt`'s generic [scheduleRoutine]/[slotFor], instead
+ * of gym-specific hand-rolled slot/cap logic). Every type name and the
+ * `plan()` entry point are unchanged from the old `GymEngine.kt`, so this
+ * file is a faithful behavior-preservation check, not a rewrite: same
+ * inputs, same expected outputs, different implementation underneath.
+ *
+ * No Robolectric needed: `GymSchedule.kt` has zero Android-framework
+ * dependency (pure java.time + `LifeScript`), so plain JUnit is enough,
+ * same as `RoutineTest.kt`/`RoutineSchedulingTest.kt`.
+ */
+class GymScheduleTest {
 
     private val MON: LocalDate = LocalDate.of(2026, 7, 6)
     private val defaultRules = GymRules(allowMorning = true, eveningStart = "19:00", eveningEnd = "20:00", maxConsecutive = 2)
@@ -232,7 +240,10 @@ class GymEngineTest {
         // every remaining candidate against that frozen `busy` independently,
         // so three mutually-adjacent-to-EACH-OTHER (but not to `busy`) days
         // all looked individually viable even though max_consecutive=1 means
-        // at most 2 of them could ever actually be booked together.
+        // at most 2 of them could ever actually be booked together. This
+        // property now lives in `Routine.kt`'s [scheduleRoutine] and is
+        // re-proven generically by `RoutineSchedulingTest.kt`; this test
+        // proves the gym-specific wiring still exercises it correctly.
         val days = listOf("2026-07-06", "2026-07-09", "2026-07-10", "2026-07-11")
             .map { day(LocalDate.parse(it)) }
         val rules = defaultRules.copy(maxConsecutive = 1, target = 0) // needed=0 -> the chosen-loop never runs

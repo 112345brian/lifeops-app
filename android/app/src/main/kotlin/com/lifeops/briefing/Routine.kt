@@ -37,13 +37,201 @@ import java.time.LocalDateTime
  */
 enum class Anchor { WINDOW, SINCE_LAST }
 
-/** Matches `lifeops/routine.py`'s `Routine` dataclass field-for-field. */
+/**
+ * One candidate time-of-day slot a [Routine] can be scheduled into on a
+ * given day, evaluated against that day's own variable context by
+ * [LifeScript].
+ *
+ * NAMING HAZARD, read before renaming or reusing this: this is a completely
+ * different concept from [Anchor.WINDOW] ("N times per rolling per_days-day
+ * period" -- a cadence model with no notion of clock time). [TimeSlot] is a
+ * specific clock-time range within a single day (e.g. "19:00-20:00,
+ * evening") that becomes available when [condition] evaluates true against
+ * that day's context map. Deliberately NOT named `Window` anywhere in this
+ * file so it can never be confused with `Anchor.WINDOW` by a future reader
+ * skimming call sites.
+ *
+ * @param kind a free-form label for this slot (e.g. "morning"/"evening"),
+ *   carried through to the scheduled action/output -- not interpreted by
+ *   the scheduling machinery itself.
+ * @param condition a raw LifeScript expression string (see [LifeScript]),
+ *   evaluated per candidate day against that day's variable-context map.
+ *   Must evaluate to a `Boolean`; anything else is an evaluate-time error
+ *   (see [slotFor]). A day is "available" for this slot when [condition]
+ *   evaluates `true`.
+ */
+data class TimeSlot(
+    val start: String,
+    val end: String,
+    val kind: String,
+    val condition: String,
+)
+
+/** Matches `lifeops/routine.py`'s `Routine` dataclass field-for-field, plus
+ * [slots] -- the generic time-of-day scheduling-window extension (see
+ * [TimeSlot]'s kdoc). Defaults to an empty list so every existing caller
+ * (`ChoreEngine.kt`, `SocialEngine.kt`, and their tests, none of which use
+ * scheduling) is source-compatible without any change. */
 data class Routine(
     val id: String,
     val times: Int,
     val perDays: Int,
     val anchor: Anchor,
+    val slots: List<TimeSlot> = emptyList(),
 )
+
+/**
+ * One candidate day for scheduling purposes: a calendar [date] paired with
+ * its own LifeScript variable-context map (e.g. `{"gymBlocked": false,
+ * "sleepOk": true, ...}`), used to evaluate a [Routine]'s [TimeSlot]
+ * conditions for that specific day. Plain data -- deliberately not coupled
+ * to any one domain (gym, chore, social, ...).
+ */
+data class CandidateDay(val date: LocalDate, val context: Map<String, Any>)
+
+/** One (date, slot) pair a [Routine] was actually matched to -- either as a
+ * candidate under consideration or as a final chosen booking. */
+data class ScheduleCandidate(val date: LocalDate, val slot: TimeSlot)
+
+/** Result of [scheduleRoutine]: the greedily chosen (date, slot) pairs (up
+ * to `needed`, respecting the consecutive-day cap) plus [viableLeft] -- how
+ * many total slots (chosen + a greedy simulation of the remaining viable
+ * candidates) could actually be booked under the cap. See [scheduleRoutine]
+ * for the full algorithm notes. */
+data class ScheduleResult(
+    val chosen: List<ScheduleCandidate>,
+    val viableLeft: Int,
+)
+
+/**
+ * Ports `gym_engine.py`'s `slot_for(day, r)`, generalized to any [Routine]
+ * carrying [TimeSlot]s. Returns the FIRST slot (in [Routine.slots]'
+ * declared order) whose [TimeSlot.condition] evaluates `true` against
+ * [context] -- not "any" true slot. This preserves `slot_for`'s exact
+ * precedence/short-circuit behavior (e.g. gym's evening slot is tried
+ * before its morning slot, and morning is only reached if evening's
+ * condition evaluates false) as long as the condition strings themselves
+ * encode the same branching gym's Python `if`/`elif` chain did -- see
+ * `GymSchedule.kt`'s condition-string kdoc for gym's specific translation.
+ *
+ * Returns `null` when no slot's condition is true that day (mirrors
+ * `slot_for` returning `None`).
+ *
+ * @throws LifeScriptEvaluateException if a condition string is malformed,
+ *   references an undefined context variable, or evaluates to a non-Boolean
+ *   value.
+ */
+fun slotFor(routine: Routine, context: Map<String, Any>): TimeSlot? {
+    for (slot in routine.slots) {
+        val result = evaluate(slot.condition, context)
+        val ok = result as? Boolean
+            ?: throw LifeScriptEvaluateException(
+                "TimeSlot '${slot.kind}' condition '${slot.condition}' must evaluate to a boolean, got $result"
+            )
+        if (ok) return slot
+    }
+    return null
+}
+
+/**
+ * Ports `gym_engine.py`'s `run_length(date_str, busy)`: how many consecutive
+ * calendar days (including [date] itself) around [date] are present in
+ * [busy]. Pure date/set math -- no gym-specific content, despite the name
+ * this algorithm is documented under in the original Python module.
+ */
+fun runLength(date: LocalDate, busy: Set<LocalDate>): Int {
+    var n = 1
+    var x = date.minusDays(1)
+    while (busy.contains(x)) {
+        n++
+        x = x.minusDays(1)
+    }
+    x = date.plusDays(1)
+    while (busy.contains(x)) {
+        n++
+        x = x.plusDays(1)
+    }
+    return n
+}
+
+/**
+ * Generic greedy slot-selection/consecutive-day-cap scheduler, extracted
+ * from `gym_engine.py`'s `plan()` (the candidate-building loop, the
+ * `chosen`/`busy` greedy pick loop, and the `viable_left` simulation) with
+ * every gym-specific concept removed -- domain-agnostic date/set math plus
+ * one [LifeScript] evaluation per candidate day.
+ *
+ * Algorithm, matching `plan()`'s structure exactly:
+ * 1. Build the candidate list: every [CandidateDay] not in [excludeDates]
+ *    (e.g. days already scheduled or already completed for this routine),
+ *    sorted by date, paired with the slot [slotFor] resolves for that day's
+ *    context (days with no viable slot are dropped).
+ * 2. Greedily walk the sorted candidates, picking up to [needed] of them
+ *    into `chosen`, skipping any candidate whose date would push its
+ *    surrounding consecutive run (via [runLength], seeded with [busyDates]
+ *    plus every date already `chosen`) past [maxConsecutive].
+ * 3. Compute [ScheduleResult.viableLeft]: `chosen.size` plus a SECOND greedy
+ *    simulation over the same sorted candidate list, seeded with `chosen`'s
+ *    dates added to [busyDates] -- checking each remaining candidate against
+ *    the simulation's growing busy set, not just the original [busyDates].
+ *    This is deliberately the same shape as step 2's loop, ported exactly
+ *    as structured in `gym_engine.py`'s own comment: two candidates can be
+ *    mutually adjacent to EACH OTHER (not just to the frozen busy set) --
+ *    e.g. three back-to-back open days with `maxConsecutive=1` can fit at
+ *    most 2 of them, not all 3, even though each looks individually viable
+ *    against [busyDates] alone. This is the exact property
+ *    `RoutineSchedulingTest.kt`'s viable-left-checks-candidates-against-
+ *    each-other test locks down generically (mirroring
+ *    `GymEngineTest.kt`'s original gym-specific regression test for the
+ *    same bug class).
+ *
+ * @param excludeDates dates to drop from candidacy entirely before slot
+ *   evaluation (e.g. dates already scheduled/completed) -- ported from
+ *   `plan()`'s own pre-filter (`if day["date"] in sched_dates or
+ *   day["date"] in done_dates: continue`), which skips a day BEFORE calling
+ *   `slot_for` on it at all.
+ * @param busyDates the starting busy set the cap is evaluated against --
+ *   normally the same dates as [excludeDates] (a day already booked/done
+ *   still counts toward the consecutive-day cap even though it can't be
+ *   re-booked), but kept as a separate parameter since a caller could
+ *   legitimately want a busy set that isn't identical to its exclude set.
+ */
+fun scheduleRoutine(
+    routine: Routine,
+    candidateDays: List<CandidateDay>,
+    needed: Int,
+    maxConsecutive: Int,
+    excludeDates: Set<LocalDate> = emptySet(),
+    busyDates: Set<LocalDate> = emptySet(),
+): ScheduleResult {
+    val candidates = candidateDays
+        .asSequence()
+        .filter { it.date !in excludeDates }
+        .sortedBy { it.date }
+        .mapNotNull { cd -> slotFor(routine, cd.context)?.let { ScheduleCandidate(cd.date, it) } }
+        .toList()
+
+    val chosen = mutableListOf<ScheduleCandidate>()
+    val busy = busyDates.toMutableSet()
+    for (c in candidates) {
+        if (chosen.size >= needed) break
+        if (runLength(c.date, busy + c.date) > maxConsecutive) continue
+        chosen.add(c)
+        busy.add(c.date)
+    }
+
+    val simBusy = busy.toMutableSet()
+    var viableLeft = chosen.size
+    for (c in candidates) {
+        if (c.date in simBusy) continue
+        if (runLength(c.date, simBusy + c.date) <= maxConsecutive) {
+            simBusy.add(c.date)
+            viableLeft++
+        }
+    }
+
+    return ScheduleResult(chosen, viableLeft)
+}
 
 /**
  * Return shape of [status]/[statusSinceLast], mirroring the Python
