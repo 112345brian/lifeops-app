@@ -224,4 +224,96 @@ class RoutineSchedulingTest {
         val result = scheduleRoutine(cleaningRoutine, days, needed = 1, maxConsecutive = 1)
         assertTrue(result.viableLeft >= result.chosen.size)
     }
+
+    // -----------------------------------------------------------------
+    // scheduleRoutine: excludeDates and busyDates as genuinely separate
+    // parameters (gym passes the same set for both; these lock down what
+    // happens for a caller that doesn't)
+    // -----------------------------------------------------------------
+
+    @Test
+    fun scheduleRoutine_neverBooksADateThatIsBusyButNotExcluded() {
+        // Regression: the greedy pick loop used to check only the
+        // consecutive-day cap, never "is this day already occupied", while
+        // the viable-left simulation DID check `date in simBusy`. With
+        // excludeDates == busyDates (gym's only usage) the asymmetry was
+        // invisible, since a busy date was never a candidate in the first
+        // place. A caller passing a busy set that isn't its exclude set got
+        // that day double-booked.
+        val d = dates(2)
+        val result = scheduleRoutine(
+            cleaningRoutine,
+            d.map { CandidateDay(it, ctx()) },
+            needed = 2,
+            maxConsecutive = 2,
+            excludeDates = emptySet(),
+            busyDates = setOf(d[0]),
+        )
+        assertFalse("already-busy day must not be re-booked", result.chosen.any { it.date == d[0] })
+        assertEquals(listOf(d[1]), result.chosen.map { it.date })
+        // d[0] is busy and d[1] is now chosen, so nothing further is viable.
+        assertEquals(1, result.viableLeft)
+    }
+
+    @Test
+    fun scheduleRoutine_duplicateCandidateDatesProduceASingleBooking() {
+        // Two CandidateDay entries for the SAME date must not both be
+        // booked -- that would emit two overlapping bookings for one day.
+        val days = listOf(CandidateDay(mon, ctx()), CandidateDay(mon, ctx()))
+        val result = scheduleRoutine(cleaningRoutine, days, needed = 2, maxConsecutive = 2)
+        assertEquals(listOf(mon), result.chosen.map { it.date })
+        assertEquals(1, result.viableLeft)
+    }
+
+    // -----------------------------------------------------------------
+    // Slot-list shapes the two-slot gym routine never exercises
+    // -----------------------------------------------------------------
+
+    @Test
+    fun scheduleRoutine_routineWithNoSlotsSchedulesNothing() {
+        val noSlots = Routine(id = "empty", times = 3, perDays = 7, anchor = Anchor.WINDOW)
+        val days = dates(5).map { CandidateDay(it, ctx()) }
+        val result = scheduleRoutine(noSlots, days, needed = 3, maxConsecutive = 3)
+        assertNull(slotFor(noSlots, ctx()))
+        assertTrue(result.chosen.isEmpty())
+        assertEquals(0, result.viableLeft)
+    }
+
+    @Test
+    fun slotFor_firstMatchSemanticsHoldBeyondTwoSlots() {
+        val threeSlots = Routine(
+            id = "three",
+            times = 1,
+            perDays = 1,
+            anchor = Anchor.WINDOW,
+            slots = listOf(
+                TimeSlot(start = "08:00", end = "09:00", kind = "a", condition = "flagA"),
+                TimeSlot(start = "12:00", end = "13:00", kind = "b", condition = "flagB"),
+                TimeSlot(start = "18:00", end = "19:00", kind = "c", condition = "true"),
+            ),
+        )
+        val flags = { a: Boolean, b: Boolean -> mapOf<String, Any>("flagA" to a, "flagB" to b) }
+        assertEquals("a", slotFor(threeSlots, flags(true, true))?.kind)
+        assertEquals("b", slotFor(threeSlots, flags(false, true))?.kind)
+        assertEquals("c", slotFor(threeSlots, flags(false, false))?.kind)
+    }
+
+    @Test(expected = LifeScriptParseException::class)
+    fun slotFor_reportsAMalformedLaterConditionEvenWhenAnEarlierSlotMatches() {
+        // The first slot's condition is true, so a lazily-parsed
+        // implementation would never notice the second slot's syntax error
+        // until the one day that finally reaches it. Conditions are parsed
+        // up front instead, so this fails immediately and deterministically.
+        val badSecondSlot = Routine(
+            id = "bad",
+            times = 1,
+            perDays = 1,
+            anchor = Anchor.WINDOW,
+            slots = listOf(
+                TimeSlot(start = "08:00", end = "09:00", kind = "ok", condition = "true"),
+                TimeSlot(start = "12:00", end = "13:00", kind = "broken", condition = "flagA &&"),
+            ),
+        )
+        slotFor(badSecondSlot, mapOf("flagA" to true))
+    }
 }

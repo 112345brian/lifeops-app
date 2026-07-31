@@ -27,6 +27,7 @@ class GymScheduleTest {
 
     private fun day(
         date: LocalDate,
+        gymBlocked: Boolean = false,
         eveningBlocked: Boolean = false,
         dayAfterShow: Boolean = false,
         priorNightBlocked: Boolean = false,
@@ -34,6 +35,7 @@ class GymScheduleTest {
         sleepOk: Boolean = true,
     ) = GymDay(
         date = date,
+        gymBlocked = gymBlocked,
         eveningBlocked = eveningBlocked,
         dayAfterShow = dayAfterShow,
         priorNightBlocked = priorNightBlocked,
@@ -260,5 +262,140 @@ class GymScheduleTest {
         // 2026-07-09 is a Thursday; the day before (Wednesday) is not exempt.
         assertTrue(needsWindDown(LocalDate.of(2026, 7, 9)))
         assertEquals(setOf("Tue"), DEFAULT_WIND_DOWN_EXEMPT_WEEKDAYS)
+    }
+
+    // -----------------------------------------------------------------
+    // Slot-condition translation: exhaustive check of the two LifeScript
+    // condition strings against a direct transcription of `slot_for`.
+    //
+    // The 19 scenarios above are the tests `tests/test_gym_engine.py`
+    // actually has -- and they leave `gym_blocked` completely unexercised
+    // (the Python fixture `_day()` doesn't even take it), never combine
+    // `deadline_heavy` with a failing morning check, and never set
+    // `prior_night_blocked`. Those are precisely the branches that had to
+    // be re-encoded as boolean condition strings, so they are exactly where
+    // a translation error would hide. This enumerates all 2^6 day-flag
+    // combinations x both `allow_morning` values and asserts the new
+    // data-driven path agrees with `slot_for` on every one of the 128.
+    // -----------------------------------------------------------------
+
+    private data class RefSlot(val start: String, val end: String, val kind: String)
+
+    /** Direct transcription of `gym_engine.py`'s `slot_for(day, r)`,
+     * written straight from the Python source rather than from the
+     * condition strings under test, so agreement between the two is real
+     * evidence and not a restatement of the same assumption. */
+    private fun referenceSlotFor(d: GymDay, rules: GymRules): RefSlot? {
+        if (d.gymBlocked) return null
+        fun morning(): RefSlot? =
+            if (rules.allowMorning && d.sleepOk && !d.priorNightBlocked) {
+                RefSlot("05:10", "06:10", "morning")
+            } else {
+                null
+            }
+        if (d.dayAfterShow) return null
+        if (d.deadlineHeavy) return morning()
+        if (!d.eveningBlocked) return RefSlot(rules.eveningStart, rules.eveningEnd, "evening")
+        return morning()
+    }
+
+    @Test
+    fun slotConditionsMatchPythonSlotForOnEveryFlagCombination() {
+        var checked = 0
+        for (bits in 0 until 64) {
+            for (allowMorning in listOf(true, false)) {
+                val d = GymDay(
+                    date = MON,
+                    gymBlocked = bits and 1 != 0,
+                    eveningBlocked = bits and 2 != 0,
+                    dayAfterShow = bits and 4 != 0,
+                    priorNightBlocked = bits and 8 != 0,
+                    deadlineHeavy = bits and 16 != 0,
+                    sleepOk = bits and 32 != 0,
+                )
+                val rules = defaultRules.copy(allowMorning = allowMorning)
+                val expected = referenceSlotFor(d, rules)
+                // One candidate day, target=4 -> needed=4, so the day is
+                // booked iff it has a viable slot at all.
+                val actual = creates(plan(input(days = listOf(d), rules = rules)))
+                    .map { RefSlot(it.start, it.end, it.kind) }
+                assertEquals("flags=$d allowMorning=$allowMorning", listOfNotNull(expected), actual)
+                checked++
+            }
+        }
+        assertEquals(128, checked)
+    }
+
+    // Named cases for the specific combinations the brief called out, kept
+    // separate from the exhaustive sweep so a failure names the rule that
+    // broke rather than just a bit pattern.
+
+    @Test
+    fun gymBlockedKillsBothSlots() {
+        // Every other flag set favorably for BOTH slots: evening is
+        // unblocked and morning's own checks all pass -- only gym_blocked
+        // stands in the way, and it must veto both.
+        val out = plan(input(days = listOf(day(MON, gymBlocked = true))))
+        assertTrue(creates(out).isEmpty())
+        assertTrue(out.windDown.isEmpty())
+    }
+
+    @Test
+    fun gymBlockedStillKillsMorningWhenEveningIsAlsoBlocked() {
+        val out = plan(input(days = listOf(day(MON, gymBlocked = true, eveningBlocked = true))))
+        assertTrue(creates(out).isEmpty())
+    }
+
+    @Test
+    fun gymBlockedStillKillsMorningOnADeadlineHeavyDay() {
+        val out = plan(input(days = listOf(day(MON, gymBlocked = true, deadlineHeavy = true))))
+        assertTrue(creates(out).isEmpty())
+    }
+
+    @Test
+    fun dayAfterShowStillKillsMorningOnADeadlineHeavyDay() {
+        val out = plan(input(days = listOf(day(MON, dayAfterShow = true, deadlineHeavy = true))))
+        assertTrue(creates(out).isEmpty())
+    }
+
+    @Test
+    fun deadlineHeavyWithBadSleepYieldsNoSlotRatherThanFallingBackToEvening() {
+        // The exact edge the refactor's own commit message claims to
+        // handle: deadline_heavy forces morning-only, and morning then
+        // fails its own sleep_ok check. Python returns None; a naive
+        // condition-string translation that folded deadline_heavy in only
+        // as "prefer morning" would wrongly hand back the evening slot,
+        // whose window is NOT blocked on this day.
+        val out = plan(input(days = listOf(day(MON, deadlineHeavy = true, sleepOk = false))))
+        assertTrue("deadline-heavy day with bad sleep must yield no slot", creates(out).isEmpty())
+    }
+
+    @Test
+    fun deadlineHeavyWithPriorNightBlockedYieldsNoSlot() {
+        val out = plan(input(days = listOf(day(MON, deadlineHeavy = true, priorNightBlocked = true))))
+        assertTrue(creates(out).isEmpty())
+    }
+
+    @Test
+    fun deadlineHeavyWithMorningSuppressedYieldsNoSlot() {
+        val rules = defaultRules.copy(allowMorning = false)
+        val out = plan(input(days = listOf(day(MON, deadlineHeavy = true)), rules = rules))
+        assertTrue(creates(out).isEmpty())
+    }
+
+    @Test
+    fun priorNightBlockedRemovesTheMorningFallbackWhenEveningIsBlocked() {
+        val out = plan(input(days = listOf(day(MON, eveningBlocked = true, priorNightBlocked = true))))
+        assertTrue(creates(out).isEmpty())
+    }
+
+    @Test
+    fun badSleepDoesNotAffectAnUnblockedEveningDay() {
+        // sleep_ok gates ONLY the morning closure in Python -- an ordinary
+        // day with a bad night still gets its evening slot.
+        val out = plan(input(days = listOf(day(MON, sleepOk = false))))
+        val c = creates(out)
+        assertEquals(1, c.size)
+        assertEquals("evening", c[0].kind)
     }
 }

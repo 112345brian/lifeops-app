@@ -117,13 +117,40 @@ data class ScheduleResult(
  * Returns `null` when no slot's condition is true that day (mirrors
  * `slot_for` returning `None`).
  *
- * @throws LifeScriptEvaluateException if a condition string is malformed,
- *   references an undefined context variable, or evaluates to a non-Boolean
- *   value.
+ * Every slot's condition is PARSED up front (see [compileSlots]) before any
+ * of them is evaluated, so a syntactically broken condition on a
+ * rarely-reached later slot fails immediately and deterministically instead
+ * of lying dormant until the one flag combination that finally reaches it.
+ *
+ * @throws LifeScriptParseException if any slot's condition string is
+ *   syntactically malformed.
+ * @throws LifeScriptEvaluateException if an evaluated condition references
+ *   an undefined context variable or evaluates to a non-Boolean value.
  */
-fun slotFor(routine: Routine, context: Map<String, Any>): TimeSlot? {
-    for (slot in routine.slots) {
-        val result = evaluate(slot.condition, context)
+fun slotFor(routine: Routine, context: Map<String, Any>): TimeSlot? =
+    firstMatchingSlot(compileSlots(routine), context)
+
+/**
+ * Parses each of [routine]'s [TimeSlot.condition] strings exactly once,
+ * pairing every slot with its reusable parsed expression.
+ *
+ * `LifeScript`'s own kdoc calls this out explicitly ("a routine's window
+ * condition is evaluated once per candidate day, so re-parsing the same
+ * expression string every time would be wasteful") -- [scheduleRoutine]
+ * compiles once and then evaluates the same parsed trees against every
+ * candidate day's context, rather than re-lexing/re-parsing per day.
+ */
+private fun compileSlots(routine: Routine): List<Pair<TimeSlot, LifeScriptExpr>> =
+    routine.slots.map { it to LifeScript.parse(it.condition) }
+
+/** The first slot (in declared order) whose already-parsed condition
+ * evaluates `true` against [context]. See [slotFor] for the semantics. */
+private fun firstMatchingSlot(
+    compiled: List<Pair<TimeSlot, LifeScriptExpr>>,
+    context: Map<String, Any>,
+): TimeSlot? {
+    for ((slot, condition) in compiled) {
+        val result = condition.evaluate(context)
         val ok = result as? Boolean
             ?: throw LifeScriptEvaluateException(
                 "TimeSlot '${slot.kind}' condition '${slot.condition}' must evaluate to a boolean, got $result"
@@ -167,9 +194,10 @@ fun runLength(date: LocalDate, busy: Set<LocalDate>): Int {
  *    sorted by date, paired with the slot [slotFor] resolves for that day's
  *    context (days with no viable slot are dropped).
  * 2. Greedily walk the sorted candidates, picking up to [needed] of them
- *    into `chosen`, skipping any candidate whose date would push its
- *    surrounding consecutive run (via [runLength], seeded with [busyDates]
- *    plus every date already `chosen`) past [maxConsecutive].
+ *    into `chosen`, skipping any candidate whose date is ALREADY busy
+ *    (see below) and any candidate whose date would push its surrounding
+ *    consecutive run (via [runLength], seeded with [busyDates] plus every
+ *    date already `chosen`) past [maxConsecutive].
  * 3. Compute [ScheduleResult.viableLeft]: `chosen.size` plus a SECOND greedy
  *    simulation over the same sorted candidate list, seeded with `chosen`'s
  *    dates added to [busyDates] -- checking each remaining candidate against
@@ -195,6 +223,13 @@ fun runLength(date: LocalDate, busy: Set<LocalDate>): Int {
  *   still counts toward the consecutive-day cap even though it can't be
  *   re-booked), but kept as a separate parameter since a caller could
  *   legitimately want a busy set that isn't identical to its exclude set.
+ *   A date that is busy is never double-booked even if the caller left it
+ *   out of [excludeDates]: "busy" means the day is already occupied, so
+ *   both the greedy pick loop and the viable-left simulation skip it. That
+ *   guard is a no-op for a caller (like `GymSchedule.kt`) passing identical
+ *   sets -- it only matters when the two sets genuinely differ, and it also
+ *   makes a duplicated date in [candidateDays] resolve to a single booking
+ *   rather than two bookings of the same day.
  */
 fun scheduleRoutine(
     routine: Routine,
@@ -204,17 +239,28 @@ fun scheduleRoutine(
     excludeDates: Set<LocalDate> = emptySet(),
     busyDates: Set<LocalDate> = emptySet(),
 ): ScheduleResult {
+    // Parsed once, evaluated against every candidate day's context below --
+    // see compileSlots' kdoc.
+    val compiled = compileSlots(routine)
+
     val candidates = candidateDays
         .asSequence()
         .filter { it.date !in excludeDates }
         .sortedBy { it.date }
-        .mapNotNull { cd -> slotFor(routine, cd.context)?.let { ScheduleCandidate(cd.date, it) } }
+        .mapNotNull { cd -> firstMatchingSlot(compiled, cd.context)?.let { ScheduleCandidate(cd.date, it) } }
         .toList()
 
     val chosen = mutableListOf<ScheduleCandidate>()
     val busy = busyDates.toMutableSet()
     for (c in candidates) {
         if (chosen.size >= needed) break
+        // A day that is already busy cannot be booked again -- symmetric
+        // with the viable-left simulation's own `in simBusy` guard below.
+        // No-op when excludeDates == busyDates and candidate dates are
+        // unique (the only shape `gym_engine.py`'s plan() ever produced);
+        // load-bearing when they differ, or when candidateDays repeats a
+        // date, either of which would otherwise double-book that day.
+        if (c.date in busy) continue
         if (runLength(c.date, busy + c.date) > maxConsecutive) continue
         chosen.add(c)
         busy.add(c.date)
