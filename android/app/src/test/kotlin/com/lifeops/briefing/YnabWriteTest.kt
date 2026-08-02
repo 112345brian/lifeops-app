@@ -5,6 +5,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -285,7 +286,69 @@ class YnabWriteTest {
 
         // Held (large/unusual): no approve, no categorize write for t1 at all.
         assertTrue(writtenUpdates.isNullOrEmpty())
-        assertEquals(listOf("c-over" to 2000, "c-eat" to 3000), budgetWrites)
+        // Debit (c-eat, the funding source, LOSING budgeted dollars) must be
+        // written before the credit (c-over, the destination, GAINING
+        // budgeted dollars) -- see applyCoverMoves' kdoc. If this were
+        // reversed and the tick died between the two writes, c-over would
+        // permanently keep money that was never actually debited from c-eat.
+        assertEquals(listOf("c-eat" to 3000, "c-over" to 2000), budgetWrites)
+    }
+
+    @Test
+    fun applyCoverMoves_writesDebitsBeforeCredits_regardlessOfInputOrder() {
+        val oldMonth = YnabMonth(
+            listOf(
+                YnabMonthCategory("c-over", "Fun", balance = -2000, budgeted = 0),
+                YnabMonthCategory("c-eat", "Eating Out", balance = 5000, budgeted = 5000),
+            ),
+        )
+        // Deliberately listed credit-before-debit -- exactly the dangerous
+        // order YnabEngine.cover()'s LinkedHashMap insertion order produces
+        // (destination inserted before source within the same iteration).
+        val cover = listOf(YnabCoverAction("c-over", 2000), YnabCoverAction("c-eat", 3000))
+        val written = mutableListOf<Pair<String, Int>>()
+
+        applyCoverMoves(YnabBudgetWriteClient { categoryId, budgeted -> written.add(categoryId to budgeted) }, cover, oldMonth)
+
+        assertEquals(listOf("c-eat" to 3000, "c-over" to 2000), written)
+    }
+
+    @Test
+    fun applyCoverMoves_partialFailureNeverLeavesAnUndebitedCredit() {
+        // The exact bug a review caught: if the credit landed before the
+        // debit and the tick died in between, the destination permanently
+        // keeps un-sourced money on the next tick's fresh recompute (it's no
+        // longer overspent, so cover() never revisits it). Proving the fix:
+        // when the SECOND write throws (simulating a mid-batch failure), the
+        // write that already landed must be the debit, never the credit.
+        val oldMonth = YnabMonth(
+            listOf(
+                YnabMonthCategory("c-over", "Fun", balance = -2000, budgeted = 0),
+                YnabMonthCategory("c-eat", "Eating Out", balance = 5000, budgeted = 5000),
+            ),
+        )
+        val cover = listOf(YnabCoverAction("c-over", 2000), YnabCoverAction("c-eat", 3000))
+        val written = mutableListOf<Pair<String, Int>>()
+        var calls = 0
+
+        try {
+            applyCoverMoves(
+                YnabBudgetWriteClient { categoryId, budgeted ->
+                    calls++
+                    if (calls == 2) throw java.io.IOException("simulated mid-batch failure")
+                    written.add(categoryId to budgeted)
+                },
+                cover,
+                oldMonth,
+            )
+            fail("expected the simulated failure on the second write to propagate")
+        } catch (e: java.io.IOException) {
+            // expected
+        }
+
+        // Only the debit (c-eat, losing money) landed; the credit (c-over,
+        // gaining money) never fired. No un-sourced money was created.
+        assertEquals(listOf("c-eat" to 3000), written)
     }
 
     @Test

@@ -592,14 +592,21 @@ data + persistence exist.
   headline), and `briefing_service.py`'s `compose_text()` is pure string
   formatting today. Reintroducing an on-device LLM narrative call would
   silently reverse that decision with an invented prompt, so this pass
-  deliberately did not. **Still undecided**: YNAB novel-payee categorization
-  -- `AnthropicClient.kt`'s `categorizeUnknownPayee` ports the LLM call
-  itself, but it's not wired into any on-device path, since there's no
-  on-device YNAB write pipeline (unapproved-transaction read + category/
-  approval PATCH) yet; building that is flagged as separate, riskier
-  follow-up work, and gating it behind biometric confirmation (rather than
-  running fully unattended like the rest of `run_ynab`) is a real open
-  question, not a settled one.
+  deliberately did not. **Resolved**: YNAB novel-payee categorization is now
+  wired -- `YnabWrite.kt` is the full on-device read-decide-write pipeline
+  (unapproved-transaction read, `YnabEngine.plan()`'s categorize/approve/
+  hold/cover decision, `categorizeUnknownPayee` for novel payees, PATCH
+  writes back to YNAB). The biometric-gating question is settled too: traced
+  directly against `runner.py` (`run_ynab` fires from an unattended scheduled
+  run with no human review step), so this runs fully unattended, ungated,
+  matching that existing behavior -- confirmed explicitly with the user
+  after a security review flagged it, given this pipeline can move real
+  budgeted money between categories. A separate review of the pipeline's
+  `cover` write also caught and fixed a real money-duplication bug (a
+  destination category's credit could land before its funding source's
+  debit; a partial failure then let the destination permanently keep
+  uncredited money on retry) -- see `applyCoverMoves`'s kdoc in `YnabWrite.kt`
+  for the debit-before-credit fix.
 - Staged rollout order and how to run old+new in parallel without breaking
   daily use of a system that's actively relied on every day.
 - What's left for ntfy/FCM once task completion and app→phone alerts both

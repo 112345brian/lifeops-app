@@ -25,6 +25,8 @@ import com.lifeops.briefing.data.TaskCacheEntity
 import com.lifeops.briefing.data.TodayEvent
 import com.lifeops.briefing.data.toRoutine
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONException
@@ -683,6 +685,26 @@ class LifeOpsComputeWorker(
 ) : CoroutineWorker(appContext, workerParams) {
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+        // A periodic tick (UNIQUE_PERIODIC_WORK_NAME) and any manually
+        // enqueued one (UNIQUE_ONE_TIME_WORK_NAME, via enqueueOnce) are two
+        // INDEPENDENT unique-work chains -- WorkManager's uniqueness
+        // guarantee is scoped per name, so nothing stops the periodic tick
+        // and a manual trigger from running doWork() concurrently on two
+        // threads. A review caught that this is a real exposure for
+        // runChoreCycle specifically: two concurrent runs can both read the
+        // same not-yet-`processed` completed task before either persists,
+        // and both create a duplicate next-occurrence in FlowSavvy. Rather
+        // than trying to unify the two WorkManager unique-work chains
+        // (mixing enqueueUniquePeriodicWork/enqueueUniqueWork under one name
+        // has its own undefined-policy-interaction risk), this in-process
+        // Mutex just serializes every doWork() call regardless of which
+        // chain triggered it -- correct and sufficient because WorkManager
+        // runs its workers within this app's own single process, so a
+        // static Mutex genuinely covers every possible concurrent caller.
+        tickMutex.withLock { doComputeTick() }
+    }
+
+    private suspend fun doComputeTick(): Result {
         // Unconditional, same as the old worker: a stuck optimistic
         // completion (PendingRemovals.kt) must revert even with zero
         // connectivity.
@@ -728,7 +750,7 @@ class LifeOpsComputeWorker(
             // Not configured yet -- nothing left to do (the on-device
             // compute tick needs FlowSavvy data to run against).
             Log.i(TAG, "skipping on-device compute tick: FlowSavvy is not configured")
-            return@withContext Result.success()
+            return Result.success()
         }
 
         val client = FlowSavvyClient(flowSavvyBaseUrl, flowSavvyToken)
@@ -736,33 +758,40 @@ class LifeOpsComputeWorker(
 
         // Chore next-occurrence write-back (runChoreCycle/ChoreCycle.kt) --
         // wrapped in its OWN try/catch, deliberately separate from the main
-        // tick's below: a FlowSavvy hiccup on this write-capable path
-        // shouldn't block the read-only attention/next-tasks compute this
-        // tick is centered on, and vice versa. Errors are logged, not
-        // rethrown -- same "one domain's failure doesn't abort the others"
-        // posture the old Python `_run()` sweep had per-domain.
+        // tick's below: a hiccup on this write-capable path shouldn't block
+        // the read-only attention/next-tasks compute this tick is centered
+        // on, and vice versa. Errors are logged, not rethrown -- same "one
+        // domain's failure doesn't abort the others" posture the old Python
+        // `_run()` sweep had per-domain.
+        //
+        // Catches `Exception` broadly, not just the two named FlowSavvy
+        // types -- a review caught that the original narrower catch let a
+        // malformed JSON response (JSONException from FlowSavvyClient's own
+        // parsing) or any other unexpected failure inside runChoreCycle
+        // propagate straight out of doWork(), aborting the ENTIRE tick
+        // (including gym/social/attention below) rather than being isolated
+        // to just the chore write-back, exactly the failure mode this
+        // try/catch's own comment above says it exists to prevent.
         try {
             runChoreCycle(db, RealChoreCompletedFetch(client), RealChoreTaskCreator(client), now)
-        } catch (e: FlowSavvyConnectionException) {
-            Log.e(TAG, "FlowSavvy unreachable during chore cycle", e)
-        } catch (e: FlowSavvyHttpException) {
-            Log.e(TAG, "FlowSavvy returned an error during chore cycle", e)
+        } catch (e: Exception) {
+            Log.e(TAG, "chore cycle failed, isolated from the rest of this tick", e)
         }
 
         val result = try {
             runComputeTick(db, RealFlowSavvyFetch(client), discretionaryDollars, now)
         } catch (e: FlowSavvyConnectionException) {
             Log.e(TAG, "FlowSavvy unreachable during on-device compute tick", e)
-            return@withContext Result.retry()
+            return Result.retry()
         } catch (e: FlowSavvyHttpException) {
             // Mirrors the old worker's "malformed body shouldn't crash the
             // worker or hammer a response shape that won't change" posture.
             Log.e(TAG, "FlowSavvy returned an error during on-device compute tick", e)
-            return@withContext Result.success()
+            return Result.success()
         }
 
         applyComputeTickResult(applicationContext, result)
-        Result.success()
+        return Result.success()
     }
 
     /** Reads back whatever `discretionaryCurrentDollars`
@@ -839,6 +868,14 @@ class LifeOpsComputeWorker(
          * fire-and-forget semantics. */
         private const val UNIQUE_ONE_TIME_WORK_NAME = "lifeops_compute_tick_once"
         private const val MIN_BACKOFF_MS = 30_000L
+
+        /** Serializes every [doWork] call -- see [doWork]'s own comment for
+         * why WorkManager's unique-work-name mechanism alone (the
+         * [UNIQUE_ONE_TIME_WORK_NAME] fix above) doesn't cover a periodic
+         * tick racing a manual one. A single companion-object [Mutex] is
+         * correct here specifically because WorkManager executes workers
+         * within this app's own process, not a separate one. */
+        private val tickMutex = Mutex()
 
         /** Schedules the recurring 15-minute tick -- same cadence/backoff
          * policy the old `NextTasksRefreshWorker` used. Safe to call multiple

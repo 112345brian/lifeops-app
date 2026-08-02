@@ -135,7 +135,13 @@ fun plan(input: ChorePlanInput): ChorePlanResult {
         val match = CYCLE_TAG.find(c.notes ?: "")
             ?: continue // not a managed chore
 
-        val n = match.groupValues[1].toInt()
+        // toIntOrNull, not toInt: an oversized digit string (e.g. a typo'd
+        // 11+-digit tag) overflows Int and toInt() throws NumberFormatException,
+        // which would abort the WHOLE batch -- exactly the "one bad record
+        // shouldn't abort the batch" guarantee this function's own kdoc
+        // promises, broken by this one un-guarded parse. Treat it the same
+        // as any other malformed record: skip just this item.
+        val n = match.groupValues[1].toIntOrNull() ?: continue
 
         // Ports `datetime.date.fromisoformat(...)` inside a try/except:
         // malformed or missing completed_date skips just this item, not the

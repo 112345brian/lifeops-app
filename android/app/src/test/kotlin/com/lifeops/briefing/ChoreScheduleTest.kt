@@ -93,6 +93,21 @@ class ChoreScheduleTest {
         assertTrue("bad" !in out.processed) // bad items can retry when fixed
     }
 
+    // Regression: an 11+-digit [cycle:Nd] tag (e.g. a typo/paste corruption
+    // in a FlowSavvy task note) overflows Int and used to throw
+    // NumberFormatException out of plan() entirely, aborting the whole batch
+    // (and, at the LifeOpsComputeWorker call site, the entire compute tick --
+    // caught by review, not by a pre-existing Python test since this is a
+    // Kotlin-Int-overflow-specific hazard with no Python equivalent).
+    @Test
+    fun oversizedCycleDigitStringSkipsItemInsteadOfThrowing() {
+        val overflowed = base.copy(id = "overflow", notes = "[cycle:99999999999d]")
+        val out = plan(ChorePlanInput(completed = listOf(overflowed, base)))
+        assertEquals(1, out.creates.size) // good one still cycles
+        assertEquals("Laundry", out.creates[0].title)
+        assertTrue("overflow" !in out.processed) // same treatment as a malformed date: not marked, can retry if fixed
+    }
+
     // Corresponds to test_missing_id_or_title_skipped
     @Test
     fun missingIdOrTitleSkipped() {

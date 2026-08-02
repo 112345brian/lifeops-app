@@ -33,8 +33,9 @@ import kotlin.math.pow
  *   only. See `WeeklyDigest.kt` for the on-device Sunday-gated trigger.
  * - [categorizeUnknownPayee] -- ports `llm.py`'s `categorize_unknown(payee,
  *   amount, category_names)` exactly. Called from `runner.py:539-549`'s
- *   `run_ynab`, for novel/ambiguous transaction payees. **Not yet wired into
- *   any on-device call path** -- see this function's own kdoc for why.
+ *   `run_ynab`, for novel/ambiguous transaction payees. Wired into
+ *   `YnabWrite.kt`'s on-device read-decide-write pipeline -- see this
+ *   function's own kdoc for the exact call site.
  *
  * A **third** LLM call this porting task's brief described --  "daily
  * briefing text generation" -- does **NOT** exist in the current Python

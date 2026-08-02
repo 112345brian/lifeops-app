@@ -41,7 +41,8 @@ import kotlin.math.abs
  * write in this codebase, and NOT a place to invent a UI approval flow that
  * doesn't exist server-side either.
  *
- * ## Retry-safety: no asymmetric retry guard needed, and here's why
+ * ## Retry-safety: no asymmetric retry guard needed for transactions --
+ * but `cover` needed a real fix, not just a claim
  *
  * Unlike `FlowSavvyClient.kt`'s `create_task`/`create_event` (a POST that
  * risks creating a DUPLICATE resource if blindly retried after an ambiguous
@@ -52,9 +53,7 @@ import kotlin.math.abs
  * `{id, category_id, approved}` payload twice in a row (e.g. after a
  * mid-write connection drop) converges to the identical end state both
  * times -- there is no "ran twice -> duplicate transaction" hazard the way
- * there is for FlowSavvy's non-idempotent creates. The same reasoning
- * applies to `PATCH .../categories/{id}` (`cover`'s `budgeted` set) -- it's
- * an absolute assignment, not an increment.
+ * there is for FlowSavvy's non-idempotent creates.
  *
  * Given that, this port intentionally does NOT add `FlowSavvyClient.kt`-style
  * retry/backoff machinery around the write calls -- `lifeops/ynab.py`'s own
@@ -70,7 +69,16 @@ import kotlin.math.abs
  * transactions fresh from YNAB every time, any transaction the first attempt
  * DID successfully write is naturally excluded from the next attempt's input
  * (it's no longer unapproved / already has a category), so a retry cannot
- * double-apply anything even at the whole-tick level.
+ * double-apply anything even at the whole-tick level, for TRANSACTIONS.
+ *
+ * `cover`'s per-category budget PATCH is NOT covered by that same reasoning,
+ * despite an earlier version of this file claiming it was -- a per-write
+ * "absolute assignment" guarantee does not make a MULTI-category BATCH safe
+ * to partially apply, since `cover()`'s decision is recomputed fresh from
+ * live category state each tick, not diffed against what the previous
+ * attempt actually wrote. See [applyCoverMoves]'s kdoc for the exact
+ * money-duplication scenario a review caught and the debit-before-credit
+ * ordering fix that closes it.
  */
 
 // ---------------------------------------------------------------------
@@ -392,6 +400,50 @@ internal fun isYnabWriteDue(now: LocalDateTime, lastRunDate: String?): Boolean =
     lastRunDate != now.toLocalDate().toString()
 
 /**
+ * Applies [cover]'s per-category absolute `budgeted` targets to YNAB, in an
+ * order chosen to make a partial failure fail SAFE rather than fail
+ * money-duplicating.
+ *
+ * [cover] each entry is a single absolute `budgeted` value per category
+ * (`YnabEngine.kt`'s `cover()` collapses all draws from/to one category into
+ * one final target, never multiple partial writes to the same category), so
+ * the only ordering question is: across DIFFERENT categories in the same
+ * batch, which do we write first?
+ *
+ * This file's own kdoc used to claim no special care was needed here beyond
+ * "each individual PATCH is an absolute set, so it's idempotent" -- true per
+ * write, but NOT sufficient for the batch as a whole, and this is a real bug
+ * a review caught (not a hypothetical): [cover]'s decision is a STATE-BASED
+ * diff recomputed fresh from `/months/current` on every tick, not a
+ * diff-from-last-attempt. If a destination category's credit (raising its
+ * `budgeted`, curing its overspend) is written BEFORE its funding source's
+ * debit (lowering the source's `budgeted`), and the tick then fails/crashes
+ * before the debit PATCH fires, the next tick's fresh snapshot sees the
+ * destination as no longer overspent -- `cover()` finds no deficit there at
+ * all and never retries debiting the source. Net effect: the destination
+ * permanently keeps money it was credited, and the source is never actually
+ * charged for it -- real money materialized from nothing, non-self-healing.
+ *
+ * Writing every DEBIT (a category whose new `budgeted` is LOWER than its
+ * `oldBudgeted` from the same snapshot the plan was computed against) before
+ * any CREDIT (higher) closes this: a partial failure can now only ever leave
+ * a destination still accurately overspent (a debit succeeded, or hasn't run
+ * yet, but the matching credit hasn't landed) -- never holding uncredited
+ * money with no debited source. A retry's fresh snapshot then correctly
+ * re-derives the real remaining deficit/availability and converges, instead
+ * of silently duplicating or losing money. Entries with no change from
+ * [oldMonth] (shouldn't occur in practice, since `cover()` only emits
+ * entries it actually changed) are treated as debits (order doesn't matter
+ * for a true no-op).
+ */
+internal fun applyCoverMoves(budgetWrite: YnabBudgetWriteClient, cover: List<YnabCoverAction>, oldMonth: YnabMonth) {
+    val oldBudgetedById = oldMonth.categories.associate { it.id to it.budgeted }
+    val (debits, credits) = cover.partition { mv -> mv.budgeted <= (oldBudgetedById[mv.categoryId] ?: mv.budgeted) }
+    for (mv in debits) budgetWrite.setBudgeted(mv.categoryId, mv.budgeted)
+    for (mv in credits) budgetWrite.setBudgeted(mv.categoryId, mv.budgeted)
+}
+
+/**
  * The actual on-device YNAB read-decide-write tick. No-ops silently (mirrors
  * `run_ynab`'s own always-available-if-configured posture, and
  * [runWeeklyDigestIfDue]'s no-op shape) if: it already ran today, no YNAB
@@ -438,9 +490,7 @@ internal fun runYnabWriteTickIfDue(
 
     try {
         write.updateTransactions(decision.updates)
-        for (mv in decision.cover) {
-            budgetWrite.setBudgeted(mv.categoryId, mv.budgeted)
-        }
+        applyCoverMoves(budgetWrite, decision.cover, fetched.month)
     } catch (e: Exception) {
         Log.e("YnabWrite", "YNAB write failed during write tick", e)
         return
