@@ -4,6 +4,10 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.gms.google-services")
+    // Room's annotation processor (RoutineEntity/HistoryEventEntity/
+    // TaskCacheEntity's generated DAO impls + LifeOpsDatabase_Impl) --
+    // see root build.gradle.kts for why KSP over kapt.
+    id("com.google.devtools.ksp")
 }
 
 // ntfy.signalTopic in local.properties (gitignored, machine-local, same file
@@ -98,6 +102,16 @@ dependencies {
 
     // FusedLocationProviderClient, for LocationReporter's one-shot GPS fix.
     implementation("com.google.android.gms:play-services-location:21.3.0")
+
+    // Room, for the on-device persistence layer (RoutineEntity/
+    // HistoryEventEntity/TaskCacheEntity, see com.lifeops.briefing.data) that
+    // the data-gather layer, WorkManager compute tick, and native UI work
+    // will build on. room-runtime + room-ktx for the (suspend-fun) query
+    // surface; room-compiler is a KSP processor, not a runtime dependency,
+    // hence "ksp(...)" rather than "implementation(...)".
+    implementation("androidx.room:room-runtime:2.8.4")
+    implementation("androidx.room:room-ktx:2.8.4")
+    ksp("androidx.room:room-compiler:2.8.4")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("androidx.glance:glance-testing:1.1.1")
