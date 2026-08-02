@@ -5,13 +5,18 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Kotlin port of `tests/test_chore_engine.py` -- see `ChoreEngine.kt`'s
- * kdoc for context. One test per Python test, each annotated with which
- * Python test it corresponds to. Plain JUnit is enough: like `Routine.kt`,
- * `ChoreEngine.kt` has zero Android-framework dependency (pure java.time +
- * regex).
+ * Reproduces `tests/test_chore_engine.py`'s (and the former
+ * `ChoreEngineTest.kt`'s) 12 test cases, unchanged in assertion, against the
+ * NEW `ChoreSchedule.kt` (see that file's kdoc for the finding that chore
+ * has no per-day/slot decision to make, so it stays a direct call into
+ * `Routine.kt`'s SINCE_LAST primitive rather than growing a [TimeSlot]).
+ * Every type name and the `plan()` entry point are unchanged, so this file
+ * is a faithful behavior-preservation check, not a rewrite.
+ *
+ * No Robolectric needed: `ChoreSchedule.kt` has zero Android-framework
+ * dependency (pure java.time + regex), same as `RoutineTest.kt`.
  */
-class ChoreEngineTest {
+class ChoreScheduleTest {
 
     // Mirrors the Python module-level BASE dict fixture.
     private val base = CompletedChore(
