@@ -360,12 +360,32 @@ predicate-based set selection" design was describing in the abstract —
 gym was the hardest case (real algorithm, not just a threshold check), and
 it reduced cleanly to data.
 
+**Resolved (2026-08-02)**: chore and social were re-examined against the
+same question gym's migration left open ("thin enough that they plausibly
+should" get the windows+LifeScript treatment). Finding: neither needs it.
+Gym's bespoke code decomposed into `TimeSlot`/`LifeScript` because it had a
+genuine per-day decision problem (which of several candidate days has a
+clock-time slot available, and which subset to book under a
+consecutive-day cap). Chore and social have no such problem — each already
+routed its one due-check per call directly through `Routine.kt`'s shared
+primitives (`nextDueDate` for chore, `statusSinceLast` for social) with zero
+bespoke recurrence math of their own, before this pass even started.
+Forcing a `TimeSlot` in would mean inventing a fake always-true condition
+and a fake single-candidate-day list just to route through machinery built
+for a problem neither domain has. `ChoreEngine.kt`/`SocialEngine.kt` were
+renamed to `ChoreSchedule.kt`/`SocialSchedule.kt` (same `plan()` behavior,
+all 12/7 original test scenarios reproduced unchanged as
+`ChoreScheduleTest.kt`/`SocialScheduleTest.kt`) to match gym's naming
+pattern and to write this finding down where it can't silently drift stale,
+but no `TimeSlot`/`LifeScript` usage was added to either — their remaining
+code (chore's `[cycle:Nd]` tag regex + output-field assembly; social's
+null-days guard + nudge-text templates) is domain-specific discovery/
+formatting, not scheduling logic, the same category `GymSchedule.kt` itself
+keeps as bespoke (alert wording, wind-down attachment, sick-week rule).
+
 Still not scoped: where `Routine` records (and their variable contracts)
 live (local SQLite/Room on-device vs. synced list) — `Routine`/`TimeSlot`
-are still plain in-memory data classes, nothing persists them yet; whether
-chore/social get re-derived through the same windows+LifeScript model next
-(both are thin enough that they plausibly should, per the same reasoning
-that dissolved gym) or stay as their current standalone engines; the
+are still plain in-memory data classes, nothing persists them yet; the
 migration path for the OTHER three original engines (chore/social/ynab —
 ynab stays genuinely bespoke, see the "On-Device Migration" section
 above); where the audit trail is surfaced (panel page? part of the

@@ -4,13 +4,16 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** Kotlin port of `tests/test_social_engine.py` -- see `SocialEngine.kt`'s
- * kdoc for why this exists (a sibling of the `Routine.kt` on-device
- * migration port). One test per case from the Python suite, each annotated
- * with which Python test it corresponds to. No Robolectric needed:
- * `SocialEngine.kt`, like `Routine.kt`, has zero Android-framework
+/** Reproduces `tests/test_social_engine.py`'s (and the former
+ * `SocialEngineTest.kt`'s) 7 test cases, unchanged in assertion, against the
+ * NEW `SocialSchedule.kt` (see that file's kdoc for the finding that social
+ * has no per-day/slot decision to make, so it stays a direct call into
+ * `Routine.kt`'s [statusSinceLast] primitive rather than growing a
+ * [TimeSlot]). One test per case from the Python suite, each annotated with
+ * which Python test it corresponds to. No Robolectric needed:
+ * `SocialSchedule.kt`, like `Routine.kt`, has zero Android-framework
  * dependency, so plain JUnit is enough. */
-class SocialEngineTest {
+class SocialScheduleTest {
 
     private val partner = Routine(id = "partner", times = 1, perDays = 7, anchor = Anchor.SINCE_LAST)
     private val friends = Routine(id = "friends", times = 1, perDays = 7, anchor = Anchor.SINCE_LAST)

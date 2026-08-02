@@ -70,8 +70,9 @@ data class TimeSlot(
 /** Matches `lifeops/routine.py`'s `Routine` dataclass field-for-field, plus
  * [slots] -- the generic time-of-day scheduling-window extension (see
  * [TimeSlot]'s kdoc). Defaults to an empty list so every existing caller
- * (`ChoreEngine.kt`, `SocialEngine.kt`, and their tests, none of which use
- * scheduling) is source-compatible without any change. */
+ * (`ChoreSchedule.kt`, `SocialSchedule.kt`, and their tests, neither of which
+ * has a per-day/slot decision to make -- see those files' kdocs -- so
+ * neither uses scheduling) is source-compatible without any change. */
 data class Routine(
     val id: String,
     val times: Int,
