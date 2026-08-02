@@ -4,12 +4,29 @@
      restorable, so a restored copy is undecryptable garbage that crashes
      WidgetConfigStore.prefs() on first read (confirmed via logcat on a
      real device, 2026-07-12). Re-entering the panel URL/token after a
-     reinstall is a one-time cost; crashing on every reinstall isn't. -->
+     reinstall is a one-time cost; crashing on every reinstall isn't.
+
+     Also excludes the Room database (LifeOpsDatabase.kt's "lifeops.db"),
+     added when local persistence landed: unlike the token file above, Room
+     itself has no restore-time crash risk, but TaskCacheEntity.sourceJson/
+     RoutineEntity.constraintsJson store raw FlowSavvy task/routine JSON
+     verbatim, and this app declares allowBackup="true": with no exclusion
+     here, that plaintext personal data would otherwise ride along in every
+     cloud backup and device transfer. The -wal/-shm entries cover Room's
+     write-ahead-log sidecar files, which exist whenever WAL journal mode is
+     active (Room's default) and are not implied by excluding the main
+     "lifeops.db" file alone. -->
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="sharedpref" path="lifeops_widget_config.xml" />
+        <exclude domain="database" path="lifeops.db" />
+        <exclude domain="database" path="lifeops.db-wal" />
+        <exclude domain="database" path="lifeops.db-shm" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="sharedpref" path="lifeops_widget_config.xml" />
+        <exclude domain="database" path="lifeops.db" />
+        <exclude domain="database" path="lifeops.db-wal" />
+        <exclude domain="database" path="lifeops.db-shm" />
     </device-transfer>
 </data-extraction-rules>

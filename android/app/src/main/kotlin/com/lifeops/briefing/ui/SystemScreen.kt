@@ -164,7 +164,10 @@ fun SystemScreen(modifier: Modifier = Modifier) {
             OutlinedButton(
                 onClick = {
                     val baseUrl = WidgetConfigStore.getBaseUrl(context)
-                    if (baseUrl != null) context.startActivity(PanelActivity.intent(context, baseUrl))
+                    // authenticatedIntent, not a bare PanelActivity.intent(context, baseUrl) --
+                    // see PanelActivity.authenticatedIntent's kdoc for why the
+                    // bare form loads the panel unauthenticated.
+                    if (baseUrl != null) context.startActivity(PanelActivity.authenticatedIntent(context, baseUrl))
                 },
                 enabled = status.panelConfigured,
             ) { Text("Open web panel") }

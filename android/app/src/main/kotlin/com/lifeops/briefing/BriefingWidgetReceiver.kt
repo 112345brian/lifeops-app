@@ -5,7 +5,6 @@ import android.content.ComponentName
 import android.content.Context
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.GlanceAppWidgetReceiver
-import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 
 /**
@@ -41,8 +40,11 @@ abstract class BaseBriefingWidgetReceiver : GlanceAppWidgetReceiver() {
         LifeOpsComputeWorker.schedulePeriodic(context)
         // Don't make a freshly-placed widget wait up to 15 minutes (or an
         // FCM push that may never come, e.g. no token registered yet) for
-        // its first content -- fire one immediate pull too.
-        WorkManager.getInstance(context).enqueue(OneTimeWorkRequestBuilder<LifeOpsComputeWorker>().build())
+        // its first content -- fire one immediate pull too. Routed through
+        // enqueueOnce (KEEP) rather than a bare enqueue() so onEnabled
+        // firing again for a second placed provider doesn't stack a
+        // concurrent duplicate tick on top of one already running.
+        LifeOpsComputeWorker.enqueueOnce(context)
     }
 
     override fun onDisabled(context: Context) {

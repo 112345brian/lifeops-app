@@ -3,6 +3,7 @@ package com.lifeops.briefing
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.webkit.CookieManager
 import android.webkit.WebView
@@ -42,6 +43,21 @@ class PanelActivity : ComponentActivity() {
 
         fun intent(context: Context, url: String): Intent =
             Intent(context, PanelActivity::class.java).putExtra(EXTRA_URL, url)
+
+        /** Builds the [intent] for opening the panel authenticated, the same
+         * way [OpenPanelAction] already does: appends `?token=` (which the
+         * server turns into a session cookie, see `lifeops/web.py`) BEFORE
+         * the `#briefing` fragment, since a token appended after a fragment
+         * never reaches the server at all. Callers that skip this and just
+         * pass a bare base URL (as two call sites under `ui/` used to)
+         * silently load an unauthenticated panel page instead of erroring,
+         * which is why this is a shared helper rather than three independent
+         * copies of the same ordering rule. */
+        fun authenticatedIntent(context: Context, baseUrl: String): Intent {
+            val token = WidgetConfigStore.getToken(context)
+            val url = if (token != null) "$baseUrl/?token=${Uri.encode(token)}#briefing" else "$baseUrl/#briefing"
+            return intent(context, url)
+        }
     }
 
     private var webView: WebView? = null

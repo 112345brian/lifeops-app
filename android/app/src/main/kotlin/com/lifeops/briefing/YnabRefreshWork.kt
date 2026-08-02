@@ -9,12 +9,15 @@ import androidx.work.workDataOf
 import java.util.concurrent.TimeUnit
 
 internal fun enqueueForcedYnabRefresh(context: Context) {
-    WorkManager.getInstance(context).enqueue(
-        OneTimeWorkRequestBuilder<LifeOpsComputeWorker>()
-            .setInputData(workDataOf(LifeOpsComputeWorker.INPUT_FORCE_YNAB_REFRESH to true))
+    // REPLACE, not KEEP: an explicit config-save-triggered forced refresh
+    // should win over (and not be silently dropped by) whatever plain
+    // one-time tick might already be queued under the same unique name --
+    // see LifeOpsComputeWorker.enqueueOnce's kdoc for why every one-time
+    // trigger shares that name in the first place.
+    LifeOpsComputeWorker.enqueueOnce(context, policy = ExistingWorkPolicy.REPLACE) {
+        setInputData(workDataOf(LifeOpsComputeWorker.INPUT_FORCE_YNAB_REFRESH to true))
             .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
-            .build(),
-    )
+    }
 }
 
 /** Fired from [OpenExternalAppAction] when the money tile is tapped through

@@ -2,7 +2,6 @@ package com.lifeops.briefing
 
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import androidx.glance.GlanceId
 import androidx.glance.action.ActionParameters
 import androidx.glance.appwidget.action.ActionCallback
@@ -32,12 +31,7 @@ class OpenPanelAction : ActionCallback {
         val intent = if (baseUrl == null) {
             Intent(context, SettingsActivity::class.java)
         } else {
-            // Token must come before the #fragment -- fragments never reach
-            // the server, so a token appended after one would authenticate
-            // nothing (see ntfy.panel_url's matching fix server-side).
-            val token = WidgetConfigStore.getToken(context)
-            val url = if (token != null) "$baseUrl/?token=${Uri.encode(token)}#briefing" else "$baseUrl/#briefing"
-            PanelActivity.intent(context, url)
+            PanelActivity.authenticatedIntent(context, baseUrl)
         }
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(intent)

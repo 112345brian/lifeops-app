@@ -34,8 +34,6 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
-import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.WorkManager
 import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -192,8 +190,7 @@ private fun SettingsScreen(context: Context, onSaved: () -> Unit) {
                     context, baseUrl.trim(), token.trim(), ynabToken.trim(), ynabBudget.trim(),
                     ynabDiscretionaryCategories.trim(), anthropicApiKey.trim(),
                 )
-                WorkManager.getInstance(context)
-                    .enqueue(OneTimeWorkRequestBuilder<LifeOpsComputeWorker>().build())
+                LifeOpsComputeWorker.enqueueOnce(context)
                 // Register the current FCM token now too -- covers the
                 // common case where Settings gets configured after
                 // BriefingFcmService.onNewToken already fired once (e.g.

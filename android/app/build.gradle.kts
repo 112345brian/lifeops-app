@@ -79,11 +79,13 @@ dependencies {
     // on transitive resolution.
     implementation("androidx.datastore:datastore-preferences:1.1.7")
 
-    // Periodic pull of the next-tasks list (NextTasksRefreshWorker).
+    // Periodic on-device compute tick (LifeOpsComputeWorker), formerly
+    // NextTasksRefreshWorker before the on-device migration replaced it.
     implementation("androidx.work:work-runtime-ktx:2.11.2")
 
     // EncryptedSharedPreferences, for storing the server base URL + auth
-    // token used by NextTasksRefreshWorker/CompleteTaskAction.
+    // token, YNAB token, and Anthropic API key, used by
+    // LifeOpsComputeWorker/CompleteTaskAction/AnthropicClient.
     implementation("androidx.security:security-crypto:1.1.0")
 
     // Jetpack Compose, for the settings screen (SettingsActivity).

@@ -190,10 +190,24 @@ private fun rawRequest(
         headers.forEach { (k, v) -> setRequestProperty(k, v) }
     }
     try {
-        if (body != null) {
-            connection.outputStream.use { it.write(body.toByteArray(StandardCharsets.UTF_8)) }
-        }
         val code = try {
+            // The body write (for POST/PUT -- the exact non-idempotent
+            // writes this file's retry policy exists to protect) used to
+            // sit OUTSIDE this classifying try/catch, wrapped only by the
+            // outer `try`/`finally`. A connection failure during the write
+            // itself (refused/reset before any bytes reached the server)
+            // therefore threw a raw, unclassified IOException that neither
+            // FlowSavvyConnectionException nor FlowSavvyHttpException, so
+            // withFlowSavvyRetry's catch clauses never saw it and never
+            // retried -- exactly the "connection failures are always safe
+            // to retry regardless of verb" guarantee this file's kdoc
+            // claims, silently not holding for writes. Moving the write
+            // inside this same block gives it the identical classification
+            // (and thus identical retry behavior) as a connect-time or
+            // response-time failure.
+            if (body != null) {
+                connection.outputStream.use { it.write(body.toByteArray(StandardCharsets.UTF_8)) }
+            }
             connection.responseCode
         } catch (e: SocketTimeoutException) {
             throw e

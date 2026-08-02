@@ -62,6 +62,13 @@ fun TodayScreen(modifier: Modifier = Modifier) {
     var data by remember { mutableStateOf(TodayData.EMPTY) }
     var loading by remember { mutableStateOf(true) }
     var actionInFlight by remember { mutableStateOf(false) }
+    // Which task's checkbox is showing a transient "completing" state --
+    // NOT "this task is complete": completion is reflected by the task
+    // disappearing from data.nextTasks.tasks after reload(). Tracked here
+    // (rather than as permanent per-row remembered state in TaskRow) so a
+    // failed completeTask() call correctly reverts the checkbox instead of
+    // leaving it stuck checked forever with no task actually completed.
+    var completingTaskId by remember { mutableStateOf<String?>(null) }
 
     suspend fun reload() {
         loading = true
@@ -126,8 +133,16 @@ fun TodayScreen(modifier: Modifier = Modifier) {
                     items(data.nextTasks.tasks, key = { it.id }) { task ->
                         TaskRow(
                             task = task,
+                            completing = completingTaskId == task.id,
                             onComplete = {
-                                runAction("Complete") { TodayRepository.completeTask(context, task.id) }
+                                completingTaskId = task.id
+                                runAction("Complete") {
+                                    try {
+                                        TodayRepository.completeTask(context, task.id)
+                                    } finally {
+                                        completingTaskId = null
+                                    }
+                                }
                             },
                         )
                     }
@@ -173,7 +188,11 @@ fun TodayScreen(modifier: Modifier = Modifier) {
                     if (baseUrl == null) {
                         scope.launch { snackbarHostState.showSnackbar("Configure the panel URL in Settings first") }
                     } else {
-                        context.startActivity(PanelActivity.intent(context, baseUrl))
+                        // authenticatedIntent, not a bare PanelActivity.intent(context, baseUrl) --
+                        // the latter loads the panel with no ?token=, so the
+                        // server never sets its auth cookie (see
+                        // PanelActivity.authenticatedIntent's kdoc).
+                        context.startActivity(PanelActivity.authenticatedIntent(context, baseUrl))
                     }
                 },
             )
@@ -231,15 +250,17 @@ private fun EventRow(event: TodayEvent) {
 }
 
 @Composable
-private fun TaskRow(task: NextTask, onComplete: () -> Unit) {
-    var checked by remember(task.id) { mutableStateOf(false) }
+private fun TaskRow(task: NextTask, completing: Boolean, onComplete: () -> Unit) {
+    // Derived, not remembered: showing checked is purely a transient
+    // "in flight" indicator while completing == true. If the completion
+    // fails, TodayScreen resets completing to null (in a finally block) and
+    // this correctly reverts to unchecked, instead of a permanently-latched
+    // local `true` that survived a failed call with no way back.
     Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
         Checkbox(
-            checked = checked,
-            onCheckedChange = {
-                checked = true
-                onComplete()
-            },
+            checked = completing,
+            enabled = !completing,
+            onCheckedChange = { onComplete() },
         )
         Column {
             Text(text = task.title)

@@ -1,8 +1,6 @@
 package com.lifeops.briefing.ui
 
 import android.content.Context
-import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.WorkManager
 import com.lifeops.briefing.AlertLevel
 import com.lifeops.briefing.LifeOpsComputeWorker
 import com.lifeops.briefing.applyGymPlanAlertToNudges
@@ -171,7 +169,13 @@ object PanelActionsClient {
      * compatibility and echoed back in the response, but does not change
      * what runs. */
     suspend fun runDomain(context: Context, name: String): JSONObject = withContext(Dispatchers.IO) {
-        WorkManager.getInstance(context).enqueue(OneTimeWorkRequestBuilder<LifeOpsComputeWorker>().build())
+        // enqueueOnce (KEEP) rather than a bare enqueue() -- collapses
+        // repeated/overlapping manual triggers (this, TodayRepository.forceRefresh,
+        // widget placement) into whichever tick is already queued/running,
+        // instead of racing two LifeOpsComputeWorker.doWork() calls against
+        // the same per-instance Glance state (see LifeOpsComputeWorker's
+        // enqueueOnce kdoc for the exact clobbering scenario this avoids).
+        LifeOpsComputeWorker.enqueueOnce(context)
         JSONObject().apply {
             put("ok", true)
             put("domain", name)

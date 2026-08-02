@@ -10,6 +10,9 @@ import androidx.glance.state.PreferencesGlanceStateDefinition
 import androidx.work.BackoffPolicy
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequest
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
@@ -787,6 +790,24 @@ class LifeOpsComputeWorker(
         private const val TAG = "LifeOpsComputeWorker"
         const val INPUT_FORCE_YNAB_REFRESH = "force_ynab_refresh"
         const val UNIQUE_PERIODIC_WORK_NAME = "lifeops_compute_tick_periodic"
+
+        /** Shared unique name for every manually-triggered one-time tick
+         * (widget placement, "run catchup"/"force refresh", Settings' Save
+         * button, the delayed post-YNAB-tile-tap refresh). Every call site
+         * used to call `WorkManager.enqueue()` directly with no unique name
+         * at all, which meant e.g. two quick taps of "Run catchup", or a
+         * manual tap landing while the periodic tick happened to be running,
+         * could execute [LifeOpsComputeWorker.doWork] concurrently on two
+         * threads -- both read-merge-write [applyComputeTickResult]'s
+         * per-instance Glance state independently, so the loser's write
+         * (its `nudges`/`attentionState`) could be silently clobbered by the
+         * winner's stale `current` read. Routing every manual trigger through
+         * [enqueueOnce] with `ExistingWorkPolicy.KEEP` collapses redundant
+         * concurrent requests into whichever one is already
+         * queued/running, closing that race for the common case (repeated
+         * manual taps) without changing any call site's existing
+         * fire-and-forget semantics. */
+        private const val UNIQUE_ONE_TIME_WORK_NAME = "lifeops_compute_tick_once"
         private const val MIN_BACKOFF_MS = 30_000L
 
         /** Schedules the recurring 15-minute tick -- same cadence/backoff
@@ -804,6 +825,21 @@ class LifeOpsComputeWorker(
                 ExistingPeriodicWorkPolicy.KEEP,
                 request,
             )
+        }
+
+        /** Enqueues a single manually-triggered tick. Every caller that used
+         * to build its own `OneTimeWorkRequestBuilder<LifeOpsComputeWorker>()`
+         * and call the plain, non-unique `WorkManager.enqueue()` should call
+         * this instead -- see [UNIQUE_ONE_TIME_WORK_NAME]'s kdoc for why.
+         * [configure] lets a caller customize the request (e.g. input data,
+         * expedited policy, initial delay) before it's enqueued. */
+        fun enqueueOnce(
+            context: Context,
+            policy: ExistingWorkPolicy = ExistingWorkPolicy.KEEP,
+            configure: OneTimeWorkRequest.Builder.() -> OneTimeWorkRequest.Builder = { this },
+        ) {
+            val request = OneTimeWorkRequestBuilder<LifeOpsComputeWorker>().configure().build()
+            WorkManager.getInstance(context).enqueueUniqueWork(UNIQUE_ONE_TIME_WORK_NAME, policy, request)
         }
     }
 }

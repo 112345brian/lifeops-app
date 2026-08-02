@@ -7,8 +7,6 @@ import androidx.glance.appwidget.GlanceAppWidgetManager
 import androidx.glance.appwidget.state.getAppWidgetState
 import androidx.glance.appwidget.state.updateAppWidgetState
 import androidx.glance.state.PreferencesGlanceStateDefinition
-import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.WorkManager
 import com.lifeops.briefing.BriefingWidget
 import com.lifeops.briefing.LifeOpsComputeWorker
 import com.lifeops.briefing.PendingRemovals
@@ -114,7 +112,14 @@ object TodayRepository {
         try {
             postNtfySignal("complete:$taskId")
         } catch (e: IOException) {
-            return@withContext // leave state unchanged; user can retap
+            // Both the direct API and the ntfy fallback failed -- propagate
+            // so the caller (TodayScreen.runAction) reports a real failure
+            // instead of silently returning "success" while nothing actually
+            // completed. Previously this just returned here, which left the
+            // task un-completed but still showed a "Complete done" snackbar
+            // and a permanently-checked checkbox (see TaskRow) with no way
+            // for the user to tell the tap didn't work.
+            throw IOException("could not reach panel or ntfy to complete task $taskId", e)
         }
         for (glanceId in ids) removeTaskLocally(context, glanceId, taskId)
     }
@@ -145,8 +150,10 @@ object TodayRepository {
     /** "Force refresh" / "refresh widget or briefing" quick action -- the
      * same one-time [LifeOpsComputeWorker] enqueue SettingsActivity's Save
      * button already performs (see that file), not a second manual-tick
-     * mechanism. */
+     * mechanism. Routed through [LifeOpsComputeWorker.enqueueOnce] (KEEP)
+     * so this can't race a concurrently-running periodic or other manual
+     * tick over the same per-instance Glance state. */
     fun forceRefresh(context: Context) {
-        WorkManager.getInstance(context).enqueue(OneTimeWorkRequestBuilder<LifeOpsComputeWorker>().build())
+        LifeOpsComputeWorker.enqueueOnce(context)
     }
 }
