@@ -89,6 +89,13 @@ import com.lifeops.briefing.data.AttentionReason as UiAttentionReason
  *   [BriefingState] so [BriefingWidget] renders it exactly like the old
  *   server-pushed value.
  *
+ * Wired since this tick's original version:
+ * - **YnabEngine's categorize/approve/hold/cover WRITE actions.** See
+ *   `YnabWrite.kt` -- the live "unapproved transactions" YNAB read plus YNAB
+ *   PATCH write this file's own comment used to flag as missing.
+ *   [runYnabWriteTickIfConfigured] runs self-gated (once/day) alongside
+ *   [runWeeklyDigestIfDue] above.
+ *
  * Deliberately NOT wired (flagged as follow-up work, not silently dropped):
  * - **Chore's actual next-occurrence task creation.** `ChoreSchedule.kt`'s
  *   `plan()` needs a live "completed tasks carrying a `[cycle:Nd]` note tag"
@@ -96,10 +103,6 @@ import com.lifeops.briefing.data.AttentionReason as UiAttentionReason
  *   dedup-by-processed-id persistence -- a genuinely riskier, separate
  *   feature (a write path that can duplicate a task if done wrong) than the
  *   read-only attention/next-tasks compute this tick is centered on.
- * - **YnabEngine's categorize/approve/hold/cover WRITE actions.** Those need
- *   a live "unapproved transactions" YNAB read plus YNAB PATCH calls
- *   `YnabRefresh.kt` doesn't have today (it only reads category balances).
- *   Same "separate write-capable feature" reasoning as chore.
  * - **GymSchedule.kt's full `plan()`** (slot-booking/calendar-action
  *   creation/wind-down blocks) -- needs a next-N-days calendar-blocked/
  *   deadline-heavy/sleep-quality context this tick doesn't assemble. Gym's
@@ -705,6 +708,16 @@ class LifeOpsComputeWorker(
         // + an Anthropic API key, same reasoning weather/location already
         // established for their own zero-FlowSavvy-dependency pieces.
         runWeeklyDigestIfDue(applicationContext, db, now)
+
+        // YNAB categorize/approve/hold/cover write tick (YnabWrite.kt's port
+        // of runner.py's run_ynab) -- self-gated once/day same as the digest
+        // above, deliberately run before the FlowSavvy config check below:
+        // it has zero dependency on FlowSavvy, only on a configured YNAB
+        // token (and optionally an Anthropic API key for novel payees).
+        // Ungated (no BiometricGate call) -- see YnabWrite.kt's top-level
+        // kdoc for why this matches run_ynab's own unattended, background
+        // behavior in the Python source.
+        runYnabWriteTickIfConfigured(applicationContext, now)
 
         WidgetConfigStore.importFlowSavvyConfigFileIfPresent(applicationContext)
         val flowSavvyBaseUrl = WidgetConfigStore.getFlowSavvyBaseUrl(applicationContext)

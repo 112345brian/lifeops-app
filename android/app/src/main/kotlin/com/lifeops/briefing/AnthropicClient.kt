@@ -272,14 +272,12 @@ class AnthropicClient(
      * auto-approving them) -- not a case where "background automation" is as
      * clear-cut a justification as it is for the digest/briefing calls.
      *
-     * NOT yet wired into any on-device call path: `YnabRefresh.kt` only reads
-     * YNAB category balances today (see `LifeOpsComputeWorker.kt`'s own
-     * kdoc, "Deliberately NOT wired" section) -- there is no on-device
-     * "fetch unapproved transactions" read or "patch transaction
-     * category/approval" write yet. Building that YNAB write pipeline is a
-     * separate, larger, genuinely riskier feature (a write path that can
-     * misclassify a real transaction if done wrong) than "move the LLM call
-     * itself on-device," which is this function's actual scope.
+     * Wired into `YnabWrite.kt`'s on-device read-decide-write pipeline
+     * (`resolveNovelPayees`/`runYnabWriteTickIfConfigured`), called from
+     * `LifeOpsComputeWorker`'s self-gated once/day YNAB write tick -- see
+     * that file's top-level kdoc for the full fetch/decide/write flow and
+     * its "Retry-safety" section for why no additional retry guard was
+     * needed around the resulting PATCH calls.
      */
     fun categorizeUnknownPayee(payee: String, amount: Double, categoryNames: List<String>): String? {
         val allowedJson = JSONArray(categoryNames).toString()

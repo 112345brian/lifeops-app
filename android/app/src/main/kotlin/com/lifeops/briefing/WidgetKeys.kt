@@ -50,9 +50,9 @@ object WidgetKeys {
     const val KEY_FLOWSAVVY_TOKEN = "flowsavvy_token"
 
     // Anthropic API key -- on-device Messages API calls (AnthropicClient.kt):
-    // weekly digest (WeeklyDigest.kt) and, in the future, YNAB novel-payee
-    // categorization once a real on-device YNAB write pipeline exists (see
-    // AnthropicClient.kt's kdoc). Stored in the same EncryptedSharedPreferences
+    // weekly digest (WeeklyDigest.kt) and YNAB novel-payee categorization
+    // (YnabWrite.kt's on-device write pipeline). Stored in the same
+    // EncryptedSharedPreferences
     // as WEB_TOKEN/YNAB_TOKEN -- it's a real credential (a leaked key spends
     // real API credit), same reasoning as those two.
     const val KEY_ANTHROPIC_API_KEY = "anthropic_api_key"
