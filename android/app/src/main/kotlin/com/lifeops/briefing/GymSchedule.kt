@@ -1,5 +1,6 @@
 package com.lifeops.briefing
 
+import com.lifeops.briefing.data.BlockedDayDao
 import java.time.LocalDate
 import java.time.format.TextStyle
 import java.util.Locale
@@ -329,4 +330,29 @@ fun plan(input: GymInput): GymPlan {
         "chose=${result.chosen.map { it.date }} viable_left=$viableLeft"
 
     return GymPlan(actions = actions, windDown = windDown, alert = alert, summary = summary)
+}
+
+/**
+ * Builds a real [GymDay] candidate window for the next [days] calendar days
+ * (today inclusive), consulting the on-device [BlockedDayDao] -- the Room
+ * counterpart of `lifeops/web.py`'s `_block_day`/`_sched_blocks()` list (see
+ * [com.lifeops.briefing.data.BlockedDayEntity]'s kdoc) -- so a day the
+ * "block day" quick action (`ui/PanelActionsClient.blockDay`) marked blocked
+ * is actually fed into [plan] as [GymDay.gymBlocked] = true, exactly as
+ * `slot_for`'s real `gym_blocked` flag does server-side.
+ *
+ * Every other [GymDay] flag defaults to this port's "nothing else known"
+ * baseline (no calendar/deadline/sleep context assembled on-device yet --
+ * see `LifeOpsComputeWorker.kt`'s own kdoc, "Deliberately NOT wired"
+ * section, for why [plan]'s fuller day-context inputs aren't sourced from
+ * real device data today). This is the one piece of that fuller context
+ * that IS real and wired: whether a day is blocked.
+ */
+suspend fun gymDaysRespectingBlocks(blockedDayDao: BlockedDayDao, today: LocalDate, days: Int = 14): List<GymDay> {
+    val endDate = today.plusDays((days - 1).toLong())
+    val blocked = blockedDayDao.getDatesBetween(today.toString(), endDate.toString()).toSet()
+    return (0 until days).map { offset ->
+        val date = today.plusDays(offset.toLong())
+        GymDay(date = date, gymBlocked = date.toString() in blocked)
+    }
 }

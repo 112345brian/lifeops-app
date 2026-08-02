@@ -4,6 +4,7 @@ import androidx.room.Room
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -289,5 +290,58 @@ class LifeOpsDatabaseTest {
         val incomplete = dao.getIncomplete()
 
         assertEquals(listOf("soon", "later", "noDueDate"), incomplete.map { it.id })
+    }
+
+    // ---- BlockedDayEntity / BlockedDayDao ----
+
+    @Test
+    fun blockedDay_upsertThenGetByDate_returnsInsertedRow() = runBlocking {
+        db.blockedDayDao().upsert(BlockedDayEntity(date = "2026-08-05", reason = "sick", source = "ui"))
+
+        val loaded = db.blockedDayDao().getByDate("2026-08-05")
+
+        assertEquals(BlockedDayEntity(date = "2026-08-05", reason = "sick", source = "ui"), loaded)
+    }
+
+    @Test
+    fun blockedDay_upsert_isIdempotentByDate() = runBlocking {
+        db.blockedDayDao().upsert(BlockedDayEntity(date = "2026-08-05", source = "ui"))
+        db.blockedDayDao().upsert(BlockedDayEntity(date = "2026-08-05", source = "ui", reason = "updated"))
+
+        assertEquals(1, db.blockedDayDao().getAll().size)
+        assertEquals("updated", db.blockedDayDao().getByDate("2026-08-05")?.reason)
+    }
+
+    @Test
+    fun blockedDay_isBlocked_falseWhenNoRowExists() = runBlocking {
+        assertFalse(db.blockedDayDao().isBlocked("2026-08-05"))
+    }
+
+    @Test
+    fun blockedDay_isBlocked_trueOnceUpserted() = runBlocking {
+        db.blockedDayDao().upsert(BlockedDayEntity(date = "2026-08-05"))
+
+        assertTrue(db.blockedDayDao().isBlocked("2026-08-05"))
+    }
+
+    @Test
+    fun blockedDay_deleteByDate_removesTheRow() = runBlocking {
+        db.blockedDayDao().upsert(BlockedDayEntity(date = "2026-08-05"))
+
+        db.blockedDayDao().deleteByDate("2026-08-05")
+
+        assertNull(db.blockedDayDao().getByDate("2026-08-05"))
+    }
+
+    @Test
+    fun blockedDay_getDatesBetween_scopesToTheInclusiveRange() = runBlocking {
+        val dao = db.blockedDayDao()
+        dao.upsert(BlockedDayEntity(date = "2026-08-01"))
+        dao.upsert(BlockedDayEntity(date = "2026-08-05"))
+        dao.upsert(BlockedDayEntity(date = "2026-08-10"))
+
+        val between = dao.getDatesBetween("2026-08-01", "2026-08-05")
+
+        assertEquals(listOf("2026-08-01", "2026-08-05"), between)
     }
 }

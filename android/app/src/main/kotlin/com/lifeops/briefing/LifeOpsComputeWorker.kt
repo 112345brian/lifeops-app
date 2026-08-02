@@ -346,6 +346,105 @@ internal suspend fun computeGymRing(db: LifeOpsDatabase, now: LocalDateTime): Gy
     )
 }
 
+/**
+ * Recomputes just the gym-adherence ring ([computeGymRing]) against
+ * whatever [HistoryEventDao] rows exist RIGHT NOW, and pushes it into every
+ * placed widget instance's [NextTasksState.gymRing]/[BriefingState.gymLast7d]/
+ * [BriefingState.gymTarget] -- the "one code path for 'given current
+ * history, what does gym status look like now'" this file's log/skip-gym
+ * quick actions need, shared with [LifeOpsComputeWorker]'s own periodic tick
+ * (which reaches the same [computeGymRing] call via [runComputeTick] /
+ * [applyComputeTickResult]). Called from `ui/PanelActionsClient.logGym`/
+ * `skipGym` so a tap is reflected immediately instead of waiting up to 15
+ * minutes for the next periodic tick.
+ *
+ * Deliberately narrower than [applyComputeTickResult]: it does NOT
+ * recompute [Attention.compute]'s full reasons/state (that needs the same
+ * real overdue/courseworkAtRisk/dueToday/discretionary facts
+ * [runComputeTick] assembles from a live FlowSavvy fetch, which a gym
+ * log/skip tap has no reason to trigger -- and BriefingState doesn't persist
+ * those raw facts, only their rendered [AttentionReason]s, so there is
+ * nothing to losslessly recompute them from without a real fetch) -- only
+ * the gym-specific fields are touched here. Any gym-cadence attention
+ * reason reconciles on the next periodic tick or a manual "Run
+ * catchup"/force-refresh, same as every other attention input already does
+ * between ticks (e.g. weather/temperature).
+ */
+internal suspend fun refreshGymStateForAllWidgets(context: Context, db: LifeOpsDatabase, now: LocalDateTime) {
+    val gymRing = computeGymRing(db, now)
+    val manager = GlanceAppWidgetManager(context)
+    for (glanceId in manager.getGlanceIds(BriefingWidget::class.java)) {
+        val currentNextTasks = try {
+            getAppWidgetState(context, PreferencesGlanceStateDefinition, glanceId)[WidgetKeys.NEXT_TASKS_JSON]
+                ?.let { NextTasksState.fromJson(it) }
+        } catch (e: JSONException) {
+            null
+        } ?: NextTasksState(tasks = emptyList())
+        persistNextTasksForInstance(context, glanceId, currentNextTasks.copy(gymRing = gymRing))
+
+        val currentBriefing = try {
+            getAppWidgetState(context, PreferencesGlanceStateDefinition, glanceId)[WidgetKeys.BRIEFING_JSON]
+                ?.let { BriefingState.fromJson(it) }
+        } catch (e: JSONException) {
+            null
+        } ?: BriefingState.empty()
+        val updated = currentBriefing.copy(gymLast7d = gymRing.gymLast7d, gymTarget = gymRing.gymTarget)
+        updateAppWidgetState(context, glanceId) { prefs -> prefs[WidgetKeys.BRIEFING_JSON] = updated.toJson() }
+        BriefingWidget().update(context, glanceId)
+    }
+}
+
+/**
+ * Runs [plan] (`GymSchedule.kt`'s real scheduling engine) against real
+ * persisted state -- the "gym" [RoutineEntity]'s target (falling back to
+ * [GymRules]'s own default), completed-gym dates within the current 7-day
+ * window ([HistoryEventDao]), and a real 14-day candidate window built via
+ * [gymDaysRespectingBlocks] -- so a blocked day
+ * (`ui/PanelActionsClient.blockDay`) actually changes what [plan] would
+ * schedule/alert on, not just a Room row nothing reads. Called from
+ * `blockDay`'s on-device action.
+ */
+internal suspend fun computeGymPlanRespectingBlocks(db: LifeOpsDatabase, now: LocalDateTime): GymPlan {
+    val persistedGym = db.routineDao().getById("gym")
+    val rules = GymRules(target = persistedGym?.timesPerWindow ?: GymRules().target)
+    val today = now.toLocalDate()
+    val windowStart = today.minusDays(7)
+    val completedDates = db.historyEventDao().getTimestampsIsoForDomain("gym")
+        .mapNotNull { runCatching { LocalDateTime.parse(it).toLocalDate() }.getOrNull() }
+        .filter { !it.isBefore(windowStart) }
+        .toSet()
+    val days = gymDaysRespectingBlocks(db.blockedDayDao(), today, days = 14)
+    val input = GymInput(
+        today = today,
+        completedCount = completedDates.size,
+        completedDates = completedDates.toList(),
+        days = days,
+        rules = rules,
+    )
+    return plan(input)
+}
+
+/** Surfaces one sentence (e.g. [GymPlan.alert]'s text from
+ * [computeGymPlanRespectingBlocks]) via [BriefingState.nudges] on every
+ * placed widget instance -- the same "a sentence the widget should show"
+ * surface `WeeklyDigest.kt`'s own tick already appends to, since there's no
+ * dedicated notification-delivery mechanism for this (see that file's own
+ * kdoc for why). */
+internal suspend fun applyGymPlanAlertToNudges(context: Context, alertText: String) {
+    val manager = GlanceAppWidgetManager(context)
+    for (glanceId in manager.getGlanceIds(BriefingWidget::class.java)) {
+        val current = try {
+            getAppWidgetState(context, PreferencesGlanceStateDefinition, glanceId)[WidgetKeys.BRIEFING_JSON]
+                ?.let { BriefingState.fromJson(it) }
+        } catch (e: JSONException) {
+            null
+        } ?: BriefingState.empty()
+        val updated = current.copy(nudges = current.nudges + alertText)
+        updateAppWidgetState(context, glanceId) { prefs -> prefs[WidgetKeys.BRIEFING_JSON] = updated.toJson() }
+        BriefingWidget().update(context, glanceId)
+    }
+}
+
 private fun epochMillisToIsoLocalDateTime(epochMillis: Long): String =
     Instant.ofEpochMilli(epochMillis).atZone(ZoneId.systemDefault()).toLocalDateTime().toString()
 

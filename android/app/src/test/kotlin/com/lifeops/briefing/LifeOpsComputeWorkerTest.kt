@@ -1,6 +1,7 @@
 package com.lifeops.briefing
 
 import androidx.room.Room
+import com.lifeops.briefing.data.BlockedDayEntity
 import com.lifeops.briefing.data.HistoryEventEntity
 import com.lifeops.briefing.data.LifeOpsDatabase
 import com.lifeops.briefing.data.RoutineEntity
@@ -9,6 +10,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -183,6 +185,77 @@ class LifeOpsComputeWorkerTest {
 
         assertEquals(4, ring.gymTarget)
         assertTrue(ring.todayDone)
+    }
+
+    // ---- gym plan (respecting blocked days) ----
+
+    @Test
+    fun gymDaysRespectingBlocks_marksOnlyThePersistedBlockedDate() = runBlocking {
+        val today = now.toLocalDate()
+        db.blockedDayDao().upsert(BlockedDayEntity(date = today.plusDays(2).toString()))
+
+        val days = gymDaysRespectingBlocks(db.blockedDayDao(), today, days = 5)
+
+        assertEquals(5, days.size)
+        assertFalse(days[0].gymBlocked)
+        assertFalse(days[1].gymBlocked)
+        assertTrue(days[2].gymBlocked)
+        assertFalse(days[3].gymBlocked)
+        assertFalse(days[4].gymBlocked)
+    }
+
+    @Test
+    fun computeGymPlanRespectingBlocks_noAlertWhenPlentyOfViableDaysAreOpen() = runBlocking {
+        val plan = computeGymPlanRespectingBlocks(db, now)
+
+        assertEquals(AlertLevel.NONE, plan.alert.level)
+    }
+
+    @Test
+    fun computeGymPlanRespectingBlocks_blockingMostOfTheWindowRaisesAnAlert() = runBlocking {
+        // Block 11 of the next 14 days (today..+10), leaving only 3
+        // consecutive unblocked days (+11..+13) -- with the default
+        // maxConsecutive=2 cap, at most 2 of those 3 can actually be booked,
+        // which isn't enough to hit the floor (3) from a standing start ->
+        // a real floor-risk alert, proving a BlockedDayEntity row actually
+        // changes what GymSchedule.kt's plan() computes, not just a Room row
+        // nothing reads.
+        val today = now.toLocalDate()
+        for (offset in 0..10) {
+            db.blockedDayDao().upsert(BlockedDayEntity(date = today.plusDays(offset.toLong()).toString()))
+        }
+
+        val plan = computeGymPlanRespectingBlocks(db, now)
+
+        assertTrue(plan.alert.level != AlertLevel.NONE)
+    }
+
+    @Test
+    fun computeGymPlanRespectingBlocks_usesPersistedGymTargetWhenPresent() = runBlocking {
+        db.routineDao().insert(
+            RoutineEntity(
+                id = "gym", title = "Gym", timesPerWindow = 2, perDays = 7,
+                anchor = RoutineEntity.ANCHOR_WINDOW, onDue = RoutineEntity.ON_DUE_NOTIFY,
+            ),
+        )
+
+        val plan = computeGymPlanRespectingBlocks(db, now)
+
+        // target=2 (persisted) means only 2 sessions are needed this
+        // window, easily reachable with the whole 14-day window open.
+        assertEquals(AlertLevel.NONE, plan.alert.level)
+        assertTrue(plan.summary.contains("target=2"))
+    }
+
+    // ---- refreshGymStateForAllWidgets ----
+
+    @Test
+    fun refreshGymStateForAllWidgets_doesNotThrowWithNoWidgetPlaced() = runBlocking {
+        // No BriefingWidget instance placed anywhere (no GlanceId exists in
+        // this unit-test environment) -- this must be a safe no-op, same
+        // posture applyComputeTickResult's own "for every placed instance"
+        // loop already has.
+        refreshGymStateForAllWidgets(RuntimeEnvironment.getApplication(), db, now)
     }
 
     // ---- social / meal nudges ----

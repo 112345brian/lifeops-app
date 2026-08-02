@@ -78,8 +78,6 @@ fun TodayScreen(modifier: Modifier = Modifier) {
             try {
                 block()
                 snackbarHostState.showSnackbar("$label done")
-            } catch (e: PanelNotConfiguredException) {
-                snackbarHostState.showSnackbar("Configure the panel URL/token in Settings first")
             } catch (e: Exception) {
                 snackbarHostState.showSnackbar("$label failed: ${e.message ?: "unknown error"}")
             } finally {
@@ -142,7 +140,6 @@ fun TodayScreen(modifier: Modifier = Modifier) {
             SectionLabel("Quick actions")
             QuickActions(
                 enabled = !actionInFlight,
-                onRunCatchup = { runAction("Run catchup") { PanelActionsClient.runCatchup(context) } },
                 onLogGym = { runAction("Log gym") { PanelActionsClient.logGym(context) } },
                 onSkipGym = { runAction("Skip gym") { PanelActionsClient.skipGym(context) } },
                 onBlockToday = {
@@ -153,12 +150,18 @@ fun TodayScreen(modifier: Modifier = Modifier) {
                         PanelActionsClient.blockDay(context, LocalDate.now().plusDays(1).toString())
                     }
                 },
-                onForceRefresh = {
-                    // Fire-and-forget: enqueues LifeOpsComputeWorker, which
-                    // runs asynchronously (not synchronously awaitable from
-                    // here) -- reload() below just re-reads whatever is
-                    // currently persisted; a follow-up manual pull-to-refresh
-                    // picks up the tick's result once it lands.
+                onRunCatchup = {
+                    // "Run catchup" and the old separate "Force refresh"
+                    // button are the SAME action now that both go through
+                    // PanelActionsClient.runCatchup/TodayRepository.forceRefresh
+                    // (both just enqueue LifeOpsComputeWorker's one-time
+                    // compute tick -- see PanelActionsClient.runDomain's own
+                    // kdoc) -- merged into one button rather than keeping two
+                    // controls that do the exact same thing. Fire-and-forget:
+                    // the enqueue is asynchronous, not awaitable from here --
+                    // reload() below just re-reads whatever is currently
+                    // persisted; a follow-up manual refresh picks up the
+                    // tick's result once it lands.
                     TodayRepository.forceRefresh(context)
                     scope.launch {
                         snackbarHostState.showSnackbar("Refresh queued")
@@ -251,21 +254,19 @@ private fun TaskRow(task: NextTask, onComplete: () -> Unit) {
 @Composable
 private fun QuickActions(
     enabled: Boolean,
-    onRunCatchup: () -> Unit,
     onLogGym: () -> Unit,
     onSkipGym: () -> Unit,
     onBlockToday: () -> Unit,
     onBlockTomorrow: () -> Unit,
-    onForceRefresh: () -> Unit,
+    onRunCatchup: () -> Unit,
     onOpenPanel: () -> Unit,
 ) {
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedButton(onClick = onRunCatchup, enabled = enabled) { Text("Run catchup") }
         OutlinedButton(onClick = onLogGym, enabled = enabled) { Text("Log gym") }
         OutlinedButton(onClick = onSkipGym, enabled = enabled) { Text("Skip gym") }
         OutlinedButton(onClick = onBlockToday, enabled = enabled) { Text("Block today") }
         OutlinedButton(onClick = onBlockTomorrow, enabled = enabled) { Text("Block tomorrow") }
-        Button(onClick = onForceRefresh, enabled = enabled) { Text("Force refresh") }
+        Button(onClick = onRunCatchup, enabled = enabled) { Text("Run catchup") }
         OutlinedButton(onClick = onOpenPanel) { Text("Open full panel") }
     }
 }

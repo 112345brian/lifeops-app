@@ -79,9 +79,14 @@ object TodayRepository {
      * (a Today-screen tap) has no single GlanceId to scope itself to the way
      * a widget checkbox tap does.
      *
-     * TODO: gate this once BiometricGate.kt lands -- this is a
-     * user-initiated write action, same category the biometric-gate work
-     * (in flight separately, see this task's brief) is meant to cover.
+     * Intentionally NOT gated behind [com.lifeops.briefing.BiometricGate].
+     * Per the locked-in product decision (`BiometricGate.kt`'s own kdoc),
+     * gating applies to user-initiated writes that are financial (YNAB) or
+     * spend LLM API credit -- never to routine/schedule/task actions.
+     * Completing a task is the latter, same category as gym log/skip and
+     * block-day (`ui/PanelActionsClient.kt`), so it stays ungated -- wiring
+     * the gate here just because the primitive now exists would apply it
+     * beyond its actual criterion.
      */
     suspend fun completeTask(context: Context, taskId: String) = withContext(Dispatchers.IO) {
         val ids = glanceIds(context)
