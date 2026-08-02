@@ -88,6 +88,14 @@ import com.lifeops.briefing.data.AttentionReason as UiAttentionReason
  *   `attention_state`/`attention_reasons`/headline, persisted into
  *   [BriefingState] so [BriefingWidget] renders it exactly like the old
  *   server-pushed value.
+ * - **Chore's actual next-occurrence task creation**, via [runChoreCycle]
+ *   (`ChoreCycle.kt`) -- a live "completed tasks carrying a `[cycle:Nd]` note
+ *   tag" FlowSavvy read plus a `FlowSavvyClient.createTask` WRITE, with its
+ *   own dedup-by-processed-id persistence ([ChoreCycleStateEntity]) so a
+ *   completion FlowSavvy still reports on a second tick doesn't create a
+ *   duplicate next occurrence. See `ChoreCycle.kt`'s own top-level kdoc for
+ *   the full write-back path and the one known (Python-source-inherited)
+ *   partial-failure gap it flags.
  *
  * Wired since this tick's original version:
  * - **YnabEngine's categorize/approve/hold/cover WRITE actions.** See
@@ -97,12 +105,6 @@ import com.lifeops.briefing.data.AttentionReason as UiAttentionReason
  *   [runWeeklyDigestIfDue] above.
  *
  * Deliberately NOT wired (flagged as follow-up work, not silently dropped):
- * - **Chore's actual next-occurrence task creation.** `ChoreSchedule.kt`'s
- *   `plan()` needs a live "completed tasks carrying a `[cycle:Nd]` note tag"
- *   FlowSavvy read plus a `FlowSavvyClient.createTask` WRITE with its own
- *   dedup-by-processed-id persistence -- a genuinely riskier, separate
- *   feature (a write path that can duplicate a task if done wrong) than the
- *   read-only attention/next-tasks compute this tick is centered on.
  * - **GymSchedule.kt's full `plan()`** (slot-booking/calendar-action
  *   creation/wind-down blocks) -- needs a next-N-days calendar-blocked/
  *   deadline-heavy/sleep-quality context this tick doesn't assemble. Gym's
@@ -731,6 +733,21 @@ class LifeOpsComputeWorker(
 
         val client = FlowSavvyClient(flowSavvyBaseUrl, flowSavvyToken)
         val discretionaryDollars = readCurrentDiscretionaryDollars(applicationContext)
+
+        // Chore next-occurrence write-back (runChoreCycle/ChoreCycle.kt) --
+        // wrapped in its OWN try/catch, deliberately separate from the main
+        // tick's below: a FlowSavvy hiccup on this write-capable path
+        // shouldn't block the read-only attention/next-tasks compute this
+        // tick is centered on, and vice versa. Errors are logged, not
+        // rethrown -- same "one domain's failure doesn't abort the others"
+        // posture the old Python `_run()` sweep had per-domain.
+        try {
+            runChoreCycle(db, RealChoreCompletedFetch(client), RealChoreTaskCreator(client), now)
+        } catch (e: FlowSavvyConnectionException) {
+            Log.e(TAG, "FlowSavvy unreachable during chore cycle", e)
+        } catch (e: FlowSavvyHttpException) {
+            Log.e(TAG, "FlowSavvy returned an error during chore cycle", e)
+        }
 
         val result = try {
             runComputeTick(db, RealFlowSavvyFetch(client), discretionaryDollars, now)
