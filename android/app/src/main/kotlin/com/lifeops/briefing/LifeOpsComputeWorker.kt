@@ -526,7 +526,13 @@ internal suspend fun applyComputeTickResult(context: Context, result: ComputeTic
             attentionLabel = result.attention.label,
             attentionHeadline = result.attention.headline,
             reasons = result.attention.reasons.map {
-                UiAttentionReason(domain = it.domain.name.lowercase(), severity = it.severity.name.lowercase())
+                UiAttentionReason(
+                    domain = it.domain.name.lowercase(),
+                    severity = it.severity.name.lowercase(),
+                    title = it.title,
+                    recommendedAction = it.recommendedAction,
+                    due = it.due,
+                )
             },
             nudges = result.nudges,
             fetchedAtEpochMillis = System.currentTimeMillis(),

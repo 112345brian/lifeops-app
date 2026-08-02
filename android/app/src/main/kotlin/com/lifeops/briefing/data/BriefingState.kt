@@ -3,12 +3,24 @@ package com.lifeops.briefing.data
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** One entry from attention.compute()'s deterministic `reasons` list --
- * just enough (domain + severity) to render the widget's per-domain
- * severity dots. Title/action/due are intentionally not carried here; the
- * full reason detail already surfaces in the panel, the widget only needs
- * the glyph-level signal. */
-data class AttentionReason(val domain: String, val severity: String)
+/** One entry from attention.compute()'s deterministic `reasons` list.
+ * Originally just domain+severity (enough for the widget's per-domain
+ * severity dots, since the widget only needs the glyph-level signal and the
+ * full reason detail surfaced in the server-rendered panel instead). The
+ * native Attention screen (com.lifeops.briefing.ui.AttentionScreen) needs
+ * more than a glyph -- it explains WHY the state is watch/risk/fucked -- so
+ * [title]/[recommendedAction]/[due] were added, mirroring
+ * [com.lifeops.briefing.AttentionReason]'s own fields exactly (see
+ * Attention.kt). Nullable/defaulted-null (not required) so existing
+ * positional-arg call sites and persisted JSON from before this change keep
+ * parsing/compiling without a migration. */
+data class AttentionReason(
+    val domain: String,
+    val severity: String,
+    val title: String? = null,
+    val recommendedAction: String? = null,
+    val due: String? = null,
+)
 
 /** One entry from the server's deterministic notable_events.py -- an
  * infrequent/one-off calendar event worth a heads-up, upcoming in the
@@ -107,6 +119,9 @@ data class BriefingState(
                 put(JSONObject().apply {
                     put("domain", r.domain)
                     put("severity", r.severity)
+                    put("title", r.title)
+                    put("recommendedAction", r.recommendedAction)
+                    put("due", r.due)
                 })
             }
         })
@@ -149,11 +164,38 @@ data class BriefingState(
         private fun JSONObject.optLongOrNull(key: String): Long? =
             if (has(key) && !isNull(key)) optLong(key) else null
 
+        /** Parses our OWN camelCase round-trip shape (see [toJson]) --
+         * [fromJson]'s call site only. */
         private fun parseReasons(arr: JSONArray?): List<AttentionReason> {
             if (arr == null) return emptyList()
             return (0 until arr.length()).map { i ->
                 val r = arr.getJSONObject(i)
-                AttentionReason(domain = r.optString("domain"), severity = r.optString("severity"))
+                AttentionReason(
+                    domain = r.optString("domain"),
+                    severity = r.optString("severity"),
+                    title = r.optStringOrNull("title"),
+                    recommendedAction = r.optStringOrNull("recommendedAction"),
+                    due = r.optStringOrNull("due"),
+                )
+            }
+        }
+
+        /** Parses `attention.py`'s server-side `reasons` shape (see
+         * `attention.py`'s `_reason()`: `domain`, `severity`, `title`,
+         * `recommended_action` (snake_case -- NOT the same key
+         * [parseReasons] reads), and an optional `due`) -- [fromApiResponse]'s
+         * call site only. */
+        private fun parseReasonsFromApi(arr: JSONArray?): List<AttentionReason> {
+            if (arr == null) return emptyList()
+            return (0 until arr.length()).map { i ->
+                val r = arr.getJSONObject(i)
+                AttentionReason(
+                    domain = r.optString("domain"),
+                    severity = r.optString("severity"),
+                    title = r.optStringOrNull("title"),
+                    recommendedAction = r.optStringOrNull("recommended_action"),
+                    due = r.optStringOrNull("due"),
+                )
             }
         }
 
@@ -250,7 +292,7 @@ data class BriefingState(
                 attentionSymbol = attention.optStringOrNull("symbol"),
                 attentionLabel = attention.optStringOrNull("label"),
                 attentionHeadline = attention.optStringOrNull("headline"),
-                reasons = parseReasons(attention.optJSONArray("reasons")),
+                reasons = parseReasonsFromApi(attention.optJSONArray("reasons")),
                 notableEvents = parseNotableEvents(facts.optJSONArray("notable_events")),
             )
         }
