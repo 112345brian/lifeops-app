@@ -149,7 +149,7 @@ internal fun effectiveWidgetScale(
  *
  * Briefing state is written by [BriefingReceiver] whenever ntfy delivers a
  * "briefing-data" push (push-only, no polling). Next-tasks state is written
- * by [NextTasksRefreshWorker]'s periodic pull and by [CompleteTaskAction]'s
+ * by [LifeOpsComputeWorker]'s periodic pull and by [CompleteTaskAction]'s
  * immediate update after a checkbox tap.
  */
 /** Single GlanceAppWidget shared by every receiver -- the full "LifeOps
@@ -164,7 +164,7 @@ internal fun effectiveWidgetScale(
  * call, which meant (a) the receiver-to-preset mapping was hand-duplicated
  * in two files (here and WidgetPresets.defaultConfigFor, with nothing
  * enforcing they matched), and (b) any OTHER code path that constructed a
- * bare `BriefingWidget()` -- e.g. NextTasksRefreshWorker's background
+ * bare `BriefingWidget()` -- e.g. LifeOpsComputeWorker's background
  * update() calls -- silently got the full-widget default instead of the
  * instance's real preset during the window between a widget being placed
  * and its configure screen being saved. Resolving per-render from the
@@ -392,7 +392,7 @@ internal fun BriefingContent(
             // Only the paragraph/money/coursework-tiles/freshness-line are
             // gated behind a real briefing having arrived at least once --
             // today's real calendar events, upcoming tasks, AND the gym ring
-            // (pulled independently via NextTasksRefreshWorker, not part of
+            // (pulled independently via LifeOpsComputeWorker, not part of
             // this LLM-generated snapshot) are all independent of briefing
             // text and must keep rendering below, not get swallowed by this
             // placeholder. Gated on BRIEFING_PARAGRAPH being visible at all,
@@ -534,7 +534,7 @@ internal fun BriefingContent(
  * independent of briefing text (see EventsSection's docstring), and
  * GYM_RING's primary source
  * ([nextTasks.gymRing][com.lifeops.briefing.data.NextTasksState]) is pulled
- * independently via NextTasksRefreshWorker -- gating it here used to
+ * independently via LifeOpsComputeWorker -- gating it here used to
  * swallow a freshly-placed widget's gym ring for up to a day whenever no
  * briefing had landed yet, which is exactly the only content a single-stat
  * "LifeOps Gym" preset widget has (confirmed 2026-07-13). */

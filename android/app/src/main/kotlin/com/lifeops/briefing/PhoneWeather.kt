@@ -24,7 +24,7 @@ import org.json.JSONObject
  * Uses the phone's own last-reported GPS fix (see LocationReporter.kt,
  * persisted locally regardless of whether the panel is configured) --
  * silently no-ops if there's no fix yet. Gated to MIN_INTERVAL_MS,
- * piggybacked on NextTasksRefreshWorker's existing periodic cycle, same
+ * piggybacked on LifeOpsComputeWorker's existing periodic cycle, same
  * shape as LocationReporter's own gate -- NOAA data doesn't change fast
  * enough to justify fetching on every 15-min tick.
  */
@@ -69,7 +69,7 @@ internal suspend fun reportWeatherIfDue(context: Context) {
         // the only writer of this cache, so nothing else would. GlanceAppWidget
         // has no updateAll(); update() takes a specific GlanceId, so every
         // placed instance of this widget class needs its own call, same
-        // pattern as NextTasksRefreshWorker's applyToAllInstances.
+        // pattern as LifeOpsComputeWorker's applyToAllInstances.
         val widget = BriefingWidget()
         for (glanceId in GlanceAppWidgetManager(context).getGlanceIds(BriefingWidget::class.java)) {
             widget.update(context, glanceId)

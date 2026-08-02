@@ -12,7 +12,7 @@ import org.json.JSONException
 
 /**
  * Does the actual persist for an FCM-delivered next-tasks payload -- the
- * Tailscale-independent counterpart to NextTasksRefreshWorker's periodic
+ * Tailscale-independent counterpart to LifeOpsComputeWorker's periodic
  * direct pull, which stays in place as a self-heal fallback for the rare
  * dropped push. Same guaranteed-execution reasoning as
  * [BriefingPersistWorker]: WorkManager, not a bare coroutine launched
@@ -33,7 +33,7 @@ class NextTasksPersistWorker(
         }
         val manager = GlanceAppWidgetManager(applicationContext)
         for (glanceId in manager.getGlanceIds(BriefingWidget::class.java)) {
-            // Shared with NextTasksRefreshWorker's periodic pull so a fresh
+            // Shared with LifeOpsComputeWorker's periodic pull so a fresh
             // NextTasksState is persisted identically (including the
             // PendingRemovals filtering) from either path.
             persistNextTasksForInstance(applicationContext, glanceId, state)

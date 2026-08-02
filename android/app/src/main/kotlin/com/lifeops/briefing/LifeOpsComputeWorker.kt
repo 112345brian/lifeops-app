@@ -1,0 +1,684 @@
+package com.lifeops.briefing
+
+import android.content.Context
+import android.util.Log
+import androidx.glance.GlanceId
+import androidx.glance.appwidget.GlanceAppWidgetManager
+import androidx.glance.appwidget.state.getAppWidgetState
+import androidx.glance.appwidget.state.updateAppWidgetState
+import androidx.glance.state.PreferencesGlanceStateDefinition
+import androidx.work.BackoffPolicy
+import androidx.work.CoroutineWorker
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.WorkerParameters
+import com.lifeops.briefing.data.BriefingState
+import com.lifeops.briefing.data.GymRing
+import com.lifeops.briefing.data.LifeOpsDatabase
+import com.lifeops.briefing.data.NextTask
+import com.lifeops.briefing.data.NextTasksState
+import com.lifeops.briefing.data.TaskCacheEntity
+import com.lifeops.briefing.data.TodayEvent
+import com.lifeops.briefing.data.toRoutine
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONException
+import org.json.JSONObject
+import java.time.Duration
+import java.time.Instant
+import java.time.LocalDateTime
+import java.time.ZoneId
+import java.util.concurrent.TimeUnit
+import com.lifeops.briefing.data.AttentionReason as UiAttentionReason
+
+/**
+ * The real on-device compute tick this whole migration has been building
+ * toward -- see docs/lifeops_capability_todo.md's "actual bottleneck" note:
+ * every engine port (Routine/YnabEngine/GymSchedule/ChoreSchedule/
+ * SocialSchedule/DeadlineRisk/Attention) plus the Room persistence layer
+ * (RoutineEntity/HistoryEventEntity/TaskCacheEntity) existed, tested, but
+ * completely unwired before this file. [LifeOpsComputeWorker] is the
+ * WorkManager periodic worker that actually fetches real data
+ * ([FlowSavvyClient]), reads/writes it durably (Room), runs the pure engines
+ * against it, and folds the result into [Attention]'s deterministic
+ * `attention_state`/`attention_reasons` -- replacing the old
+ * `NextTasksRefreshWorker`'s direct HTTP fetch-and-parse of the home
+ * server's pre-computed `/api/next-tasks`/`/api/briefing` JSON, which is
+ * DELETED by this change (see this file's bottom section).
+ *
+ * ## What this tick actually wires, and what it deliberately does NOT
+ *
+ * Wired, tested, real:
+ * - FlowSavvy fetch (schedule + all incomplete tasks) via [FlowSavvyClient],
+ *   abstracted behind [FlowSavvyFetch] purely so tests can supply fixture
+ *   JSON without a real network call or a mock HTTP server (this project has
+ *   neither OkHttp nor MockWebServer -- see `FlowSavvyClientTest.kt`'s own
+ *   kdoc on why its tests exercise the retry policy directly instead).
+ * - [TaskCacheDao] as the durable local task cache (upserted every tick),
+ *   so "what's outstanding" survives a transient FlowSavvy fetch failure --
+ *   the exact gap [TaskCacheEntity]'s kdoc calls out.
+ * - Gym: [Routine]/[status] (anchor=WINDOW) fed real [HistoryEventDao] rows
+ *   for the "gym" domain, using [RoutineDao]'s persisted target if a "gym"
+ *   routine row exists, falling back to `times=4` (routine_store.py's own
+ *   default) otherwise.
+ * - Social: [SocialSchedule.kt]'s `plan` fed real days-since-last from
+ *   [HistoryEventDao] for "partner"/"friends", using persisted [RoutineDao]
+ *   rows when present.
+ * - Meal: [MealSchedule.kt]'s `planMeal` fed the real last-"meal"-event
+ *   timestamp from [HistoryEventDao].
+ * - Deadline risk / coursework-at-risk / overdue / due-today: [DeadlineRisk.kt]'s
+ *   `atRiskAssignments`/`deadlineCrunchItem`, fed [Assignment]s built from
+ *   every fetched incomplete FlowSavvy task's real `dueDateTime`/
+ *   `durationMinutes`/`progressMinutes` -- ports `lifeops/briefing_service.py`'s
+ *   `build()` overdue/due_today/coursework_at_risk assembly (verified against
+ *   that function directly), simplified to run over EVERY incomplete task
+ *   rather than `gather.py`'s `LIST_COURSE`-scoped subset (Android has no
+ *   equivalent of `config.LIST_COURSE` wired yet) -- a documented, deliberate
+ *   scope narrowing, not an oversight.
+ * - Money: [Attention]'s money branch fed the real
+ *   `discretionaryCurrentDollars` [refreshYnabCategoriesIfConfigured] (already
+ *   wired, unchanged by this file) computes from a live YNAB category-balance
+ *   read.
+ * - [Attention.compute] itself, folding every one of the above into a real
+ *   `attention_state`/`attention_reasons`/headline, persisted into
+ *   [BriefingState] so [BriefingWidget] renders it exactly like the old
+ *   server-pushed value.
+ *
+ * Deliberately NOT wired (flagged as follow-up work, not silently dropped):
+ * - **Chore's actual next-occurrence task creation.** `ChoreSchedule.kt`'s
+ *   `plan()` needs a live "completed tasks carrying a `[cycle:Nd]` note tag"
+ *   FlowSavvy read plus a `FlowSavvyClient.createTask` WRITE with its own
+ *   dedup-by-processed-id persistence -- a genuinely riskier, separate
+ *   feature (a write path that can duplicate a task if done wrong) than the
+ *   read-only attention/next-tasks compute this tick is centered on.
+ * - **YnabEngine's categorize/approve/hold/cover WRITE actions.** Those need
+ *   a live "unapproved transactions" YNAB read plus YNAB PATCH calls
+ *   `YnabRefresh.kt` doesn't have today (it only reads category balances).
+ *   Same "separate write-capable feature" reasoning as chore.
+ * - **GymSchedule.kt's full `plan()`** (slot-booking/calendar-action
+ *   creation/wind-down blocks) -- needs a next-N-days calendar-blocked/
+ *   deadline-heavy/sleep-quality context this tick doesn't assemble. Gym's
+ *   WINDOW-adherence math (`Routine.status`, which is what `GymSchedule.kt`'s
+ *   own `gymRoutine()` + `scheduleRoutine` wrap) is reused directly instead,
+ *   since that's the only piece the widget/attention surfaces actually need
+ *   (a 7-day count, not a booked calendar slot).
+ * - **`SystemHealth`** is passed as `null` to [Attention.compute] -- see
+ *   `Attention.kt`'s own kdoc: "designing what 'last successfully synced
+ *   with FlowSavvy/YNAB' means on-device is future work, not something this
+ *   port invents." Still true here; this tick doesn't invent that concept.
+ *
+ * ## FlowSavvy config
+ *
+ * Reads `WidgetConfigStore.getFlowSavvyBaseUrl`/`getFlowSavvyToken` -- if
+ * either is unconfigured, `doWork` no-ops (`Result.success()`) the same way
+ * the old worker no-op'd on a missing panel URL/token. No Settings UI field
+ * exists yet for these two values (building UI is out of scope for this
+ * task); see `WidgetConfigStore.importFlowSavvyConfigFileIfPresent`'s kdoc
+ * for the interim sideload path, mirroring the existing YNAB_TOKEN import
+ * mechanism exactly.
+ */
+
+// ---------------------------------------------------------------------
+// FlowSavvy fetch -- a small seam so the compute logic below is testable
+// with fixture JSON, without a real network call or a mock HTTP server.
+// ---------------------------------------------------------------------
+
+/** One `scheduleItems[]` entry from FlowSavvy's `get_schedule` response --
+ * matches the fields `gather.py`'s `next_tasks_input`/`today_events_input`
+ * actually read (verified against that source directly), nothing more. */
+internal data class RawScheduleItem(
+    val itemId: String?,
+    val itemType: String?,
+    val title: String?,
+    val startTime: String?,
+    val allDay: Boolean = false,
+    val completed: Boolean = false,
+    val thisPartCompleted: Boolean = false,
+)
+
+/** One `items[]` entry from FlowSavvy's `list_items(itemType="task", ...)`
+ * response -- matches the fields `gather.py`'s `homework_input`/
+ * `deadline_input` actually read. */
+internal data class RawTaskItem(
+    val id: String?,
+    val title: String?,
+    val dueDateTime: String?,
+    val durationMinutes: Int?,
+    val progressMinutes: Int?,
+    val completed: Boolean = false,
+)
+
+internal data class FlowSavvyFetchResult(
+    val scheduleItems: List<RawScheduleItem>,
+    val incompleteTasks: List<RawTaskItem>,
+)
+
+/** Testability seam: a real implementation ([RealFlowSavvyFetch]) wraps
+ * [FlowSavvyClient]; tests supply a fake returning fixture data built
+ * in-memory, with no network/mock-server dependency. */
+internal fun interface FlowSavvyFetch {
+    fun fetch(now: LocalDateTime): FlowSavvyFetchResult
+}
+
+/** has()-and-not-null()-safe String read -- `optString` on an explicit JSON
+ * `null` (FlowSavvy leaves `dueDateTime`/`startTime` explicitly null for
+ * plenty of real items, e.g. an auto-scheduled task with no fixed start yet)
+ * returns the literal STRING `"null"` (non-empty), not Kotlin `null` --
+ * same hazard `BriefingState.kt`'s own `optStringOrNull` documents and
+ * guards against. Guarding it here too rather than relying on the
+ * accidental save of a downstream `LocalDateTime.parse("null")` throwing and
+ * being caught. */
+private fun JSONObject.optStringOrNull(key: String): String? =
+    if (isNull(key)) null else optString(key).takeIf { it.isNotEmpty() }
+
+internal fun parseScheduleItem(o: JSONObject): RawScheduleItem = RawScheduleItem(
+    itemId = o.optStringOrNull("itemId"),
+    itemType = o.optStringOrNull("itemType"),
+    title = o.optStringOrNull("title"),
+    startTime = o.optStringOrNull("startTime"),
+    allDay = o.optBoolean("allDay", false),
+    completed = o.optBoolean("completed", false),
+    thisPartCompleted = o.optBoolean("thisPartCompleted", false),
+)
+
+internal fun parseTaskItem(o: JSONObject): RawTaskItem = RawTaskItem(
+    id = o.optStringOrNull("id"),
+    title = o.optStringOrNull("title"),
+    dueDateTime = o.optStringOrNull("dueDateTime"),
+    durationMinutes = if (o.has("durationMinutes") && !o.isNull("durationMinutes")) o.optInt("durationMinutes") else null,
+    progressMinutes = if (o.has("progressMinutes") && !o.isNull("progressMinutes")) o.optInt("progressMinutes") else null,
+    completed = o.optBoolean("completed", false),
+)
+
+/** Real network-backed [FlowSavvyFetch]. Mirrors `gather.py`'s
+ * `_upcoming_schedule` (21-day window) and `deadline_input`'s
+ * `list_items(itemType="task", completed=False)` fetch shapes exactly. */
+internal class RealFlowSavvyFetch(private val client: FlowSavvyClient) : FlowSavvyFetch {
+    override fun fetch(now: LocalDateTime): FlowSavvyFetchResult {
+        val start = now.toLocalDate().toString()
+        val end = now.toLocalDate().plusDays(21).toString()
+        val scheduleArr = client.getSchedule(start, end).optJSONArray("scheduleItems") ?: JSONArray()
+        val scheduleItems = (0 until scheduleArr.length()).map { parseScheduleItem(scheduleArr.getJSONObject(it)) }
+
+        val tasksArr = client.listItems(mapOf("itemType" to "task", "completed" to false)).optJSONArray("items") ?: JSONArray()
+        val tasks = (0 until tasksArr.length()).map { parseTaskItem(tasksArr.getJSONObject(it)) }
+
+        return FlowSavvyFetchResult(scheduleItems, tasks)
+    }
+}
+
+// ---------------------------------------------------------------------
+// Pure compute helpers -- each directly unit-testable, no Android/Room/
+// network dependency.
+// ---------------------------------------------------------------------
+
+/** ISO-8601 local date-time truncated to whole seconds, e.g.
+ * "2026-08-02T14:05:00" -- matches Python's `now.isoformat(timespec="seconds")`
+ * closely enough that lexical string comparison agrees with chronological
+ * order (both zero-pad every field), which is exactly what
+ * `next_tasks_input`'s `st < now.isoformat(...)` filter relies on. Plain
+ * `LocalDateTime.toString()` is NOT used here because it omits the seconds
+ * field when they're zero, which would break that same lexical comparison. */
+internal fun isoSeconds(dt: LocalDateTime): String {
+    val d = dt.toLocalDate()
+    val t = dt.toLocalTime().withNano(0)
+    return "%04d-%02d-%02dT%02d:%02d:%02d".format(d.year, d.monthValue, d.dayOfMonth, t.hour, t.minute, t.second)
+}
+
+/** Ports `gather.py`'s `next_tasks_input`: the next [n] incomplete,
+ * non-all-day, future-starting tasks across the whole schedule window,
+ * sorted by real start time. */
+internal fun nextTasksFromSchedule(items: List<RawScheduleItem>, now: LocalDateTime, n: Int = 3): List<NextTask> {
+    val nowIso = isoSeconds(now)
+    return items.asSequence()
+        .filter { it.itemType == "task" && !it.allDay && !it.completed && !it.thisPartCompleted }
+        .mapNotNull { i -> i.startTime?.takeIf { it >= nowIso }?.let { st -> Triple(i.itemId, i.title, st) } }
+        .sortedBy { it.third }
+        .take(n)
+        .map { NextTask(id = it.first ?: "", title = it.second ?: "", start = it.third) }
+        .toList()
+}
+
+/** Ports `gather.py`'s `today_events_input`: today's real (timed) events
+ * across the whole schedule window, sorted by start time. */
+internal fun todayEventsFromSchedule(items: List<RawScheduleItem>, now: LocalDateTime, n: Int = 5): List<TodayEvent> {
+    val today = now.toLocalDate().toString()
+    return items.asSequence()
+        .filter { it.itemType == "event" && !it.allDay && (it.startTime ?: "").startsWith(today) }
+        .sortedBy { it.startTime ?: "" }
+        .take(n)
+        .map { TodayEvent(title = it.title ?: "", start = it.startTime) }
+        .toList()
+}
+
+/** Ports the [Assignment] shape `gather.py`'s `homework_input`/
+ * `deadline_input` build from a raw FlowSavvy task dict -- see this file's
+ * top-level kdoc for the deliberate "every incomplete task, not just
+ * LIST_COURSE" scope narrowing versus the Python source's two separate
+ * course-scoped/all-tasks functions. */
+internal fun assignmentsFromTasks(tasks: List<RawTaskItem>, now: LocalDateTime): List<Assignment> =
+    tasks.mapNotNull { t ->
+        val due = t.dueDateTime ?: return@mapNotNull null
+        val dueDt = try {
+            LocalDateTime.parse(due)
+        } catch (e: Exception) {
+            return@mapNotNull null
+        }
+        val hours = Duration.between(now, dueDt).toMinutes() / 60.0
+        // Matches homework_input's own semester-ish staleness bound (skip
+        // anything abandoned so long ago it can't still be actionable).
+        if (hours < -24 * 120) return@mapNotNull null
+        val dur = (t.durationMinutes ?: 0).toDouble()
+        val prog = (t.progressMinutes ?: 0).toDouble()
+        Assignment(
+            title = t.title ?: "",
+            dueInHours = hours,
+            dueInDays = hours / 24.0,
+            remainingMin = maxOf(0.0, dur - prog),
+            progress = prog,
+        )
+    }
+
+/** Ports `briefing_service.py`'s `build()` overdue-list comprehension
+ * exactly: `due_in_h < 0 and remaining_min > 0`. */
+internal fun overdueItemsFrom(assignments: List<Assignment>): List<OverdueItem> =
+    assignments.filter { (it.dueInHours ?: 0.0) < 0 && (it.remainingMin ?: 0.0) > 0 }
+        .map { OverdueItem(title = it.title, dueInHours = it.dueInHours ?: 0.0, due = null) }
+
+/** Ports `briefing_service.py`'s `due_today` comprehension exactly:
+ * `0 <= due_in_h <= 24`. */
+internal fun dueTodayTitles(assignments: List<Assignment>): List<String> =
+    assignments.filter { (it.dueInHours ?: 1e9) in 0.0..24.0 }.map { it.title ?: "" }
+
+/** Ports `briefing_service.py`'s `coursework_at_risk` assembly: the
+ * heavy-plus-soon items ([atRiskAssignments]) plus the single earliest
+ * binding deadline-crunch item ([deadlineCrunchItem]), title-deduplicated
+ * (the Python source appends the crunch item to the same list without
+ * deduplication, but a crunch item is very often ALSO one of the
+ * heavy-plus-soon items -- deduplicating here avoids a double-counted
+ * reason in a UI surface, whereas the Python source's `at_risk_items`
+ * feeds risk_tracking, not straight into a UI list). */
+internal fun courseworkAtRiskTitles(assignments: List<Assignment>): List<String> {
+    val heavy = atRiskAssignments(assignments).map { it.title ?: "" }
+    val crunch = deadlineCrunchItem(assignments)?.title
+    return (heavy + listOfNotNull(crunch)).distinct()
+}
+
+/** Ports `briefing_service.py`'s `load_7d_h` exactly: total remaining
+ * minutes across every assignment due within 7 days, in hours. */
+internal fun courseworkHoursNext7d(assignments: List<Assignment>): Double =
+    assignments.filter { (it.dueInDays ?: 99.0) <= 7.0 }.sumOf { it.remainingMin ?: 0.0 } / 60.0
+
+/** Gym adherence: real [HistoryEventDao] rows for the "gym" domain, fed
+ * through [Routine]/[status] (anchor=WINDOW) -- the same shared primitive
+ * `GymSchedule.kt`'s own `gymRoutine()` wraps, reused directly here since
+ * the widget/attention surfaces only need "how many times in the last 7
+ * days," not a booked calendar slot (see this file's top-level kdoc). Uses
+ * the persisted "gym" [RoutineEntity] row's target when one exists,
+ * falling back to `routine_store.py`'s own default (`times=4`) otherwise. */
+internal suspend fun computeGymRing(db: LifeOpsDatabase, now: LocalDateTime): GymRing {
+    val persistedGym = db.routineDao().getById("gym")
+    val target = persistedGym?.timesPerWindow ?: 4
+    val timestamps = db.historyEventDao().getTimestampsIsoForDomain("gym")
+    // Anchor/perDays are pinned to WINDOW/7 here regardless of what a
+    // persisted "gym" RoutineEntity's own anchor field says -- gym's ring is
+    // inherently a WINDOW computation (see GymSchedule.kt's own gymRoutine()),
+    // and trusting an arbitrary persisted anchor value would risk an
+    // unrepresentable RoutineStatus.SinceLast result here. Only the target
+    // count is taken from the persisted row.
+    val routine = Routine(id = "gym", times = target, perDays = 7, anchor = Anchor.WINDOW)
+    val gymStatus = status(routine, timestamps, now) as RoutineStatus.Window
+    val todayDone = timestamps.any { runCatching { LocalDateTime.parse(it).toLocalDate() }.getOrNull() == now.toLocalDate() }
+    val gymLast7d = gymStatus.timesThisWindow
+    val color = when {
+        todayDone || gymLast7d >= target -> "green"
+        gymLast7d >= maxOf(0, target - 2) -> "yellow"
+        else -> "red"
+    }
+    return GymRing(
+        fill = if (target > 0) (gymLast7d.toFloat() / target).coerceIn(0f, 1f) else 0f,
+        color = color,
+        gymLast7d = gymLast7d,
+        gymTarget = target,
+        todayDone = todayDone,
+    )
+}
+
+private fun epochMillisToIsoLocalDateTime(epochMillis: Long): String =
+    Instant.ofEpochMilli(epochMillis).atZone(ZoneId.systemDefault()).toLocalDateTime().toString()
+
+private fun daysSince(lastEpochMillis: Long?, now: LocalDateTime): Int? =
+    lastEpochMillis?.let { Duration.between(Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).toLocalDateTime(), now).toDays().toInt() }
+
+/** Social nudges: real days-since-last for "partner"/"friends" from
+ * [HistoryEventDao], fed through `SocialSchedule.kt`'s `plan`. Uses
+ * persisted [RoutineDao] rows for cadence when present, falling back to
+ * `routine_store.py`'s own defaults (`times=1, per_days=7,
+ * anchor=since_last` for both) otherwise. */
+internal suspend fun computeSocialNudges(db: LifeOpsDatabase, now: LocalDateTime): List<String> {
+    val partnerRoutine = db.routineDao().getById("partner")?.toRoutine()
+        ?: Routine(id = "partner", times = 1, perDays = 7, anchor = Anchor.SINCE_LAST)
+    val friendsRoutine = db.routineDao().getById("friends")?.toRoutine()
+        ?: Routine(id = "friends", times = 1, perDays = 7, anchor = Anchor.SINCE_LAST)
+    val partnerDays = daysSince(db.historyEventDao().getLastTimestampForDomain("partner"), now)
+    val friendsDays = daysSince(db.historyEventDao().getLastTimestampForDomain("friends"), now)
+    return plan(partnerDays, friendsDays, partnerRoutine, friendsRoutine).nudges
+}
+
+/** Meal-due nudge: the real last-"meal"-event timestamp from
+ * [HistoryEventDao], fed through `MealSchedule.kt`'s `planMeal`. */
+internal suspend fun computeMealNudge(db: LifeOpsDatabase, now: LocalDateTime): String? {
+    val lastEpoch = db.historyEventDao().getLastTimestampForDomain("meal")
+    val lastIso = lastEpoch?.let { epochMillisToIsoLocalDateTime(it) }
+    return when (planMeal(lastIso, now)) {
+        is MealSchedule.NotDue -> null
+        is MealSchedule.Due -> "Meal prep is due -- plan groceries and cook."
+    }
+}
+
+/** Full output of one [runComputeTick] run -- everything
+ * [applyComputeTickResult] needs to persist into the widget-visible
+ * [NextTasksState]/[BriefingState] shapes. */
+internal data class ComputeTickResult(
+    val nextTasks: NextTasksState,
+    val attention: AttentionResult,
+    val gymLast7d: Int,
+    val gymTarget: Int,
+    val discretionaryDollars: Int?,
+    val courseworkHoursNext7d: Double,
+    val nudges: List<String>,
+)
+
+/**
+ * The actual on-device compute tick: fetch real FlowSavvy data, persist it
+ * durably to Room, run every engine this file's top-level kdoc lists as
+ * wired against that real data, and fold the results into one deterministic
+ * [Attention.compute] call. This is the fully testable core -- no
+ * Context/WorkManager/Glance dependency -- that [LifeOpsComputeWorker.doWork]
+ * wires up with real dependencies and tests exercise directly against an
+ * in-memory Room database and a fixture [FlowSavvyFetch].
+ */
+internal suspend fun runComputeTick(
+    db: LifeOpsDatabase,
+    fetch: FlowSavvyFetch,
+    discretionaryDollars: Int?,
+    now: LocalDateTime = LocalDateTime.now(),
+): ComputeTickResult {
+    val fetched = fetch.fetch(now)
+
+    // Durable local task cache -- survives a transient FlowSavvy fetch
+    // failure on a later tick (see TaskCacheEntity's kdoc: "the last known
+    // state of THIS specific remote task").
+    val taskEntities = fetched.incompleteTasks.mapNotNull { t ->
+        val id = t.id ?: return@mapNotNull null
+        val dueMillis = t.dueDateTime?.let {
+            runCatching { LocalDateTime.parse(it).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli() }.getOrNull()
+        }
+        TaskCacheEntity(id = id, title = t.title ?: "", dueAtEpochMillis = dueMillis, completed = t.completed)
+    }
+    db.taskCacheDao().upsertAll(taskEntities)
+
+    val assignments = assignmentsFromTasks(fetched.incompleteTasks, now)
+    val overdue = overdueItemsFrom(assignments)
+    val dueToday = dueTodayTitles(assignments)
+    val courseworkAtRisk = courseworkAtRiskTitles(assignments)
+    val hoursNext7d = courseworkHoursNext7d(assignments)
+
+    val gymRing = computeGymRing(db, now)
+
+    val nudges = buildList {
+        addAll(computeSocialNudges(db, now))
+        computeMealNudge(db, now)?.let { add(it) }
+    }
+
+    val facts = AttentionFacts(
+        overdue = overdue,
+        courseworkAtRisk = courseworkAtRisk,
+        dueToday = dueToday,
+        discretionaryDollars = discretionaryDollars?.toDouble(),
+        gymLast7d = gymRing.gymLast7d,
+        gymTarget = gymRing.gymTarget,
+    )
+    // system=null deliberately -- see this file's top-level kdoc.
+    val attention = compute(facts, system = null)
+
+    val nextTasksState = NextTasksState(
+        tasks = nextTasksFromSchedule(fetched.scheduleItems, now),
+        events = todayEventsFromSchedule(fetched.scheduleItems, now),
+        gymRing = gymRing,
+        weather = null, // weather is written by PhoneWeather.kt directly onto widget state; not this tick's concern
+        fetchedAtEpochMillis = now.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli(),
+    )
+
+    return ComputeTickResult(
+        nextTasks = nextTasksState,
+        attention = attention,
+        gymLast7d = gymRing.gymLast7d,
+        gymTarget = gymRing.gymTarget,
+        discretionaryDollars = discretionaryDollars,
+        courseworkHoursNext7d = hoursNext7d,
+        nudges = nudges,
+    )
+}
+
+// ---------------------------------------------------------------------
+// Widget-state persistence -- same shapes/keys the old server-fed path used,
+// so BriefingWidget's read side needs no change (see this file's top-level
+// kdoc's "what this tick actually wires" section).
+// ---------------------------------------------------------------------
+
+/** Shared by [LifeOpsComputeWorker]'s periodic tick, [NextTasksPersistWorker]'s
+ * FCM path, and [CompleteTaskAction], so a fresh [NextTasksState] is
+ * persisted identically (including [PendingRemovals] reconciliation) from
+ * any path. Moved here from the now-deleted `NextTasksRefreshWorker.kt`
+ * (see this file's bottom section) -- logic unchanged. */
+internal suspend fun persistNextTasksForInstance(context: Context, glanceId: GlanceId, state: NextTasksState) {
+    updateAppWidgetState(context, glanceId) { prefs ->
+        val now = System.currentTimeMillis()
+        val pending = PendingRemovals.readActive(prefs, now)
+        if (pending.isEmpty()) {
+            prefs[WidgetKeys.NEXT_TASKS_JSON] = state.toJson()
+            return@updateAppWidgetState
+        }
+
+        val incomingIds = state.tasks.map { it.id }.toSet()
+        val confirmedComplete = pending.keys.filterNot { it in incomingIds }.toSet()
+        val stillPresent = pending.keys - confirmedComplete
+        val confirmedFailed = stillPresent.filter { id -> pending.getValue(id).isPastGrace(now) }.toSet()
+
+        val resolved = confirmedComplete + confirmedFailed
+        if (resolved.isNotEmpty()) PendingRemovals.clearConfirmed(prefs, resolved)
+
+        val toMask = stillPresent - confirmedFailed
+        val filtered = if (toMask.isEmpty()) state else state.copy(tasks = state.tasks.filterNot { it.id in toMask })
+        prefs[WidgetKeys.NEXT_TASKS_JSON] = filtered.toJson()
+    }
+    BriefingWidget().update(context, glanceId)
+}
+
+/** Applies one [ComputeTickResult] to every placed widget instance: the
+ * next-tasks/gym-ring snapshot wholesale (via [persistNextTasksForInstance]),
+ * and the attention/gym/money/coursework fields merged into whatever
+ * [BriefingState] is already persisted (preserving fields this tick doesn't
+ * compute, e.g. weather/sleep/notable events, the same "merge, don't
+ * clobber" shape [refreshYnabCategoriesIfConfigured] already uses). */
+internal suspend fun applyComputeTickResult(context: Context, result: ComputeTickResult) {
+    val manager = GlanceAppWidgetManager(context)
+    for (glanceId in manager.getGlanceIds(BriefingWidget::class.java)) {
+        persistNextTasksForInstance(context, glanceId, result.nextTasks)
+
+        val current = try {
+            getAppWidgetState(context, PreferencesGlanceStateDefinition, glanceId)[WidgetKeys.BRIEFING_JSON]
+                ?.let { BriefingState.fromJson(it) }
+        } catch (e: JSONException) {
+            null
+        } ?: BriefingState.empty()
+
+        val updated = current.copy(
+            gymLast7d = result.gymLast7d,
+            gymTarget = result.gymTarget,
+            discretionaryDollars = result.discretionaryDollars ?: current.discretionaryDollars,
+            courseworkHoursNext7d = result.courseworkHoursNext7d,
+            attentionState = result.attention.state.name.lowercase(),
+            attentionSymbol = result.attention.symbol,
+            attentionLabel = result.attention.label,
+            attentionHeadline = result.attention.headline,
+            reasons = result.attention.reasons.map {
+                UiAttentionReason(domain = it.domain.name.lowercase(), severity = it.severity.name.lowercase())
+            },
+            nudges = result.nudges,
+            fetchedAtEpochMillis = System.currentTimeMillis(),
+        )
+        updateAppWidgetState(context, glanceId) { prefs ->
+            prefs[WidgetKeys.BRIEFING_JSON] = updated.toJson()
+            prefs[WidgetKeys.LAST_FETCHED_AT] = System.currentTimeMillis()
+        }
+        BriefingWidget().update(context, glanceId)
+    }
+}
+
+// ---------------------------------------------------------------------
+// The WorkManager periodic worker itself.
+// ---------------------------------------------------------------------
+
+/**
+ * The sole periodic on-device tick going forward -- replaces
+ * `NextTasksRefreshWorker` (deleted; see this file's top-level kdoc) as the
+ * one WorkManager job [BaseBriefingWidgetReceiver] schedules on widget
+ * placement and cancels once the last instance is removed. Keeps every
+ * orthogonal responsibility the old worker piggybacked on its 15-min cadence
+ * (reverting expired optimistic task completions, phone-side location/
+ * weather reporting, the YNAB category-balance refresh) unchanged, and
+ * replaces its home-server JSON fetch with the real engine-driven
+ * [runComputeTick].
+ */
+class LifeOpsComputeWorker(
+    appContext: Context,
+    workerParams: WorkerParameters,
+) : CoroutineWorker(appContext, workerParams) {
+
+    override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+        // Unconditional, same as the old worker: a stuck optimistic
+        // completion (PendingRemovals.kt) must revert even with zero
+        // connectivity.
+        revertExpiredPendingCompletions(applicationContext)
+
+        // Best-effort, self-gated, and deliberately run before any
+        // config/reachability check below -- same reasoning as the old
+        // worker (weather/location have zero dependency on the panel or
+        // FlowSavvy being configured at all).
+        reportLocationIfDue(applicationContext)
+        reportWeatherIfDue(applicationContext)
+        refreshYnabCategoriesIfConfigured(
+            applicationContext,
+            force = inputData.getBoolean(INPUT_FORCE_YNAB_REFRESH, false),
+        )
+
+        WidgetConfigStore.importFlowSavvyConfigFileIfPresent(applicationContext)
+        val flowSavvyBaseUrl = WidgetConfigStore.getFlowSavvyBaseUrl(applicationContext)
+        val flowSavvyToken = WidgetConfigStore.getFlowSavvyToken(applicationContext)
+        if (flowSavvyBaseUrl == null || flowSavvyToken == null) {
+            // Not configured yet -- nothing left to do (the on-device
+            // compute tick needs FlowSavvy data to run against).
+            Log.i(TAG, "skipping on-device compute tick: FlowSavvy is not configured")
+            return@withContext Result.success()
+        }
+
+        val db = LifeOpsDatabase.getInstance(applicationContext)
+        val client = FlowSavvyClient(flowSavvyBaseUrl, flowSavvyToken)
+        val now = LocalDateTime.now()
+        val discretionaryDollars = readCurrentDiscretionaryDollars(applicationContext)
+
+        val result = try {
+            runComputeTick(db, RealFlowSavvyFetch(client), discretionaryDollars, now)
+        } catch (e: FlowSavvyConnectionException) {
+            Log.e(TAG, "FlowSavvy unreachable during on-device compute tick", e)
+            return@withContext Result.retry()
+        } catch (e: FlowSavvyHttpException) {
+            // Mirrors the old worker's "malformed body shouldn't crash the
+            // worker or hammer a response shape that won't change" posture.
+            Log.e(TAG, "FlowSavvy returned an error during on-device compute tick", e)
+            return@withContext Result.success()
+        }
+
+        applyComputeTickResult(applicationContext, result)
+        Result.success()
+    }
+
+    /** Reads back whatever `discretionaryCurrentDollars`
+     * [refreshYnabCategoriesIfConfigured] just computed (from any placed
+     * widget instance's persisted [BriefingState] -- they're all written the
+     * same value in the same call) so this tick's [AttentionFacts] uses the
+     * real, current YNAB figure rather than re-deriving it. `null` if no
+     * widget instance exists yet or none has a YNAB figure -- the money
+     * branch of [Attention.compute] already treats `null` as "not
+     * applicable," not "zero." */
+    private suspend fun readCurrentDiscretionaryDollars(context: Context): Int? {
+        val manager = GlanceAppWidgetManager(context)
+        for (glanceId in manager.getGlanceIds(BriefingWidget::class.java)) {
+            val value = try {
+                getAppWidgetState(context, PreferencesGlanceStateDefinition, glanceId)[WidgetKeys.BRIEFING_JSON]
+                    ?.let { BriefingState.fromJson(it) }
+                    ?.discretionaryCurrentDollars
+            } catch (e: JSONException) {
+                null
+            }
+            if (value != null) return value
+        }
+        return null
+    }
+
+    /** Restores any task whose pending completion (checkbox tap) has passed
+     * the ~10-min hard timeout without ever being confirmed complete or
+     * confirmed failed -- see [PendingRemovals.takeExpired]. Moved here from
+     * the now-deleted `NextTasksRefreshWorker.kt`, unchanged. */
+    private suspend fun revertExpiredPendingCompletions(context: Context) {
+        val manager = GlanceAppWidgetManager(context)
+        val now = System.currentTimeMillis()
+        for (glanceId in manager.getGlanceIds(BriefingWidget::class.java)) {
+            var didRestore = false
+            updateAppWidgetState(context, glanceId) { prefs ->
+                val expired = PendingRemovals.takeExpired(prefs, now)
+                if (expired.isEmpty()) return@updateAppWidgetState
+                val currentJson = prefs[WidgetKeys.NEXT_TASKS_JSON] ?: return@updateAppWidgetState
+                val current = try {
+                    NextTasksState.fromJson(currentJson)
+                } catch (e: JSONException) {
+                    return@updateAppWidgetState
+                }
+                val existingIds = current.tasks.map { it.id }.toSet()
+                val restored = expired.filterNot { it.id in existingIds }
+                if (restored.isEmpty()) return@updateAppWidgetState
+                prefs[WidgetKeys.NEXT_TASKS_JSON] = current.copy(tasks = current.tasks + restored).toJson()
+                didRestore = true
+            }
+            if (didRestore) BriefingWidget().update(context, glanceId)
+        }
+    }
+
+    companion object {
+        private const val TAG = "LifeOpsComputeWorker"
+        const val INPUT_FORCE_YNAB_REFRESH = "force_ynab_refresh"
+        const val UNIQUE_PERIODIC_WORK_NAME = "lifeops_compute_tick_periodic"
+        private const val MIN_BACKOFF_MS = 30_000L
+
+        /** Schedules the recurring 15-minute tick -- same cadence/backoff
+         * policy the old `NextTasksRefreshWorker` used. Safe to call multiple
+         * times: `ExistingPeriodicWorkPolicy.KEEP` means a repeat call (e.g.
+         * `onEnabled` firing again) won't reset an already-scheduled
+         * request's interval/backoff. */
+        fun schedulePeriodic(context: Context) {
+            val request = PeriodicWorkRequestBuilder<LifeOpsComputeWorker>(15, TimeUnit.MINUTES)
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, MIN_BACKOFF_MS, TimeUnit.MILLISECONDS)
+                .build()
+
+            WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+                UNIQUE_PERIODIC_WORK_NAME,
+                ExistingPeriodicWorkPolicy.KEEP,
+                request,
+            )
+        }
+    }
+}

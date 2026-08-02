@@ -49,7 +49,7 @@ object PendingRemovals {
     /** Entries not yet past [HARD_TIMEOUT_MS] as of [nowMillis], keyed by
      * task id -- callers should drop these ids from any fresh, server-derived
      * task list before persisting it (unless past grace; see
-     * [PendingCompletion.isPastGrace] and NextTasksRefreshWorker's use of it). */
+     * [PendingCompletion.isPastGrace] and LifeOpsComputeWorker's use of it). */
     fun readActive(prefs: Preferences, nowMillis: Long): Map<String, PendingCompletion> {
         val active = mutableMapOf<String, PendingCompletion>()
         val all = readAll(prefs)
@@ -92,7 +92,7 @@ object PendingRemovals {
 
     /** Removes and returns the tasks whose pending record is past
      * [HARD_TIMEOUT_MS] as of [nowMillis] -- callers should merge these back
-     * into the visible task list (see NextTasksRefreshWorker's revert step). */
+     * into the visible task list (see LifeOpsComputeWorker's revert step). */
     fun takeExpired(prefs: MutablePreferences, nowMillis: Long): List<NextTask> {
         val current = readAll(prefs)
         val expired = mutableListOf<NextTask>()

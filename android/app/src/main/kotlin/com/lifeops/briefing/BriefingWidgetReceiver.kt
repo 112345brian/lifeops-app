@@ -25,7 +25,7 @@ import androidx.work.WorkManager
  *
  * The briefing itself is push-only via BriefingFcmService (FCM) / ntfy --
  * no scheduling needed for that. The next-tasks list (which also carries
- * gym-ring data), however, is periodic pull (see NextTasksRefreshWorker),
+ * gym-ring data), however, is periodic (see LifeOpsComputeWorker),
  * scheduled as soon as the first instance of ANY of these providers is
  * placed and cancelled only once the last instance across ALL of them is
  * removed -- see [totalWidgetInstanceCount]. A naive per-provider
@@ -38,17 +38,17 @@ abstract class BaseBriefingWidgetReceiver : GlanceAppWidgetReceiver() {
 
     override fun onEnabled(context: Context) {
         super.onEnabled(context)
-        NextTasksRefreshWorker.schedulePeriodic(context)
+        LifeOpsComputeWorker.schedulePeriodic(context)
         // Don't make a freshly-placed widget wait up to 15 minutes (or an
         // FCM push that may never come, e.g. no token registered yet) for
         // its first content -- fire one immediate pull too.
-        WorkManager.getInstance(context).enqueue(OneTimeWorkRequestBuilder<NextTasksRefreshWorker>().build())
+        WorkManager.getInstance(context).enqueue(OneTimeWorkRequestBuilder<LifeOpsComputeWorker>().build())
     }
 
     override fun onDisabled(context: Context) {
         super.onDisabled(context)
         if (totalWidgetInstanceCount(context) == 0) {
-            WorkManager.getInstance(context).cancelUniqueWork(NextTasksRefreshWorker.UNIQUE_PERIODIC_WORK_NAME)
+            WorkManager.getInstance(context).cancelUniqueWork(LifeOpsComputeWorker.UNIQUE_PERIODIC_WORK_NAME)
         }
     }
 }

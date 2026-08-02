@@ -62,6 +62,14 @@ data class BriefingState(
     val attentionHeadline: String? = null,
     val reasons: List<AttentionReason> = emptyList(),
     val notableEvents: List<NotableEvent> = emptyList(),
+    /** Social/meal-due nudge sentences from the on-device compute tick
+     * (SocialSchedule.kt/MealSchedule.kt, see LifeOpsComputeWorker.kt) --
+     * new relative to the server-computed BriefingState shape, which never
+     * carried a dedicated slot for these (they were folded into the LLM
+     * briefing's free text server-side). Added here, rather than reusing
+     * [text], so the widget can render them deterministically without
+     * depending on an LLM call this compute tick deliberately does not make. */
+    val nudges: List<String> = emptyList(),
 ) {
     fun toJson(): String = JSONObject().apply {
         put("date", date)
@@ -112,6 +120,7 @@ data class BriefingState(
                 })
             }
         })
+        put("nudges", JSONArray().apply { nudges.forEach { put(it) } })
     }.toString()
 
     companion object {
@@ -166,6 +175,11 @@ data class BriefingState(
             }
         }
 
+        private fun parseNudges(arr: JSONArray?): List<String> {
+            if (arr == null) return emptyList()
+            return (0 until arr.length()).map { arr.optString(it) }
+        }
+
         private fun parseYnabCategoryBalanceObject(o: JSONObject?): List<YnabCategoryBalance> {
             if (o == null) return emptyList()
             return o.keys().asSequence().map { name ->
@@ -201,6 +215,7 @@ data class BriefingState(
                 attentionHeadline = o.optStringOrNull("attentionHeadline"),
                 reasons = parseReasons(o.optJSONArray("reasons")),
                 notableEvents = parseNotableEvents(o.optJSONArray("notableEvents")),
+                nudges = parseNudges(o.optJSONArray("nudges")),
             )
         }
 

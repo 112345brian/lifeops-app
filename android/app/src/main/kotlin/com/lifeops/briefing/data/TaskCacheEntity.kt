@@ -9,7 +9,7 @@ import androidx.room.PrimaryKey
  * cache needs that an ephemeral widget-render snapshot doesn't:
  * [completed] and [dueAtEpochMillis] so the app can still answer "what's
  * outstanding, and by when" from the last known-good pull if a network
- * fetch (`NextTasksRefreshWorker`) fails transiently, and [sourceJson] so a
+ * fetch (`LifeOpsComputeWorker`) fails transiently, and [sourceJson] so a
  * later data-gather layer doesn't lose any FlowSavvy field this first cut
  * of the schema didn't anticipate.
  *

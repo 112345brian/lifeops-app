@@ -8,7 +8,7 @@
         </intent>
     </queries>
 
-    <!-- Needed for NextTasksRefreshWorker's periodic GET/POST calls and for
+    <!-- Needed for LifeOpsComputeWorker's periodic GET/POST calls and for
          registering the FCM token with the server (the briefing push itself,
          once delivered, needs no permission: Firebase handles that). -->
     <uses-permission android:name="android.permission.INTERNET" />
@@ -18,7 +18,7 @@
          the phone's actual position instead of a fixed WEATHER_LAT/LON.
          FINE, not just COARSE, so the resolved forecast grid cell is
          accurate; BACKGROUND is required on API 29+ because the fetch runs
-         from NextTasksRefreshWorker (a WorkManager job), which the OS
+         from LifeOpsComputeWorker (a WorkManager job), which the OS
          treats as background execution even though the app itself is
          never foregrounded for it; without this permission a background
          getCurrentLocation() call silently yields nothing on Android 10+. -->

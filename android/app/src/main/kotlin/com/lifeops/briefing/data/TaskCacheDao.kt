@@ -8,7 +8,7 @@ import androidx.room.Query
 import androidx.room.Update
 
 /** CRUD for [TaskCacheEntity]. [upsertAll] is the primary write path: a
- * periodic FlowSavvy refresh (`NextTasksRefreshWorker`'s eventual
+ * periodic FlowSavvy refresh (`LifeOpsComputeWorker`'s eventual
  * Room-backed successor) fetches a whole task list at once and needs to
  * write it back as one batch, insert-or-replace by [TaskCacheEntity.id]. */
 @Dao

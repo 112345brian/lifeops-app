@@ -16,9 +16,9 @@ import org.json.JSONObject
 
 /**
  * Best-effort phone-location report, piggybacked on
- * [NextTasksRefreshWorker]'s existing 15-minute periodic cycle rather than
+ * [LifeOpsComputeWorker]'s existing 15-minute periodic cycle rather than
  * scheduling its own timer -- same reasoning as
- * [NextTasksRefreshWorker.revertExpiredPendingCompletions]. Gated to
+ * [LifeOpsComputeWorker.revertExpiredPendingCompletions]. Gated to
  * [MIN_INTERVAL_MS] so this is a handful of one-shot GPS fixes a day (the
  * thing the user actually asked for), not a fix on every 15-min tick --
  * that's the whole battery story here: one balanced-power

@@ -37,7 +37,7 @@ data class WeatherInfo(
 )
 
 /** The widget's "what's next" snapshot -- today's real calendar events plus
- * up to a few upcoming incomplete tasks. Written by NextTasksRefreshWorker
+ * up to a few upcoming incomplete tasks. Written by LifeOpsComputeWorker
  * (periodic pull from /api/next-tasks) and by CompleteTaskAction (immediate
  * update from the fresh list a complete call returns). Persisted as JSON
  * under WidgetKeys.NEXT_TASKS_JSON. */

@@ -33,7 +33,7 @@ import org.json.JSONObject
  * (foreground or background) rather than only being auto-displayed by the
  * system when the app isn't running, and can dispatch to the right persist
  * worker instead of assuming every push is a briefing. next_tasks pushes are
- * the Tailscale-independent counterpart to NextTasksRefreshWorker's periodic
+ * the Tailscale-independent counterpart to LifeOpsComputeWorker's periodic
  * direct pull (fcm.py's send_next_tasks docstring has the full reasoning).
  */
 private const val REGISTER_TOKEN_MIN_BACKOFF_MS = 30_000L
@@ -89,7 +89,7 @@ class BriefingFcmService : FirebaseMessagingService() {
 
 }
 
-/** Shared by BriefingFcmService's push path and NextTasksRefreshWorker's
+/** Shared by BriefingFcmService's push path and LifeOpsComputeWorker's
  * periodic pull so a fresh BriefingState is persisted identically from
  * either path. */
 internal suspend fun persistBriefingForInstance(context: Context, glanceId: GlanceId, state: BriefingState) {

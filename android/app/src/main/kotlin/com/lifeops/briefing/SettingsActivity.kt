@@ -44,7 +44,7 @@ import kotlinx.coroutines.withContext
 
 /** Settings screen: panel base URL (used by [OpenPanelAction]'s tap-to-open
  * deep link, and as the target for FCM-token registration/next-tasks calls)
- * and auth token (used by [NextTasksRefreshWorker]/[CompleteTaskAction] and
+ * and auth token (used by [LifeOpsComputeWorker]/[CompleteTaskAction] and
  * FCM-token registration -- the briefing push itself needs neither, Firebase
  * handles delivery). Also doubles as the app's only launcher activity, since
  * the widget itself has no other UI entry point. */
@@ -145,7 +145,7 @@ private fun SettingsScreen(context: Context, onSaved: () -> Unit) {
             modifier = Modifier.fillMaxWidth(),
         )
 
-        // LocationReporter (piggybacked on NextTasksRefreshWorker) silently
+        // LocationReporter (piggybacked on LifeOpsComputeWorker) silently
         // no-ops without this permission, so surface it explicitly here
         // rather than leaving weather stuck on the static WEATHER_LAT/LON
         // with no way to tell why.
@@ -183,7 +183,7 @@ private fun SettingsScreen(context: Context, onSaved: () -> Unit) {
                     ynabDiscretionaryCategories.trim(),
                 )
                 WorkManager.getInstance(context)
-                    .enqueue(OneTimeWorkRequestBuilder<NextTasksRefreshWorker>().build())
+                    .enqueue(OneTimeWorkRequestBuilder<LifeOpsComputeWorker>().build())
                 // Register the current FCM token now too -- covers the
                 // common case where Settings gets configured after
                 // BriefingFcmService.onNewToken already fired once (e.g.

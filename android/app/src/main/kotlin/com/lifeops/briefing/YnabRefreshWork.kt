@@ -10,8 +10,8 @@ import java.util.concurrent.TimeUnit
 
 internal fun enqueueForcedYnabRefresh(context: Context) {
     WorkManager.getInstance(context).enqueue(
-        OneTimeWorkRequestBuilder<NextTasksRefreshWorker>()
-            .setInputData(workDataOf(NextTasksRefreshWorker.INPUT_FORCE_YNAB_REFRESH to true))
+        OneTimeWorkRequestBuilder<LifeOpsComputeWorker>()
+            .setInputData(workDataOf(LifeOpsComputeWorker.INPUT_FORCE_YNAB_REFRESH to true))
             .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
             .build(),
     )
@@ -28,8 +28,8 @@ internal fun enqueueDelayedYnabRefresh(context: Context) {
     WorkManager.getInstance(context).enqueueUniqueWork(
         UNIQUE_DELAYED_YNAB_REFRESH_WORK_NAME,
         ExistingWorkPolicy.REPLACE,
-        OneTimeWorkRequestBuilder<NextTasksRefreshWorker>()
-            .setInputData(workDataOf(NextTasksRefreshWorker.INPUT_FORCE_YNAB_REFRESH to true))
+        OneTimeWorkRequestBuilder<LifeOpsComputeWorker>()
+            .setInputData(workDataOf(LifeOpsComputeWorker.INPUT_FORCE_YNAB_REFRESH to true))
             .setInitialDelay(2, TimeUnit.MINUTES)
             .build(),
     )

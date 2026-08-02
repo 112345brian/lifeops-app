@@ -12,7 +12,7 @@ object WidgetKeys {
     // by BriefingWidget.provideGlance.
     val BRIEFING_JSON = stringPreferencesKey("briefing_json") // BriefingState serialized as JSON, or absent if never received
     val LAST_FETCHED_AT = longPreferencesKey("last_fetched_at") // epoch millis the broadcast was received
-    // Written by NextTasksRefreshWorker (periodic pull) and CompleteTaskAction
+    // Written by LifeOpsComputeWorker (periodic pull) and CompleteTaskAction
     // (optimistic local removal on tap), read by BriefingWidget.provideGlance.
     val NEXT_TASKS_JSON = stringPreferencesKey("next_tasks_json") // NextTasksState serialized as JSON, or absent if never fetched
     // {taskId: {tappedAt, title, start}} for tasks completed locally
@@ -37,6 +37,17 @@ object WidgetKeys {
     const val KEY_YNAB_TOKEN = "ynab_token"
     const val KEY_YNAB_BUDGET = "ynab_budget" // "last-used" is accepted by YNAB
     const val KEY_YNAB_DISCRETIONARY_CATEGORIES = "ynab_discretionary_categories" // comma-separated, mirrors server's DISCRETIONARY env var
+
+    // FlowSavvy config -- read by LifeOpsComputeWorker's on-device compute
+    // tick (FlowSavvyClient.kt). Separate from KEY_BASE_URL/KEY_TOKEN above:
+    // those are the Tailscale-gated lifeops PANEL's own URL/token, FlowSavvy
+    // is a genuinely different third-party service with its own base URL and
+    // bearer token. No Settings UI field exists for these yet (out of scope
+    // for the compute-tick wiring task -- see importFlowSavvyConfigFileIfPresent's
+    // kdoc on WidgetConfigStore for the interim sideload path, mirroring how
+    // YNAB_TOKEN is already imported the same way).
+    const val KEY_FLOWSAVVY_BASE_URL = "flowsavvy_base_url"
+    const val KEY_FLOWSAVVY_TOKEN = "flowsavvy_token"
 
     // Separate, unencrypted app-level SharedPreferences for YnabRefresh's
     // report-cadence gate -- just a timestamp, not a credential, same

@@ -6,7 +6,7 @@ import androidx.security.crypto.MasterKey
 import java.util.Properties
 
 /** Single place that opens the EncryptedSharedPreferences holding the panel
- * base URL and auth token -- OpenPanelAction/NextTasksRefreshWorker/
+ * base URL and auth token -- OpenPanelAction/LifeOpsComputeWorker/
  * CompleteTaskAction (read) and the settings screen (write) all go through
  * this so they can't disagree on how it's stored. Encrypted because the
  * token is a real credential (WEB_TOKEN) used for the next-tasks pull/
@@ -32,7 +32,7 @@ object WidgetConfigStore {
     // OEM devices), there's nothing more we can do here. Every caller
     // treats null as "not configured yet" rather than crashing -- this used
     // to propagate uncaught into SettingsActivity (the app's only launcher
-    // activity), OpenPanelAction, NextTasksRefreshWorker, and
+    // activity), OpenPanelAction, LifeOpsComputeWorker, and
     // BriefingFcmService.onNewToken's bare coroutine launch, any one of
     // which crashing the whole process on a broken Keystore.
     private fun prefs(context: Context): android.content.SharedPreferences? = try {
@@ -90,6 +90,49 @@ object WidgetConfigStore {
                 ynabDiscretionaryCategories.ifBlank { DEFAULT_YNAB_DISCRETIONARY_CATEGORIES },
             )
             ?.apply()
+    }
+
+    fun getFlowSavvyBaseUrl(context: Context): String? =
+        prefs(context)?.getString(WidgetKeys.KEY_FLOWSAVVY_BASE_URL, null)?.trimEnd('/')?.takeIf { it.isNotBlank() }
+
+    fun getFlowSavvyToken(context: Context): String? =
+        prefs(context)?.getString(WidgetKeys.KEY_FLOWSAVVY_TOKEN, null)?.takeIf { it.isNotBlank() }
+
+    fun saveFlowSavvyConfig(context: Context, baseUrl: String, token: String) {
+        prefs(context)?.edit()
+            ?.putString(WidgetKeys.KEY_FLOWSAVVY_BASE_URL, baseUrl.trimEnd('/'))
+            ?.putString(WidgetKeys.KEY_FLOWSAVVY_TOKEN, token)
+            ?.apply()
+    }
+
+    /** Interim config path for FlowSavvy's base URL/token, mirroring
+     * [importYnabConfigFileIfPresent]'s existing sideload mechanism exactly
+     * (same "drop a properties file into the app's files dir, import once,
+     * delete it" shape) -- no Settings UI field exists yet for these two
+     * values (building that UI is explicitly out of scope for the
+     * compute-tick wiring task these two functions were added for; see
+     * `LifeOpsComputeWorker.kt`'s kdoc). Without this (or a future UI field),
+     * [LifeOpsComputeWorker] has no FlowSavvy credentials to read and its
+     * on-device compute tick no-ops entirely -- see its `doWork`'s
+     * config-missing early return. */
+    fun importFlowSavvyConfigFileIfPresent(context: Context): Boolean {
+        val file = context.filesDir.resolve("flowsavvy_local_import.properties")
+        if (!file.exists()) return false
+        val props = Properties()
+        file.inputStream().use { props.load(it) }
+        val importedBaseUrl = props.getProperty("FLOWSAVVY_BASE_URL")?.takeIf { it.isNotBlank() }
+        val importedToken = props.getProperty("FLOWSAVVY_TOKEN")?.takeIf { it.isNotBlank() }
+        if (importedBaseUrl == null && importedToken == null) {
+            file.delete()
+            return false
+        }
+        saveFlowSavvyConfig(
+            context,
+            baseUrl = importedBaseUrl ?: getFlowSavvyBaseUrl(context).orEmpty(),
+            token = importedToken ?: getFlowSavvyToken(context).orEmpty(),
+        )
+        file.delete()
+        return true
     }
 
     fun importYnabConfigFileIfPresent(context: Context): Boolean {
