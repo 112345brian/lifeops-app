@@ -49,6 +49,14 @@ object WidgetKeys {
     const val KEY_FLOWSAVVY_BASE_URL = "flowsavvy_base_url"
     const val KEY_FLOWSAVVY_TOKEN = "flowsavvy_token"
 
+    // Anthropic API key -- on-device Messages API calls (AnthropicClient.kt):
+    // weekly digest (WeeklyDigest.kt) and, in the future, YNAB novel-payee
+    // categorization once a real on-device YNAB write pipeline exists (see
+    // AnthropicClient.kt's kdoc). Stored in the same EncryptedSharedPreferences
+    // as WEB_TOKEN/YNAB_TOKEN -- it's a real credential (a leaked key spends
+    // real API credit), same reasoning as those two.
+    const val KEY_ANTHROPIC_API_KEY = "anthropic_api_key"
+
     // Separate, unencrypted app-level SharedPreferences for YnabRefresh's
     // report-cadence gate -- just a timestamp, not a credential, same
     // reasoning as LOCATION_PREFS_NAME/WEATHER_PREFS_NAME below.

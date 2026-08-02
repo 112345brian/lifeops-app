@@ -113,6 +113,12 @@ dependencies {
     implementation("androidx.room:room-ktx:2.8.4")
     ksp("androidx.room:room-compiler:2.8.4")
 
+    // BiometricGate.kt's reusable biometric/app-lock primitive (BiometricPrompt).
+    // Not wired into any automatic/background path today -- see BiometricGate.kt's
+    // kdoc: it's built now so Phase 5's native UI can gate whatever explicit
+    // user-initiated actions it adds later.
+    implementation("androidx.biometric:biometric:1.1.0")
+
     testImplementation("junit:junit:4.13.2")
     testImplementation("androidx.glance:glance-testing:1.1.1")
     testImplementation("androidx.glance:glance-appwidget-testing:1.1.1")

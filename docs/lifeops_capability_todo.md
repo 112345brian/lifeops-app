@@ -582,10 +582,24 @@ data + persistence exist.
 - Does the home server keep running non-Canvas domains as a redundant
   backup/fallback, or fully retire them once the phone can compute
   independently?
-- Do LLM calls (Anthropic API: briefing text, weekly digest, YNAB
-  novel-payee categorization) move on-device too (another secret + direct
-  API cost on the phone), or stay server-side (meaning some domains keep a
-  server round-trip regardless)?
+- **Partially resolved.** Weekly digest moved on-device (`WeeklyDigest.kt` +
+  `AnthropicClient.kt`, self-gated on `LifeOpsComputeWorker`'s 15-min tick,
+  same "background automation, no biometric gate" reasoning as everything
+  else on that tick). Confirmed during that work: "briefing text" was never
+  a real third call to begin with -- `llm.py`'s own trailing comment shows
+  `daily_briefing()` was retired 2026-07-15 (not worth the cost/latency/
+  hallucination surface for restating attention.compute()'s already-plain
+  headline), and `briefing_service.py`'s `compose_text()` is pure string
+  formatting today. Reintroducing an on-device LLM narrative call would
+  silently reverse that decision with an invented prompt, so this pass
+  deliberately did not. **Still undecided**: YNAB novel-payee categorization
+  -- `AnthropicClient.kt`'s `categorizeUnknownPayee` ports the LLM call
+  itself, but it's not wired into any on-device path, since there's no
+  on-device YNAB write pipeline (unapproved-transaction read + category/
+  approval PATCH) yet; building that is flagged as separate, riskier
+  follow-up work, and gating it behind biometric confirmation (rather than
+  running fully unattended like the rest of `run_ynab`) is a real open
+  question, not a settled one.
 - Staged rollout order and how to run old+new in parallel without breaking
   daily use of a system that's actively relied on every day.
 - What's left for ntfy/FCM once task completion and app→phone alerts both

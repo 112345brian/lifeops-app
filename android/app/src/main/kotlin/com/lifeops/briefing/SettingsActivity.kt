@@ -83,6 +83,7 @@ private fun SettingsScreen(context: Context, onSaved: () -> Unit) {
     var ynabDiscretionaryCategories by remember {
         mutableStateOf(WidgetConfigStore.getYnabDiscretionaryCategoriesRaw(context))
     }
+    var anthropicApiKey by remember { mutableStateOf(WidgetConfigStore.getAnthropicApiKey(context) ?: "") }
     var hasForegroundLocation by remember { mutableStateOf(hasForegroundLocationPermission(context)) }
     val scope = rememberCoroutineScope()
 
@@ -145,6 +146,15 @@ private fun SettingsScreen(context: Context, onSaved: () -> Unit) {
             modifier = Modifier.fillMaxWidth(),
         )
 
+        OutlinedTextField(
+            value = anthropicApiKey,
+            onValueChange = { anthropicApiKey = it },
+            label = { Text("Anthropic API key (weekly digest)") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            modifier = Modifier.fillMaxWidth(),
+        )
+
         // LocationReporter (piggybacked on LifeOpsComputeWorker) silently
         // no-ops without this permission, so surface it explicitly here
         // rather than leaving weather stuck on the static WEATHER_LAT/LON
@@ -180,7 +190,7 @@ private fun SettingsScreen(context: Context, onSaved: () -> Unit) {
             onClick = {
                 WidgetConfigStore.save(
                     context, baseUrl.trim(), token.trim(), ynabToken.trim(), ynabBudget.trim(),
-                    ynabDiscretionaryCategories.trim(),
+                    ynabDiscretionaryCategories.trim(), anthropicApiKey.trim(),
                 )
                 WorkManager.getInstance(context)
                     .enqueue(OneTimeWorkRequestBuilder<LifeOpsComputeWorker>().build())

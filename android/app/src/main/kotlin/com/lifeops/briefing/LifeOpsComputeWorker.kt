@@ -516,6 +516,16 @@ internal suspend fun applyComputeTickResult(context: Context, result: ComputeTic
             null
         } ?: BriefingState.empty()
 
+        // NOTE: `text` is deliberately left untouched (== current.text) here.
+        // A prior task's brief asked for an on-device LLM call to populate
+        // it, but `text`'s real Python-side source (`daily_briefing()` in
+        // `lifeops/llm.py`) was already retired 2026-07-15 -- see
+        // AnthropicClient.kt's top-level kdoc for the full reasoning
+        // ("not worth the cost, latency, or hallucination surface for
+        // restating a plain string"). Reintroducing that call here would
+        // silently reverse a documented architecture decision using an
+        // invented prompt, not a faithful port -- flagged as this change's
+        // primary judgment call rather than done silently.
         val updated = current.copy(
             gymLast7d = result.gymLast7d,
             gymTarget = result.gymTarget,
@@ -576,6 +586,18 @@ class LifeOpsComputeWorker(
             force = inputData.getBoolean(INPUT_FORCE_YNAB_REFRESH, false),
         )
 
+        val now = LocalDateTime.now()
+        val db = LifeOpsDatabase.getInstance(applicationContext)
+
+        // Weekly digest (llm.py's weekly_digest, the on-device port of
+        // runner.py's Sunday-only run_digest) -- self-gated same as
+        // reportLocationIfDue/reportWeatherIfDue/refreshYnabCategoriesIfConfigured
+        // above, deliberately run before the FlowSavvy config check below:
+        // the digest has zero dependency on FlowSavvy, only on local history
+        // + an Anthropic API key, same reasoning weather/location already
+        // established for their own zero-FlowSavvy-dependency pieces.
+        runWeeklyDigestIfDue(applicationContext, db, now)
+
         WidgetConfigStore.importFlowSavvyConfigFileIfPresent(applicationContext)
         val flowSavvyBaseUrl = WidgetConfigStore.getFlowSavvyBaseUrl(applicationContext)
         val flowSavvyToken = WidgetConfigStore.getFlowSavvyToken(applicationContext)
@@ -586,9 +608,7 @@ class LifeOpsComputeWorker(
             return@withContext Result.success()
         }
 
-        val db = LifeOpsDatabase.getInstance(applicationContext)
         val client = FlowSavvyClient(flowSavvyBaseUrl, flowSavvyToken)
-        val now = LocalDateTime.now()
         val discretionaryDollars = readCurrentDiscretionaryDollars(applicationContext)
 
         val result = try {

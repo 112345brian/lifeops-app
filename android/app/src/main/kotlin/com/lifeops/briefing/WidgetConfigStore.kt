@@ -55,6 +55,9 @@ object WidgetConfigStore {
     fun getYnabToken(context: Context): String? =
         prefs(context)?.getString(WidgetKeys.KEY_YNAB_TOKEN, null)?.takeIf { it.isNotBlank() }
 
+    fun getAnthropicApiKey(context: Context): String? =
+        prefs(context)?.getString(WidgetKeys.KEY_ANTHROPIC_API_KEY, null)?.takeIf { it.isNotBlank() }
+
     fun getYnabBudget(context: Context): String =
         prefs(context)?.getString(WidgetKeys.KEY_YNAB_BUDGET, null)?.takeIf { it.isNotBlank() } ?: "last-used"
 
@@ -78,7 +81,7 @@ object WidgetConfigStore {
 
     fun save(
         context: Context, baseUrl: String, token: String, ynabToken: String, ynabBudget: String,
-        ynabDiscretionaryCategories: String,
+        ynabDiscretionaryCategories: String, anthropicApiKey: String = getAnthropicApiKey(context).orEmpty(),
     ) {
         prefs(context)?.edit()
             ?.putString(WidgetKeys.KEY_BASE_URL, baseUrl.trimEnd('/'))
@@ -89,6 +92,7 @@ object WidgetConfigStore {
                 WidgetKeys.KEY_YNAB_DISCRETIONARY_CATEGORIES,
                 ynabDiscretionaryCategories.ifBlank { DEFAULT_YNAB_DISCRETIONARY_CATEGORIES },
             )
+            ?.putString(WidgetKeys.KEY_ANTHROPIC_API_KEY, anthropicApiKey)
             ?.apply()
     }
 
