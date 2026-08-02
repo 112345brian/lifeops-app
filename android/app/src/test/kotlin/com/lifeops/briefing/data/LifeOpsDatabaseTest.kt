@@ -344,4 +344,38 @@ class LifeOpsDatabaseTest {
 
         assertEquals(listOf("2026-08-01", "2026-08-05"), between)
     }
+
+    // ---- ChoreCycleStateEntity / ChoreCycleStateDao ----
+
+    @Test
+    fun choreCycleState_getWithNoRowYet_returnsNull() = runBlocking {
+        assertNull(db.choreCycleStateDao().get())
+    }
+
+    @Test
+    fun choreCycleState_upsertThenGet_returnsInsertedRow() = runBlocking {
+        db.choreCycleStateDao().upsert(
+            ChoreCycleStateEntity(processedIdsJoined = """["c1","c2"]""", lastRunEpochMillis = 1_000L),
+        )
+
+        val loaded = db.choreCycleStateDao().get()
+
+        assertEquals("""["c1","c2"]""", loaded?.processedIdsJoined)
+        assertEquals(1_000L, loaded?.lastRunEpochMillis)
+    }
+
+    @Test
+    fun choreCycleState_upsertTwice_replacesTheSingletonRowRatherThanAddingASecond() = runBlocking {
+        db.choreCycleStateDao().upsert(
+            ChoreCycleStateEntity(processedIdsJoined = """["c1"]""", lastRunEpochMillis = 1_000L),
+        )
+        db.choreCycleStateDao().upsert(
+            ChoreCycleStateEntity(processedIdsJoined = """["c1","c2"]""", lastRunEpochMillis = 2_000L),
+        )
+
+        val loaded = db.choreCycleStateDao().get()
+
+        assertEquals("""["c1","c2"]""", loaded?.processedIdsJoined)
+        assertEquals(2_000L, loaded?.lastRunEpochMillis)
+    }
 }
