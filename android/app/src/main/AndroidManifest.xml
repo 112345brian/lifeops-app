@@ -37,8 +37,14 @@
         android:supportsRtl="true"
         android:theme="@android:style/Theme.DeviceDefault">
 
+        <!-- The app's new native-Compose entry point (Today/Attention/
+             Recurring/History/System nav graph, see
+             com.lifeops.briefing.ui.MainActivity): replaces SettingsActivity
+             as the launcher now that a real on-device compute tick/Room
+             persistence layer exists for it to render (see
+             docs/lifeops_capability_todo.md's "Full App Home" section). -->
         <activity
-            android:name=".SettingsActivity"
+            android:name=".ui.MainActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -46,11 +52,22 @@
             </intent-filter>
         </activity>
 
+        <!-- No longer the launcher (see .ui.MainActivity above): still
+             exported=true because it's reachable via an explicit Intent from
+             .ui.SystemScreen, same "launched from outside this app's own
+             task" reasoning as before. -->
+        <activity
+            android:name=".SettingsActivity"
+            android:exported="true" />
+
         <!-- Hosts the full control panel in an in-app WebView (see
              PanelActivity.kt / OpenPanelAction.kt) instead of an external
-             browser tab. exported=true for the same reason as
-             SettingsActivity above: launched via an Intent from a Glance
-             action callback, which runs under the launcher/host process. -->
+             browser tab. Repurposed as a secondary "web panel" fallback
+             screen reachable from .ui.SystemScreen (see this task's brief:
+             "keep a way to reach the old WebView panel as a fallback link").
+             exported=true for the same reason as SettingsActivity above:
+             also launched via an Intent from a Glance action callback, which
+             runs under the launcher/host process. -->
         <activity
             android:name=".PanelActivity"
             android:exported="true" />

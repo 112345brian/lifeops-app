@@ -40,8 +40,12 @@ class BriefingStateTest {
     @Test
     fun parsesReasonsForSeverityDotsAndRoundTripsThroughJson() {
         // Matches attention.compute()'s {domain, severity, title,
-        // recommended_action[, due]} reason shape -- the widget only needs
-        // domain+severity for its per-domain dots, the rest is panel-only.
+        // recommended_action[, due]} reason shape. Originally the widget
+        // only needed domain+severity for its per-domain dots and the rest
+        // was panel-only; the native Attention screen (see
+        // com.lifeops.briefing.ui.AttentionScreen) now needs the full
+        // title/recommendedAction/due detail too, so AttentionReason carries
+        // all five fields and this test's expectation reflects that.
         val raw = """{
             "date":"2026-07-12", "text":"Do the paper.",
             "facts":{"attention":{
@@ -56,7 +60,10 @@ class BriefingStateTest {
         val state = BriefingState.fromApiResponse(raw, 1L)
 
         assertEquals(
-            listOf(AttentionReason("coursework", "risk"), AttentionReason("money", "watch")),
+            listOf(
+                AttentionReason("coursework", "risk", title = "Deadline risk: Paper", recommendedAction = "..."),
+                AttentionReason("money", "watch", title = "Discretionary buffer is low", recommendedAction = "..."),
+            ),
             state.reasons,
         )
         assertEquals(state, BriefingState.fromJson(state.toJson()))

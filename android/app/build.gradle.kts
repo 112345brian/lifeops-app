@@ -94,6 +94,11 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     debugImplementation("androidx.compose.ui:ui-tooling")
 
+    // Compose Navigation -- backs the single-Activity Today/Attention/
+    // Recurring/History/System nav graph (com.lifeops.briefing.ui), replacing
+    // PanelActivity's WebView as the app's primary UI. See MainActivity.kt.
+    implementation("androidx.navigation:navigation-compose:2.9.5")
+
     // Firebase Cloud Messaging -- reliable push for the briefing (replaces
     // the ntfy broadcast, which can't wake a stopped app). BoM manages
     // compatible versions, so firebase-messaging itself is unversioned.
