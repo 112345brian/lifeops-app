@@ -91,4 +91,19 @@ object WidgetKeys {
     const val KEY_WEATHER_LOW_F = "weather_low_f"
     const val KEY_WEATHER_CONDITION = "weather_condition"
     const val KEY_WEATHER_FETCHED_AT = "weather_fetched_at" // epoch millis of the cached result above
+
+    // Separate, unencrypted app-level SharedPreferences for the on-device
+    // SystemHealth signal (OnDeviceSystemHealth.kt) -- just a scalar
+    // timestamp, same "not a credential" reasoning as YNAB_REFRESH_PREFS_NAME/
+    // LOCATION_PREFS_NAME/WEATHER_PREFS_NAME above. Written ONLY on a
+    // successful FlowSavvy fetch (mirrors KEY_LAST_YNAB_REFRESH_AT/
+    // KEY_LAST_DIGEST_SENT_DATE/KEY_LAST_YNAB_WRITE_DATE's own "dedup/staleness
+    // marker written only on success" rule) so a run of fetch failures makes
+    // this timestamp fall further and further behind "now" -- which is
+    // exactly the staleness signal OnDeviceSystemHealth.kt needs, without a
+    // separate error-log table. See OnDeviceSystemHealth.kt's top-level kdoc
+    // for the full design and why YNAB reuses KEY_LAST_YNAB_REFRESH_AT/
+    // KEY_LAST_YNAB_REFRESH_STATUS above instead of needing its own marker.
+    const val FLOWSAVVY_SYNC_PREFS_NAME = "lifeops_flowsavvy_sync_gate"
+    const val KEY_LAST_FLOWSAVVY_SYNC_AT = "last_flowsavvy_sync_at" // epoch millis, 0/absent = never
 }
