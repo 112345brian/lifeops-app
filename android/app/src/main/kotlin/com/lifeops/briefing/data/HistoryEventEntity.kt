@@ -18,8 +18,8 @@ import java.time.ZoneId
  * `domain` here (not `routineId`) because it is NOT always a strict foreign
  * key into [RoutineEntity.id]: `history.py`'s callers pass free-form keys
  * ("gym", "partner", "friends", or a chore's own FlowSavvy task id via
- * `ChoreEngine.kt`'s `[cycle:Nd]` note-tag mechanism, which has no
- * corresponding [RoutineEntity] row at all -- see `ChoreEngine.kt`'s kdoc:
+ * `ChoreSchedule.kt`'s `[cycle:Nd]` note-tag mechanism, which has no
+ * corresponding [RoutineEntity] row at all -- see `ChoreSchedule.kt`'s kdoc:
  * "there's no separate 'chore routine record' to persist"). Modeling this
  * as a Room `@ForeignKey` would be wrong for that case, so it's a plain
  * indexed string column instead, matching `history.py`'s own untyped
