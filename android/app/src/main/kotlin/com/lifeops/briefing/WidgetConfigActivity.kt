@@ -186,6 +186,7 @@ class WidgetConfigActivity : ComponentActivity() {
                         loadInitial = { loadInitialState(appWidgetId, glanceId, presetDefault) },
                         onSave = { config -> saveAndFinish(appWidgetId, glanceId, config) },
                         navBarHeightDp = navBarHeightDp,
+                        providerClassName = providerClassName,
                     )
                 }
             }
@@ -288,6 +289,7 @@ private fun WidgetConfigScreen(
     loadInitial: suspend () -> ConfigScreenData,
     onSave: suspend (WidgetDisplayConfig) -> Unit,
     navBarHeightDp: Dp,
+    providerClassName: String?,
 ) {
     var initial by remember { mutableStateOf<ConfigScreenData?>(null) }
     val scope = rememberCoroutineScope()
@@ -400,7 +402,19 @@ private fun WidgetConfigScreen(
             ConfigCard(title = "Preview") {
                 if (loaded.config.comboGrid) {
                     ComboGridPreview(state = loaded.state, order = order, hidden = hidden, scale = scale,
-                        moneyDisplayMode = moneyDisplayMode, ynabCategoryName = ynabCategoryName)
+                        moneyDisplayMode = moneyDisplayMode, ynabCategoryName = ynabCategoryName,
+                        // StripWidgetReceiver's real Glance render (see
+                        // BriefingWidget.kt's ComboStrip) is one flat 4x1
+                        // row, not the square weather-top/stats-bottom block
+                        // every other comboGrid preset uses -- forcing the
+                        // square shape onto it here (confirmed live-device
+                        // 2026-08-04: "it doesn't even render well in the
+                        // preview") looked broken, not just approximate.
+                        // android/CLAUDE.md's "verify both" rule exists
+                        // precisely for this: a new Glance-side layout
+                        // variant needs its own Compose preview counterpart,
+                        // not silent reuse of an unrelated preset's shape.
+                        wideStrip = providerClassName == StripWidgetReceiver::class.java.name)
                 } else {
                     WidgetPreview(
                         state = loaded.state,
@@ -965,6 +979,7 @@ private fun ComboGridPreview(
     scale: Float,
     moneyDisplayMode: MoneyDisplayMode,
     ynabCategoryName: String,
+    wideStrip: Boolean = false,
 ) {
     val usingSample = state?.text == null
     val previewState = if (usingSample) SAMPLE_STATE else state
@@ -1021,6 +1036,63 @@ private fun ComboGridPreview(
             it !in preferredSections && it != WidgetSection.WEATHER && it != WidgetSection.NOTABLE_EVENTS
         }
         val compactStats = (preferredSections + fallbackSections).mapNotNull(::statFor)
+        if (wideStrip) {
+            // The real Glance widget (BriefingWidget.kt's ComboStrip) lays
+            // this preset out as ONE flat row -- weather then up to 3 stat
+            // tiles, capped at 4 cells total to match ComboStrip's own
+            // cells.take(4) -- not the square weather-top/stats-bottom block
+            // below, which is what the other comboGrid presets actually
+            // look like. aspectRatio(250f / 56f) mirrors
+            // strip_widget_info.xml's own default placed footprint (see
+            // that file's comment) rather than an arbitrary wide ratio, so
+            // this preview's proportions track the real default size if
+            // that XML value ever changes.
+            val stripCells = (if (showWeather) 1 else 0) + compactStats.size
+            val weatherSlots = if (showWeather) 1 else 0
+            val statsForStrip = compactStats.take((4 - weatherSlots).coerceAtLeast(0))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(250f / 56f)
+                    .clip(RoundedCornerShape(COMBO_OUTER_RADIUS))
+                    .background(COMBO_BG),
+            ) {
+                if (showWeather) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .weight(1f)
+                            .background(Color(0xFF2F4D80))
+                            .padding((4 * scale).dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(text = "${previewState.temperatureF}°F", color = Color.White, fontWeight = FontWeight.Bold,
+                            fontSize = (COMBO_TILE_VALUE_SP * scale).sp)
+                        Text(text = weatherEmoji(previewState.weatherCondition), fontSize = (COMBO_TILE_VALUE_SP * scale).sp)
+                    }
+                }
+                statsForStrip.forEachIndexed { index, stat ->
+                    if (index > 0 || showWeather) ComboPreviewDivider()
+                    ComboPreviewStatTile(stat, scale, Modifier.fillMaxHeight().weight(1f))
+                }
+                if (stripCells == 0) {
+                    Spacer(modifier = Modifier.fillMaxSize())
+                }
+            }
+            if (WidgetSection.NOTABLE_EVENTS in visibleComboSections) {
+                Text(
+                    text = if (previewState.notableEvents.isEmpty()) {
+                        "Notable events: nothing scheduled"
+                    } else {
+                        "Notable events (shown when this replaces a stat tile): " +
+                            previewState.notableEvents.take(2).joinToString(", ") { it.title }
+                    },
+                    color = PREVIEW_ON_BG_DIM, fontSize = (10 * scale).sp,
+                )
+            }
+            return@Column
+        }
         val fallbackTop = if (showWeather) null else compactStats.firstOrNull()
         val bottomStats = if (showWeather) compactStats.take(2) else compactStats.drop(1).take(2)
         Row(
