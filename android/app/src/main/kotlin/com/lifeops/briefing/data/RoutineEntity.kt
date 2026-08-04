@@ -30,10 +30,10 @@ import com.lifeops.briefing.Routine
  *   [HistoryEventEntity.routineId]) actually points at.
  * - [onDue] captures `routine_store.py`'s currently-implicit "what happens
  *   when this fires" -- today that's hardcoded per call site (gym pushes a
- *   ring/notification, chore creates a FlowSavvy task via `ChoreEngine`,
- *   social emits a nudge string via `SocialEngine`); persisting it
- *   explicitly is prep for a generic on_due dispatcher, not a port of an
- *   existing persisted field.
+ *   ring/notification, chore creates a FlowSavvy task via `ChoreSchedule`/
+ *   `ChoreCycle`, social emits a nudge string via `SocialSchedule`);
+ *   persisting it explicitly is prep for a generic on_due dispatcher, not a
+ *   port of an existing persisted field.
  * - [constraintsJson] is a raw JSON text blob for `routine_store.py`'s
  *   loose "extra" dict (gym's `floor`/`max_consecutive`, any future
  *   per-routine knob) plus `Routine.kt`'s own [TimeSlot]-based
