@@ -9,6 +9,7 @@
     <string name="widget_name_social">LifeOps Social</string>
     <string name="widget_name_events">LifeOps Events</string>
     <string name="widget_name_combo">LifeOps Combo</string>
+    <string name="widget_name_strip">LifeOps Strip</string>
     <string name="widget_description_briefing">Status, stats, schedule, and next tasks from LifeOps.</string>
     <string name="widget_description_gym">Gym count and today status from LifeOps.</string>
     <string name="widget_description_money">Discretionary budget from LifeOps.</string>
@@ -18,6 +19,7 @@
     <string name="widget_description_social">Partner and friend follow-up timing from LifeOps.</string>
     <string name="widget_description_events">Upcoming notable one-off events from LifeOps.</string>
     <string name="widget_description_combo">Discretionary budget, social, coursework, weather, and notable events from LifeOps in one gapless 4x2 widget.</string>
+    <string name="widget_description_strip">Weather, gym, notable events, and discretionary budget from LifeOps in one slim 4x1 row.</string>
     <string name="widget_preview_briefing_status">◆ WATCH</string>
     <string name="widget_preview_briefing_text">Briefing: handle the important task first, then protect the next block.</string>
     <string name="widget_preview_up_next">Up next: submit assignment · gym · budget check</string>

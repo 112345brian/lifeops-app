@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- "LifeOps Strip": a short, wide 4x1 row of compact stats for a slim
+     status strip rather than a tall block. minWidth sits at the literal
+     "70 x n - 30" formula floor for n=4 (250dp, see android/CLAUDE.md);
+     minHeight reuses weather_widget_info.xml's own n=1-tier value (56dp,
+     the same "well under the n=2 threshold" convention as that file) since
+     weather is this project's other short-and-wide single-row preset.
+     Renders via BriefingWidget.kt's ComboGridContent, whose comboLayoutFor
+     picks a dedicated STRIP_4X1 layout (single horizontal row of cells,
+     not the two-column WIDE_4X2 stack) for footprints this short. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="250dp"
+    android:minHeight="56dp"
+    android:minResizeWidth="250dp"
+    android:minResizeHeight="56dp"
+    android:maxResizeWidth="400dp"
+    android:maxResizeHeight="180dp"
+    android:targetCellWidth="4"
+    android:targetCellHeight="1"
+    android:resizeMode="horizontal|vertical"
+    android:widgetCategory="home_screen"
+    android:updatePeriodMillis="1800000"
+    android:description="@string/widget_description_strip"
+    android:initialLayout="@layout/widget_loading"
+    android:previewLayout="@layout/widget_preview_strip"
+    android:configure="com.lifeops.briefing.WidgetConfigActivity"
+    android:widgetFeatures="reconfigurable" />

@@ -14,6 +14,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -34,23 +36,42 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.lifeops.briefing.PanelActivity
+import com.lifeops.briefing.SoloStatPresentation
 import com.lifeops.briefing.WidgetConfigStore
 import com.lifeops.briefing.data.NextTask
+import com.lifeops.briefing.data.NotableEvent
 import com.lifeops.briefing.data.TodayEvent
+import com.lifeops.briefing.gymFallbackStatPresentation
+import com.lifeops.briefing.moneyStatPresentation
+import com.lifeops.briefing.notableEventDay
+import com.lifeops.briefing.notableEventTime
 import com.lifeops.briefing.severityDotColor
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 
 /**
  * The new home/launcher screen (see [MainActivity]): status badge, the
- * LLM-narrated briefing headline, today's events, next tasks with complete
- * actions, and the quick actions docs/lifeops_capability_todo.md's "Full App
- * Home" section calls out (run catchup, log gym, skip gym, block
- * today/tomorrow, refresh widget/briefing, open full panel).
+ * LLM-narrated briefing headline, today's events, this week's notable
+ * events, money and gym status cards, next tasks with complete actions, and
+ * the quick actions docs/lifeops_capability_todo.md's "Full App Home"
+ * section calls out (run catchup, log gym, skip gym, block today/tomorrow,
+ * refresh widget/briefing, open full panel).
+ *
+ * The money/gym/notable-events sections are all pure reads of fields
+ * [TodayData.briefing] ([com.lifeops.briefing.data.BriefingState]) already
+ * carries -- this screen previously only ever rendered
+ * `data.nextTasks.events` (today-only) and left `data.briefing.notableEvents`
+ * /`discretionaryDollars`/`gymLast7d` etc. unrendered even though
+ * [BriefingWidget][com.lifeops.briefing.BriefingWidget] (the Glance home
+ * screen widget) already surfaces all of it. Reuses that widget's own
+ * presentation logic (`moneyStatPresentation`, `gymFallbackStatPresentation`,
+ * `notableEventDay`/`notableEventTime`, all `internal` in BriefingWidget.kt)
+ * rather than re-deriving the same formatting/framing decisions here.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -114,6 +135,47 @@ fun TodayScreen(modifier: Modifier = Modifier) {
             if (data.nextTasks.events.isNotEmpty()) {
                 SectionLabel("Today's events")
                 data.nextTasks.events.forEach { EventRow(it) }
+                Spacer(Modifier.height(12.dp))
+            }
+
+            if (data.briefing.notableEvents.isNotEmpty()) {
+                SectionLabel("This week")
+                data.briefing.notableEvents.forEach { NotableEventRow(it) }
+                Spacer(Modifier.height(12.dp))
+            }
+
+            // Money and gym: mirror BriefingWidget.kt's own solo-tile
+            // presentation logic (moneyStatPresentation/
+            // gymFallbackStatPresentation) rather than re-deriving the
+            // label/value/status text here, so the in-app screen can never
+            // drift from what the widget already shows for the exact same
+            // BriefingState fields. Status DOT color still comes from
+            // severityDotColor keyed off attention.compute()'s per-domain
+            // reasons (not the widget's own bespoke accent colors), per this
+            // screen's existing convention (StatusHeader/ReasonRow in
+            // AttentionScreen.kt both do the same) -- the widget's accent
+            // set is a Glance-specific choice, not the app-wide severity
+            // language this screen otherwise speaks.
+            if (data.briefing.discretionaryDollars != null || data.briefing.discretionaryCurrentDollars != null) {
+                SectionLabel("Money")
+                val severity = data.briefing.reasons.firstOrNull { it.domain == "money" }?.severity ?: "ok"
+                val stat = moneyStatPresentation(
+                    dollars = data.briefing.discretionaryDollars ?: data.briefing.discretionaryCurrentDollars ?: 0,
+                    severity = severity,
+                    todayDollars = data.briefing.discretionaryTodayDollars,
+                    currentDollars = data.briefing.discretionaryCurrentDollars,
+                )
+                StatCard(stat, severity)
+                Spacer(Modifier.height(12.dp))
+            }
+
+            val gymLast7d = data.briefing.gymLast7d
+            val gymTarget = data.briefing.gymTarget
+            if (gymLast7d != null && gymTarget != null) {
+                SectionLabel("Gym")
+                val severity = data.briefing.reasons.firstOrNull { it.domain == "gym" }?.severity ?: "ok"
+                val stat = gymFallbackStatPresentation(gymLast7d, gymTarget)
+                StatCard(stat, severity)
                 Spacer(Modifier.height(12.dp))
             }
 
@@ -246,6 +308,85 @@ private fun EventRow(event: TodayEvent) {
     Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
         Text(text = event.start?.takeLast(8) ?: "--", modifier = Modifier.padding(end = 12.dp))
         Text(text = event.title, fontWeight = FontWeight.Medium)
+    }
+}
+
+/**
+ * One row of the "This week" section -- [NotableEvent]s from
+ * `data.briefing.notableEvents` (the server's rolling next-7-days
+ * infrequent-event heads-up: haircuts, one-off appointments, "movie on
+ * Wednesday" -- see [NotableEvent]'s own kdoc), as opposed to [EventRow]
+ * above which only ever shows TODAY's events. Day/time formatting is
+ * [notableEventDay]/[notableEventTime], reused as-is from BriefingWidget.kt
+ * rather than re-deriving the same date parsing here -- those two are
+ * `internal` (not `private`) specifically so both the Glance widget and this
+ * plain-Compose screen render the exact same "Wed"/"6:00 PM" strings for the
+ * same event.
+ */
+@Composable
+private fun NotableEventRow(event: NotableEvent) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        Row(modifier = Modifier.fillMaxWidth().padding(14.dp)) {
+            Column(modifier = Modifier.padding(end = 12.dp)) {
+                Text(
+                    text = notableEventDay(event),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                notableEventTime(event)?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Text(text = event.title, style = MaterialTheme.typography.titleMedium)
+        }
+    }
+}
+
+/**
+ * Shared card for the Money/Gym sections -- same visual language as
+ * AttentionScreen.kt's `ReasonRow` (`surfaceVariant` container, `14.dp`
+ * inner padding, a [severityDotColor] dot ahead of a `labelMedium` header,
+ * then a `titleMedium` headline value). [stat]'s label/value/status TEXT
+ * comes from BriefingWidget.kt's own `moneyStatPresentation`/
+ * `gymFallbackStatPresentation` (so this screen can't drift from the
+ * widget's "safe to spend" / "3/4 this week" framing -- see
+ * android/CLAUDE.md's "Money widget design" section for why that framing
+ * matters over a raw balance/alert block), but the status DOT's COLOR
+ * deliberately comes from [severityDotColor] fed by attention.compute()'s
+ * own per-domain [severity] rather than [stat]'s bespoke Glance accent
+ * colors, to stay consistent with every other severity dot on this screen. */
+@Composable
+private fun StatCard(stat: SoloStatPresentation, severity: String) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row {
+                Surface(
+                    color = severityDotColor(severity),
+                    shape = CircleShape,
+                    modifier = Modifier.size(10.dp).clip(CircleShape),
+                ) {}
+                Text(
+                    text = "  ${stat.label} · ${stat.status}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(text = stat.value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            stat.secondary?.let {
+                Text(text = it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
     }
 }
 

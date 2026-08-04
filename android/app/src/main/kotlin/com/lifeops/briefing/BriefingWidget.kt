@@ -1376,7 +1376,7 @@ internal const val COMBO_EVENTS_SHOWN = 3
 // competed too much with COMBO_TILE_VALUE_SP's row text for the same small
 // footprint.
 internal const val COMBO_EVENTS_HEADER_SP = 11f
-internal enum class ComboLayout { COMPACT_2X2, MEDIUM_3X2, WIDE_4X2, TALL_4X3 }
+internal enum class ComboLayout { COMPACT_2X2, MEDIUM_3X2, STRIP_4X1, WIDE_4X2, TALL_4X3 }
 
 internal fun comboLayoutFor(size: DpSize): ComboLayout = when {
     // Samsung can report a visually 2x2 placement at the 180dp formula
@@ -1385,6 +1385,13 @@ internal fun comboLayoutFor(size: DpSize): ComboLayout = when {
     // weather/gym in the left column with money as a full-height right cell.
     size.width.value <= 190f -> ComboLayout.COMPACT_2X2
     size.width.value < 250f -> ComboLayout.MEDIUM_3X2
+    // Wide enough for the two-column WIDE_4X2 branch, but too short for it
+    // to stack two cells per column without clipping (the "LifeOps Strip"
+    // 4x1 preset's true placed footprint, see strip_widget_info.xml) --
+    // show one full-height row of cells instead. 90dp gives comfortable
+    // room above the 4x1 preset's 56dp default placed height while staying
+    // well under WIDE_4X2's two-cells-tall minimum comfortable height.
+    size.height.value < 90f -> ComboLayout.STRIP_4X1
     size.height.value < 180f -> ComboLayout.WIDE_4X2
     else -> ComboLayout.TALL_4X3
 }
@@ -1589,6 +1596,7 @@ private fun ComboGridContent(
                 ComboCompactTwoByTwo(cells, state, temperatureF, highF, lowF, condition, scale)
             ComboLayout.MEDIUM_3X2 -> ComboTwoColumn(cells.take(3), state, temperatureF, highF, lowF, condition, scale,
                 leftCount = 2)
+            ComboLayout.STRIP_4X1 -> ComboStrip(cells.take(4), state, temperatureF, highF, lowF, condition, scale)
             ComboLayout.WIDE_4X2 -> ComboTwoColumn(cells.take(4), state, temperatureF, highF, lowF, condition, scale,
                 leftCount = 2)
             ComboLayout.TALL_4X3 -> {
@@ -1647,6 +1655,25 @@ private fun RowScope.ComboTwoColumn(
     if (right.isNotEmpty()) {
         ComboTileDivider()
         ComboColumn(right, state, temperatureF, highF, lowF, condition, scale, GlanceModifier.fillMaxSize().defaultWeight())
+    }
+}
+
+/** STRIP_4X1's single full-height row of cells -- direct children of
+ * ComboGridContent's outer Row (see its docstring), not a nested Row/Column
+ * wrapper, since the whole widget footprint already IS one row at this
+ * layout's true placed height. Reuses [ComboRenderCell] exactly like every
+ * other Combo layout branch (same compact stat/tile rendering already
+ * tuned for narrow columns), just laid out horizontally instead of the
+ * two-column stack WIDE_4X2 uses. */
+@Composable
+private fun RowScope.ComboStrip(
+    cells: List<ComboCell>, state: BriefingState, temperatureF: Int?, highF: Int?, lowF: Int?, condition: String?,
+    scale: Float,
+) {
+    cells.forEachIndexed { index, cell ->
+        if (index > 0) ComboTileDivider()
+        ComboRenderCell(cell, state, temperatureF, highF, lowF, condition, scale,
+            GlanceModifier.fillMaxSize().defaultWeight())
     }
 }
 

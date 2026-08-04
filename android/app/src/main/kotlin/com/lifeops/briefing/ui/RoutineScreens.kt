@@ -1,6 +1,8 @@
 package com.lifeops.briefing.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -8,12 +10,16 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -30,14 +36,52 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.lifeops.briefing.RoutineStatus
 import com.lifeops.briefing.data.LifeOpsDatabase
 import com.lifeops.briefing.data.RoutineDefaults
 import com.lifeops.briefing.data.RoutineEntity
+import com.lifeops.briefing.data.toRoutine
+import com.lifeops.briefing.severityDotColor
+import com.lifeops.briefing.status
+import java.time.LocalDateTime
 import kotlinx.coroutines.launch
+
+/**
+ * Human-readable cadence phrasing for a [RoutineEntity], replacing the old
+ * "1x / 7d · since_last" raw-parameter dump. Written as a plain top-level
+ * function (no Compose dependency) so it's independently unit-testable --
+ * see `RoutineCadenceLabelTest.kt`.
+ *
+ * The two [RoutineEntity.anchor] models genuinely mean different things (see
+ * [com.lifeops.briefing.Anchor]'s own kdoc), so they get different phrasing
+ * rather than a single templated string:
+ * - anchor=window is a quota ("N times in a rolling period") -- "4x a week"
+ *   reads as a target.
+ * - anchor=since_last is a cooldown ("due again N days after the last time")
+ *   -- [RoutineEntity.timesPerWindow] isn't even consulted by [status] for
+ *   this anchor (see `Routine.kt`'s `status()`), so surfacing it here would
+ *   describe a number the due-check doesn't actually use. "Every N days"
+ *   describes the real rule instead.
+ */
+fun RoutineEntity.cadenceLabel(): String = when (anchor) {
+    RoutineEntity.ANCHOR_SINCE_LAST -> when (perDays) {
+        1 -> "Every day"
+        7 -> "Every week"
+        else -> "Every $perDays days"
+    }
+    else -> when {
+        timesPerWindow == 1 && perDays == 7 -> "Once a week"
+        timesPerWindow == 1 && perDays == 1 -> "Once a day"
+        perDays == 7 -> "${timesPerWindow}x a week"
+        perDays == 1 -> "${timesPerWindow}x a day"
+        else -> "${timesPerWindow}x every $perDays days"
+    }
+}
 
 /** List of every persisted [RoutineEntity] -- the "Recurring" tab. Tap one
  * to open [RoutineEditScreen]; the FAB starts a new one. */
@@ -46,16 +90,35 @@ import kotlinx.coroutines.launch
 fun RoutineListScreen(onOpenRoutine: (String) -> Unit, onNewRoutine: () -> Unit, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     var routines by remember { mutableStateOf(emptyList<RoutineEntity>()) }
+    // Keyed by routine.id (== the domain string HistoryEventDao already
+    // indexes completions by -- see getTimestampsIsoForDomain's kdoc).
+    // Deliberately NOT a stored/cached column on RoutineEntity: due/not-due
+    // and times-this-window are a function of *now* plus the completion
+    // history, not a fact about the routine itself, so persisting a
+    // snapshot would go stale the moment time passes or a completion is
+    // logged elsewhere (e.g. LifeOpsComputeWorker). Computing it live here
+    // via the same status() primitive LifeOpsComputeWorker already uses for
+    // gym/social keeps this screen's notion of "due" identical to the one
+    // driving notifications, instead of a second, potentially-diverging
+    // implementation.
+    var statuses by remember { mutableStateOf(emptyMap<String, RoutineStatus>()) }
 
     LaunchedEffect(Unit) {
-        val dao = LifeOpsDatabase.getInstance(context).routineDao()
+        val db = LifeOpsDatabase.getInstance(context)
+        val dao = db.routineDao()
         // Seeds the gym/partner/friends/meal defaults the old Python
         // backend always silently computed with, so a fresh install (or
         // one predating this seeding) doesn't show an empty list -- see
         // RoutineDefaults' kdoc. IGNORE conflict strategy means this never
         // clobbers a routine the user already edited.
         dao.insertIfAbsent(RoutineDefaults.ALL)
-        routines = dao.getAll()
+        val all = dao.getAll()
+        routines = all
+        val now = LocalDateTime.now()
+        statuses = all.associate { routine ->
+            val timestamps = db.historyEventDao().getTimestampsIsoForDomain(routine.id)
+            routine.id to status(routine.toRoutine(), timestamps, now)
+        }
     }
 
     Scaffold(
@@ -74,26 +137,112 @@ fun RoutineListScreen(onOpenRoutine: (String) -> Unit, onNewRoutine: () -> Unit,
         } else {
             LazyColumn(modifier = modifier.fillMaxSize().padding(padding)) {
                 items(routines, key = { it.id }) { routine ->
-                    Card(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(14.dp),
-                        ) {
-                            Text(text = routine.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                            Text(
-                                text = "${routine.timesPerWindow}x / ${routine.perDays}d · ${routine.anchor}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            TextButton(onClick = { onOpenRoutine(routine.id) }) { Text("Edit") }
-                        }
-                    }
+                    RoutineCard(routine = routine, status = statuses[routine.id], onOpenRoutine = onOpenRoutine)
                 }
             }
+        }
+    }
+}
+
+/**
+ * One routine's card: a due/not-due status dot, a human-readable cadence
+ * phrase, and a progress indicator -- the "glanceable status" language real
+ * habit-tracking apps (Streaks, Loop Habit Tracker, Habitify) use instead of
+ * printing raw cadence parameters as text. See this task's design-research
+ * brief for the specific apps/patterns this is modeled on.
+ */
+@Composable
+private fun RoutineCard(routine: RoutineEntity, status: RoutineStatus?, onOpenRoutine: (String) -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // The status dot is the single glance-first signal this
+                // redesign is built around -- everything else in the card is
+                // supporting detail read only on a second look. Reusing
+                // severityDotColor's existing "fucked"/"ok" buckets (the
+                // same ones AttentionScreen's dots use) rather than
+                // inventing a third color for this screen keeps "red = due,
+                // needs you" consistent across the whole app instead of
+                // introducing a second color language for the same concept.
+                // "risk" (amber) is intentionally unused here: due/not-due
+                // is a hard binary for a routine (unlike an AttentionReason,
+                // which has real graduated severity), so a two-color signal
+                // is more honest than manufacturing a third bucket.
+                Box(
+                    modifier = Modifier
+                        .size(10.dp)
+                        .background(
+                            color = severityDotColor(if (status?.due == true) "fucked" else "ok"),
+                            shape = CircleShape,
+                        ),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(text = routine.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = routine.cadenceLabel(),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(10.dp))
+            when (status) {
+                is RoutineStatus.Window -> {
+                    // Progress-toward-target as a fraction of the current
+                    // window, not the raw target as text -- the exact
+                    // pattern Loop Habit Tracker's mini progress bar and
+                    // this task's design research both call out for
+                    // flexible-cadence routines ("2/4 this week" beats
+                    // printing "target=4").
+                    val target = routine.timesPerWindow.coerceAtLeast(1)
+                    LinearProgressIndicator(
+                        progress = { (status.timesThisWindow.toFloat() / target).coerceIn(0f, 1f) },
+                        modifier = Modifier.fillMaxWidth(),
+                        color = severityDotColor(if (status.due) "fucked" else "ok"),
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "${status.timesThisWindow}/${routine.timesPerWindow} this window",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                is RoutineStatus.SinceLast -> {
+                    val daysSince = status.daysSinceLast
+                    if (daysSince != null) {
+                        // Elapsed fraction of the cooldown window -- e.g.
+                        // 5 of 7 days since last completion reads as
+                        // "mostly through the window" even before it flips
+                        // to due, matching the same "progress toward the
+                        // next reset" language the Window branch above uses.
+                        LinearProgressIndicator(
+                            progress = { (daysSince.toFloat() / routine.perDays.coerceAtLeast(1)).coerceIn(0f, 1f) },
+                            modifier = Modifier.fillMaxWidth(),
+                            color = severityDotColor(if (status.due) "fucked" else "ok"),
+                        )
+                        Spacer(Modifier.height(4.dp))
+                    }
+                    Text(
+                        text = if (daysSince == null) "Not logged yet" else "${daysSince}d ago",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                null -> {
+                    // Status hasn't loaded yet (first composition, before
+                    // LaunchedEffect's query returns) -- render the card
+                    // without a progress row rather than a misleading
+                    // "not due" default.
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            TextButton(onClick = { onOpenRoutine(routine.id) }) { Text("Edit") }
         }
     }
 }

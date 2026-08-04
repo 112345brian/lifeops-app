@@ -424,6 +424,79 @@ class LifeOpsComputeWorkerTest {
         assertTrue(result.attention.reasons.any { it.domain == Domain.SYSTEM && it.severity == Severity.FUCKED })
     }
 
+    // ---- EmptyFlowSavvyFetch (FlowSavvy-unconfigured compute tick) ----
+    //
+    // Pins the actual live-device bug this file's change fixes:
+    // LifeOpsComputeWorker.doComputeTick used to `return Result.success()`
+    // the moment FlowSavvy wasn't configured, BEFORE ever calling
+    // runComputeTick/applyComputeTickResult -- so BRIEFING_JSON never got
+    // regenerated and could sit forever on whatever was last persisted
+    // (confirmed live-device: four "coursework" AttentionReason entries
+    // with a null title, rendered as the bare domain word by
+    // ui/AttentionScreen.kt's `reason.title ?: reason.domain` fallback, and
+    // a blank Today-tab headline). These tests exercise runComputeTick
+    // directly with EmptyFlowSavvyFetch -- the exact fetch
+    // doComputeTick now hands it instead of skipping the tick -- and assert
+    // the tick still produces a REAL, fully-titled attention_state/reasons/
+    // headline from local-only facts (gym/social/meal/money/system health),
+    // proving the fix's actual behavior rather than just its wiring.
+
+    @Test
+    fun emptyFlowSavvyFetch_returnsZeroScheduleItemsAndZeroTasks() {
+        val result = EmptyFlowSavvyFetch.fetch(now)
+
+        assertTrue(result.scheduleItems.isEmpty())
+        assertTrue(result.incompleteTasks.isEmpty())
+    }
+
+    @Test
+    fun runComputeTick_withEmptyFlowSavvyFetch_stillProducesARealHeadline() = runBlocking {
+        // No gym history, no persisted routine, no FlowSavvy data at all --
+        // the worst case for "is there anything real to say." compute()'s
+        // own fallback headline ("You are clear...") must still come
+        // through non-blank, never null/empty -- this is exactly what
+        // TodayScreen.kt reads as `data.briefing.attentionHeadline ?:
+        // data.briefing.text` for the Today tab's headline.
+        val result = runComputeTick(db, EmptyFlowSavvyFetch, discretionaryDollars = null, now = now)
+
+        assertTrue(result.attention.headline.isNotBlank())
+    }
+
+    @Test
+    fun runComputeTick_withEmptyFlowSavvyFetch_everyReasonHasARealNonBlankTitle() = runBlocking {
+        // Real local-only facts that DO produce reasons even with zero
+        // FlowSavvy data: gym behind target (no gym history logged at all)
+        // and a negative discretionary balance (money domain). Every
+        // resulting AttentionReason must carry AttentionReason.title itself
+        // non-blank (Attention.kt's compute() sets a real title on every
+        // branch -- see this file's own kdoc -- so a blank/absent title
+        // here would mean this test's fixture, not production code, is
+        // wrong) -- the direct opposite of the live-device symptom (a
+        // reason whose PERSISTED com.lifeops.briefing.data.AttentionReason.title
+        // was null, forcing AttentionScreen.kt's bare-domain-word fallback).
+        val result = runComputeTick(db, EmptyFlowSavvyFetch, discretionaryDollars = -50, now = now)
+
+        assertTrue(result.attention.reasons.isNotEmpty())
+        assertTrue(result.attention.reasons.all { it.title.isNotBlank() })
+        assertTrue(result.attention.reasons.any { it.domain == Domain.MONEY })
+        assertTrue(result.attention.reasons.any { it.domain == Domain.GYM })
+        // No coursework reason is possible without real FlowSavvy task data
+        // -- confirms the "narrower, not fabricated" half of the fix: this
+        // tick doesn't invent coursework facts it has no source for.
+        assertFalse(result.attention.reasons.any { it.domain == Domain.COURSEWORK })
+    }
+
+    @Test
+    fun runComputeTick_withEmptyFlowSavvyFetch_leavesNextTasksAndEventsEmpty() = runBlocking {
+        // No FlowSavvy schedule to derive next-tasks/today-events from --
+        // must come back empty, not stale/fabricated, when FlowSavvy isn't
+        // configured.
+        val result = runComputeTick(db, EmptyFlowSavvyFetch, discretionaryDollars = null, now = now)
+
+        assertTrue(result.nextTasks.tasks.isEmpty())
+        assertTrue(result.nextTasks.events.isEmpty())
+    }
+
     @Test
     fun isoSeconds_zeroPadsEveryFieldForLexicalComparison() {
         val dt = LocalDateTime.of(2026, 1, 5, 9, 5, 0)

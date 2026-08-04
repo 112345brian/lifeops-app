@@ -1,0 +1,1 @@
+Added "LifeOps Strip", a new home-screen widget preset sized as a short, wide 4x1 row for a slim status strip. It shows a single horizontal line of up to four compact stats (weather, gym, notable events, discretionary budget, by default) via a new `ComboLayout.STRIP_4X1` layout in the existing Combo grid renderer.
