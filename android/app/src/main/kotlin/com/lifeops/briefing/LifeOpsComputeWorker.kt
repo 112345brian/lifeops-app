@@ -106,6 +106,15 @@ import com.lifeops.briefing.data.AttentionReason as UiAttentionReason
  *   [runYnabWriteTickIfConfigured] runs self-gated (once/day) alongside
  *   [runWeeklyDigestIfDue] above.
  *
+ * Wired since the on-device SystemHealth design landed:
+ * - **`SystemHealth`** -- see `OnDeviceSystemHealth.kt`'s top-level kdoc for
+ *   the full design (per-data-source "last successful sync" freshness,
+ *   deliberately NOT a literal port of the server's "automation process
+ *   health" concept, which has no on-device equivalent). Computed via
+ *   [computeOnDeviceSystemHealth] BEFORE this tick's own FlowSavvy fetch
+ *   below, and threaded into [runComputeTick]'s `systemHealth` parameter,
+ *   which feeds [Attention.compute]'s `system` argument.
+ *
  * Deliberately NOT wired (flagged as follow-up work, not silently dropped):
  * - **GymSchedule.kt's full `plan()`** (slot-booking/calendar-action
  *   creation/wind-down blocks) -- needs a next-N-days calendar-blocked/
@@ -114,10 +123,6 @@ import com.lifeops.briefing.data.AttentionReason as UiAttentionReason
  *   own `gymRoutine()` + `scheduleRoutine` wrap) is reused directly instead,
  *   since that's the only piece the widget/attention surfaces actually need
  *   (a 7-day count, not a booked calendar slot).
- * - **`SystemHealth`** is passed as `null` to [Attention.compute] -- see
- *   `Attention.kt`'s own kdoc: "designing what 'last successfully synced
- *   with FlowSavvy/YNAB' means on-device is future work, not something this
- *   port invents." Still true here; this tick doesn't invent that concept.
  *
  * ## FlowSavvy config
  *
@@ -514,6 +519,13 @@ internal suspend fun runComputeTick(
     fetch: FlowSavvyFetch,
     discretionaryDollars: Int?,
     now: LocalDateTime = LocalDateTime.now(),
+    // Defaults to null (== the old, always-null behavior) so every existing
+    // caller/test that doesn't care about system health is unaffected.
+    // [LifeOpsComputeWorker.doComputeTick] is the one real caller that passes
+    // a real value, computed via OnDeviceSystemHealth.kt's
+    // computeOnDeviceSystemHealth BEFORE this tick's own FlowSavvy fetch runs
+    // -- see that file's top-level kdoc point 6 for why.
+    systemHealth: SystemHealth? = null,
 ): ComputeTickResult {
     val fetched = fetch.fetch(now)
 
@@ -550,8 +562,9 @@ internal suspend fun runComputeTick(
         gymLast7d = gymRing.gymLast7d,
         gymTarget = gymRing.gymTarget,
     )
-    // system=null deliberately -- see this file's top-level kdoc.
-    val attention = compute(facts, system = null)
+    // See this file's top-level kdoc + OnDeviceSystemHealth.kt for the
+    // real on-device SystemHealth design [systemHealth] now carries.
+    val attention = compute(facts, system = systemHealth)
 
     val nextTasksState = NextTasksState(
         tasks = nextTasksFromSchedule(fetched.scheduleItems, now),
@@ -778,8 +791,14 @@ class LifeOpsComputeWorker(
             Log.e(TAG, "chore cycle failed, isolated from the rest of this tick", e)
         }
 
+        // Read BEFORE this tick's own FlowSavvy fetch below -- see
+        // OnDeviceSystemHealth.kt's top-level kdoc point 6 for why computing
+        // this after would be circular (a fetch that just succeeded would
+        // always look perfectly fresh, making staleness undetectable).
+        val systemHealth = computeOnDeviceSystemHealth(applicationContext, now)
+
         val result = try {
-            runComputeTick(db, RealFlowSavvyFetch(client), discretionaryDollars, now)
+            runComputeTick(db, RealFlowSavvyFetch(client), discretionaryDollars, now, systemHealth = systemHealth)
         } catch (e: FlowSavvyConnectionException) {
             Log.e(TAG, "FlowSavvy unreachable during on-device compute tick", e)
             return Result.retry()
@@ -789,6 +808,11 @@ class LifeOpsComputeWorker(
             Log.e(TAG, "FlowSavvy returned an error during on-device compute tick", e)
             return Result.success()
         }
+        // Only reached when the fetch above actually succeeded (both catch
+        // blocks above return early) -- mark FlowSavvy's on-device sync
+        // marker fresh for the NEXT tick's staleness computation. See
+        // OnDeviceSystemHealth.kt's recordFlowSavvySyncSuccess kdoc.
+        recordFlowSavvySyncSuccess(applicationContext, now.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli())
 
         applyComputeTickResult(applicationContext, result)
         return Result.success()

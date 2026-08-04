@@ -373,6 +373,57 @@ class LifeOpsComputeWorkerTest {
         assertNull(result.nextTasks.weather)
     }
 
+    // ---- systemHealth threading (OnDeviceSystemHealth.kt) ----
+
+    @Test
+    fun runComputeTick_defaultsToNoSystemHealthWhenNotProvided() = runBlocking {
+        // Existing/default behavior for every caller that doesn't pass
+        // systemHealth explicitly -- must stay identical to before this was
+        // wired (system = null, no system-domain reason possible).
+        for (d in 1L..4L) insertGymEvent(daysAgo = d)
+        val fetch = fakeFetch(scheduleItems = emptyList(), tasks = emptyList())
+
+        val result = runComputeTick(db, fetch, discretionaryDollars = 500, now = now)
+
+        assertEquals(Severity.OK, result.attention.state)
+        assertFalse(result.attention.reasons.any { it.domain == Domain.SYSTEM })
+    }
+
+    @Test
+    fun runComputeTick_freshSystemHealthProducesNoSystemReason() = runBlocking {
+        for (d in 1L..4L) insertGymEvent(daysAgo = d)
+        val fetch = fakeFetch(scheduleItems = emptyList(), tasks = emptyList())
+        val freshHealth = SystemHealth(errors = emptyMap(), ageMins = 1.0)
+
+        val result = runComputeTick(db, fetch, discretionaryDollars = 500, now = now, systemHealth = freshHealth)
+
+        assertEquals(Severity.OK, result.attention.state)
+    }
+
+    @Test
+    fun runComputeTick_staleSystemHealthRaisesAttentionToRisk() = runBlocking {
+        for (d in 1L..4L) insertGymEvent(daysAgo = d)
+        val fetch = fakeFetch(scheduleItems = emptyList(), tasks = emptyList())
+        val staleHealth = SystemHealth(errors = emptyMap(), ageMins = 150.0)
+
+        val result = runComputeTick(db, fetch, discretionaryDollars = 500, now = now, systemHealth = staleHealth)
+
+        assertEquals(Severity.RISK, result.attention.state)
+        assertTrue(result.attention.reasons.any { it.domain == Domain.SYSTEM })
+    }
+
+    @Test
+    fun runComputeTick_systemHealthErrorsRaiseAttentionToFucked() = runBlocking {
+        for (d in 1L..4L) insertGymEvent(daysAgo = d)
+        val fetch = fakeFetch(scheduleItems = emptyList(), tasks = emptyList())
+        val erroringHealth = SystemHealth(errors = mapOf("ynab" to "boom"), ageMins = 1.0)
+
+        val result = runComputeTick(db, fetch, discretionaryDollars = 500, now = now, systemHealth = erroringHealth)
+
+        assertEquals(Severity.FUCKED, result.attention.state)
+        assertTrue(result.attention.reasons.any { it.domain == Domain.SYSTEM && it.severity == Severity.FUCKED })
+    }
+
     @Test
     fun isoSeconds_zeroPadsEveryFieldForLexicalComparison() {
         val dt = LocalDateTime.of(2026, 1, 5, 9, 5, 0)

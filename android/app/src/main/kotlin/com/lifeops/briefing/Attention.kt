@@ -9,15 +9,22 @@ package com.lifeops.briefing
  * Per docs/lifeops_capability_todo.md, this was deliberately ported LAST
  * among the engine ports ("it's the capstone: it only becomes useful once
  * everything above is actually wired into a real on-device data-fetch +
- * compute tick"). That wiring gap is still real after this port: [compute]
- * is a faithful line-for-line translation of `attention.py`'s pure decision
- * function, but nothing on Android yet produces a real [SystemHealth] (the
- * doc explicitly flags that `system.errors`/`age_mins` "assume a server
- * automation process being monitored, which has no on-device meaning
- * as-is" -- designing what "last successfully synced with FlowSavvy/YNAB"
- * means on-device is future work, not something this port invents).
+ * compute tick"). [compute] itself is a faithful line-for-line translation
+ * of `attention.py`'s pure decision function -- unchanged by the note below.
  *
- * NOT wired into any widget/worker/persistence path yet.
+ * [SystemHealth] is now produced on-device, but NOT via a literal port of
+ * `system.errors`/`age_mins`: those assumed a server-side automation
+ * PROCESS being monitored (last successful scheduled run, error count from
+ * that process), a concept with no on-device equivalent -- there is no
+ * separate "automation process" on the phone the way there was on the
+ * server; the periodic tick just runs (or doesn't) and either fetches data
+ * successfully or doesn't. See `OnDeviceSystemHealth.kt`'s top-level kdoc
+ * for the genuinely-new on-device concept this required ("when did each
+ * data source last successfully sync on this device, and how stale is
+ * that") and every judgment call involved in designing it.
+ *
+ * Wired into [LifeOpsComputeWorker]'s periodic tick; see that file's own
+ * kdoc.
  */
 
 /** Mirrors `_RANK`'s four severity levels AND `visuals`'s three-way
@@ -68,6 +75,12 @@ data class AttentionFacts(
  * Python's `system=None` -- `has_system` is `false` and none of the
  * system-domain branches fire, exactly as `system is not None` gates them
  * in the Python source.
+ *
+ * On-device, this is built by `OnDeviceSystemHealth.kt`'s
+ * `computeOnDeviceSystemHealth` -- see that file's top-level kdoc for what
+ * `errors`/`ageMins` mean on a phone (per-data-source sync freshness, not
+ * server automation-process health) and why the shape is genuinely
+ * different from `attention.py`'s server-side source of the same fields.
  */
 data class SystemHealth(
     val errors: Map<String, String> = emptyMap(),
