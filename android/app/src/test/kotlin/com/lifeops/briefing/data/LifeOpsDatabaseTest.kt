@@ -111,6 +111,26 @@ class LifeOpsDatabaseTest {
     }
 
     @Test
+    fun routine_insertIfAbsent_seedsDefaultsOnEmptyTable() = runBlocking {
+        db.routineDao().insertIfAbsent(RoutineDefaults.ALL)
+
+        val all = db.routineDao().getAll()
+        assertEquals(4, all.size)
+        assertEquals(setOf("friends", "gym", "meal", "partner"), all.map { it.id }.toSet())
+        assertEquals(4, db.routineDao().getById("gym")?.timesPerWindow)
+    }
+
+    @Test
+    fun routine_insertIfAbsent_doesNotClobberAnExistingEdit() = runBlocking {
+        db.routineDao().insert(gymRoutine().copy(timesPerWindow = 9))
+
+        db.routineDao().insertIfAbsent(RoutineDefaults.ALL)
+
+        assertEquals(9, db.routineDao().getById("gym")?.timesPerWindow)
+        assertEquals(4, db.routineDao().getAll().size)
+    }
+
+    @Test
     fun routine_toRoutine_mapsIntoThePureLogicShape() {
         val routine = gymRoutine().toRoutine()
 

@@ -35,6 +35,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.lifeops.briefing.data.LifeOpsDatabase
+import com.lifeops.briefing.data.RoutineDefaults
 import com.lifeops.briefing.data.RoutineEntity
 import kotlinx.coroutines.launch
 
@@ -47,7 +48,14 @@ fun RoutineListScreen(onOpenRoutine: (String) -> Unit, onNewRoutine: () -> Unit,
     var routines by remember { mutableStateOf(emptyList<RoutineEntity>()) }
 
     LaunchedEffect(Unit) {
-        routines = LifeOpsDatabase.getInstance(context).routineDao().getAll()
+        val dao = LifeOpsDatabase.getInstance(context).routineDao()
+        // Seeds the gym/partner/friends/meal defaults the old Python
+        // backend always silently computed with, so a fresh install (or
+        // one predating this seeding) doesn't show an empty list -- see
+        // RoutineDefaults' kdoc. IGNORE conflict strategy means this never
+        // clobbers a routine the user already edited.
+        dao.insertIfAbsent(RoutineDefaults.ALL)
+        routines = dao.getAll()
     }
 
     Scaffold(
