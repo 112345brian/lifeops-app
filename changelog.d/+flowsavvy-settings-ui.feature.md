@@ -1,0 +1,1 @@
+Added FlowSavvy base URL and token fields to the Settings screen, alongside the existing panel/YNAB/Anthropic fields. Previously the only way to configure FlowSavvy for the on-device compute tick was sideloading a properties file onto the device.
