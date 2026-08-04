@@ -32,12 +32,21 @@ off-domain, and the daily sync hits Canvas's JSON API directly via
 `context.request` (no rendered page, no JS, nothing for Cloudflare's browser
 checks to see).
 """
-import os, subprocess
+import os, subprocess, json, time, urllib.request
 from pathlib import Path
 from . import config
 
+DEBUG_PORT = 9333
+
 ROOT = Path(__file__).resolve().parent.parent
 PROFILE_DIR = ROOT / "data" / "browser_profiles" / "canvas"
+# canvas_session is a browser *session* cookie (no expiry) — Chromium deletes
+# session cookies from the profile's Cookies DB when a context closes cleanly,
+# so relying on launch_persistent_context's own disk reload silently loses the
+# login after the very next automated check. Snapshotting storage_state()
+# (which captures live cookies regardless of session/persistent flag) and
+# re-injecting it on launch sidesteps that entirely.
+SESSION_STATE_FILE = ROOT / "data" / "browser_profiles" / "canvas_session_state.json"
 
 _CHROME_CANDIDATES = [
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
@@ -70,22 +79,62 @@ def modules_url():
     base = (config.CANVAS_BASE_URL or "https://jhu.instructure.com").rstrip("/")
     return f"{base}/courses/{config.CANVAS_COURSE_ID}/modules"
 
-def launch_manual_login(url):
-    """Open the persistent Canvas profile in a bare, non-CDP Chrome process
-    for the human to log in through. See the module docstring: any
-    CDP-attached navigation through the login redirect gets hard-blocked by
-    Cloudflare, but a plain subprocess isn't. Caller must wait for the user
-    to close this window (releasing the profile's lock file) before opening
-    a Playwright session against the same profile — e.g. for logged_in()."""
+def launch_manual_login(url, debug_port=DEBUG_PORT):
+    """Open the persistent Canvas profile in a bare, non-CDP-driven Chrome
+    process for the human to log in through. See the module docstring: any
+    CDP-attached *navigation through the login redirect* gets hard-blocked by
+    Cloudflare, but a plain subprocess isn't — and merely exposing a debug
+    port (with nothing yet connected/navigating through it) doesn't change
+    that, since Cloudflare's check fires on the page's own JS-visible
+    automation fingerprint, not on whether a debug port exists. The debug
+    port lets capture_live_session() read the *already-authenticated* cookie
+    jar afterward without ever driving the login itself."""
     os.makedirs(PROFILE_DIR, exist_ok=True)
     _clear_stale_locks()
     exe = _chrome_path()
     if not exe:
         raise RuntimeError("Chrome not found — Canvas login needs the real Chrome binary")
     return subprocess.Popen(
-        [exe, f"--user-data-dir={PROFILE_DIR}", "--new-window", url],
+        [exe, f"--user-data-dir={PROFILE_DIR}", f"--remote-debugging-port={debug_port}",
+         "--new-window", url],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
+
+def capture_live_session(debug_port=DEBUG_PORT, timeout_s=15 * 60, poll_interval=2):
+    """Poll the manual-login window's CDP debug endpoint until it reaches the
+    modules page, then attach Playwright over CDP — no navigation, just
+    reading the live cookie jar — and snapshot it via storage_state() while
+    the session is still authenticated in memory. Necessary because
+    canvas_session is a browser *session* cookie: Chromium never reloads
+    session-only cookies from disk on a fresh launch (manual or automated),
+    so waiting for the window to close and reading the profile's Cookies DB
+    afterward silently loses the login every time. Returns True if captured,
+    False on timeout (window never reached the modules page)."""
+    expected = f"/courses/{config.CANVAS_COURSE_ID}/modules"
+    deadline = time.time() + timeout_s
+    reached = False
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{debug_port}/json", timeout=3) as resp:
+                tabs = json.loads(resp.read())
+            if any(expected in (t.get("url") or "") for t in tabs):
+                reached = True
+                break
+        except Exception:
+            pass
+        time.sleep(poll_interval)
+    if not reached:
+        return False
+
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        browser = pw.chromium.connect_over_cdp(f"http://127.0.0.1:{debug_port}")
+        context = browser.contexts[0]
+        SESSION_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        context.storage_state(path=str(SESSION_STATE_FILE))
+        # deliberately no browser.close() — this is a CDP *attach*, not a
+        # launch; closing it would kill the user's still-open window.
+    return True
 
 
 class BrowserCanvas:
@@ -110,7 +159,16 @@ class BrowserCanvas:
         exe = _chrome_path()
         if exe:
             kwargs["executable_path"] = exe
+        # launch_persistent_context has no storage_state kwarg (that's a
+        # launch()+new_context() thing) — inject saved cookies by hand instead.
         self.context = self._pw.chromium.launch_persistent_context(str(PROFILE_DIR), **kwargs)
+        if SESSION_STATE_FILE.exists():
+            try:
+                state = json.loads(SESSION_STATE_FILE.read_text())
+                if state.get("cookies"):
+                    self.context.add_cookies(state["cookies"])
+            except Exception:
+                pass
         return self
 
     def __exit__(self, exc_type, exc, tb):
@@ -121,29 +179,28 @@ class BrowserCanvas:
             if self._pw:
                 self._pw.stop()
 
-    def logged_in(self):
-        """Probe: does the modules page actually load, or did we bounce
-        somewhere else? Positive match on purpose — an unauthenticated
-        session can land on the SSO form, a generic JHU landing page, or an
-        "unauthorized" page on the SAME instructure.com domain, so blocklisting
-        keywords is unreliable. Only the real modules page counts as success."""
-        page = self.context.new_page()
+    def _save_session(self):
         try:
-            page.goto(f"{self.base}/courses/{self.course}/modules",
-                      timeout=30000, wait_until="domcontentloaded")
-            try:
-                page.wait_for_load_state("networkidle", timeout=10000)
-            except Exception:
-                pass
-            expected_path = f"/courses/{self.course}/modules"
-            if expected_path not in page.url:
-                return False
-            try:
-                return page.get_by_text("Course modules", exact=False).count() > 0
-            except Exception:
-                return True   # right URL and we couldn't check content — assume OK
-        finally:
-            page.close()
+            SESSION_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            self.context.storage_state(path=str(SESSION_STATE_FILE))
+        except Exception:
+            pass
+
+    def logged_in(self):
+        """Probe via the same JSON API the daily sync uses (no rendered page,
+        nothing for Cloudflare to trip on) rather than navigating a page —
+        page navigation redirects off-domain into a Cloudflare-guarded page
+        when the session is stale and gives a false negative even when a
+        rendered check would otherwise be fine. On success, snapshots the
+        session so it survives this context closing (see SESSION_STATE_FILE)."""
+        try:
+            r = self.context.request.get(f"{self.base}/api/v1/users/self", timeout=30000)
+        except Exception:
+            return False
+        ok = r.ok
+        if ok:
+            self._save_session()
+        return ok
 
     def _get(self, path, extra_params=None):
         params = {"per_page": "100"}
@@ -152,6 +209,7 @@ class BrowserCanvas:
         r = self.context.request.get(f"{self.base}{path}", params=params, timeout=30000)
         if not r.ok:
             raise RuntimeError(f"Canvas request failed ({r.status}): {path}")
+        self._save_session()
         return r.json()
 
     # --- same interface as canvas.Canvas ---
