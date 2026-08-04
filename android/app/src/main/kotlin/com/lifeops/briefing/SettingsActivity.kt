@@ -82,6 +82,8 @@ private fun SettingsScreen(context: Context, onSaved: () -> Unit) {
         mutableStateOf(WidgetConfigStore.getYnabDiscretionaryCategoriesRaw(context))
     }
     var anthropicApiKey by remember { mutableStateOf(WidgetConfigStore.getAnthropicApiKey(context) ?: "") }
+    var flowSavvyBaseUrl by remember { mutableStateOf(WidgetConfigStore.getFlowSavvyBaseUrl(context) ?: "") }
+    var flowSavvyToken by remember { mutableStateOf(WidgetConfigStore.getFlowSavvyToken(context) ?: "") }
     var hasForegroundLocation by remember { mutableStateOf(hasForegroundLocationPermission(context)) }
     val scope = rememberCoroutineScope()
 
@@ -153,6 +155,23 @@ private fun SettingsScreen(context: Context, onSaved: () -> Unit) {
             modifier = Modifier.fillMaxWidth(),
         )
 
+        OutlinedTextField(
+            value = flowSavvyBaseUrl,
+            onValueChange = { flowSavvyBaseUrl = it },
+            label = { Text("FlowSavvy base URL") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+
+        OutlinedTextField(
+            value = flowSavvyToken,
+            onValueChange = { flowSavvyToken = it },
+            label = { Text("FlowSavvy token") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            modifier = Modifier.fillMaxWidth(),
+        )
+
         // LocationReporter (piggybacked on LifeOpsComputeWorker) silently
         // no-ops without this permission, so surface it explicitly here
         // rather than leaving weather stuck on the static WEATHER_LAT/LON
@@ -190,6 +209,7 @@ private fun SettingsScreen(context: Context, onSaved: () -> Unit) {
                     context, baseUrl.trim(), token.trim(), ynabToken.trim(), ynabBudget.trim(),
                     ynabDiscretionaryCategories.trim(), anthropicApiKey.trim(),
                 )
+                WidgetConfigStore.saveFlowSavvyConfig(context, flowSavvyBaseUrl.trim(), flowSavvyToken.trim())
                 LifeOpsComputeWorker.enqueueOnce(context)
                 // Register the current FCM token now too -- covers the
                 // common case where Settings gets configured after

@@ -109,13 +109,14 @@ object WidgetConfigStore {
             ?.apply()
     }
 
-    /** Interim config path for FlowSavvy's base URL/token, mirroring
-     * [importYnabConfigFileIfPresent]'s existing sideload mechanism exactly
-     * (same "drop a properties file into the app's files dir, import once,
-     * delete it" shape) -- no Settings UI field exists yet for these two
-     * values (building that UI is explicitly out of scope for the
-     * compute-tick wiring task these two functions were added for; see
-     * `LifeOpsComputeWorker.kt`'s kdoc). Without this (or a future UI field),
+    /** Interim/dev-testing config path for FlowSavvy's base URL/token,
+     * mirroring [importYnabConfigFileIfPresent]'s existing sideload
+     * mechanism exactly (same "drop a properties file into the app's files
+     * dir, import once, delete it" shape). `SettingsActivity` now also has
+     * real UI fields for these two values that call [saveFlowSavvyConfig]
+     * directly -- this sideload path stays as a secondary way to set them
+     * (e.g. scripted device setup) and shows up in those fields on next
+     * load, same as anything else in this store. Without either path,
      * [LifeOpsComputeWorker] has no FlowSavvy credentials to read and its
      * on-device compute tick no-ops entirely -- see its `doWork`'s
      * config-missing early return. */
