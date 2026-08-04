@@ -10,9 +10,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -119,7 +119,20 @@ fun TodayScreen(modifier: Modifier = Modifier) {
         topBar = { TopAppBar(title = { Text("Today") }) },
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
-        Column(modifier = modifier.fillMaxSize().padding(padding).padding(16.dp)) {
+        // verticalScroll, not a fixed-height Column: the new "This week"/
+        // Money/Gym sections (on top of events/tasks/quick actions that were
+        // already here) can easily exceed one screen's height, and a plain
+        // Column with no scroll silently clips everything below the
+        // viewport -- including Quick Actions/"Run catchup", with no way to
+        // reach them. The task list below is a plain Column.forEach, not a
+        // LazyColumn, specifically so it can live inside this outer scroll
+        // (a LazyColumn nested in a scrollable Column needs an unbounded
+        // height, which LazyColumn doesn't support) -- fine given this
+        // list's realistic size (a handful of outstanding tasks, not a
+        // long feed).
+        Column(
+            modifier = modifier.fillMaxSize().padding(padding).padding(16.dp).verticalScroll(rememberScrollState()),
+        ) {
             StatusHeader(
                 attentionState = data.briefing.attentionState,
                 attentionLabel = data.briefing.attentionLabel,
@@ -191,8 +204,8 @@ fun TodayScreen(modifier: Modifier = Modifier) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             } else {
-                LazyColumn(modifier = Modifier.weight(1f, fill = false)) {
-                    items(data.nextTasks.tasks, key = { it.id }) { task ->
+                Column {
+                    data.nextTasks.tasks.forEach { task ->
                         TaskRow(
                             task = task,
                             completing = completingTaskId == task.id,
