@@ -105,6 +105,24 @@ import com.lifeops.briefing.data.AttentionReason as UiAttentionReason
  *   PATCH write this file's own comment used to flag as missing.
  *   [runYnabWriteTickIfConfigured] runs self-gated (once/day) alongside
  *   [runWeeklyDigestIfDue] above.
+ * - **GymSchedule.kt's full `plan()`** (slot-booking/gym-task creation/
+ *   wind-down blocks), via [runGymPlanCycle] (`GymPlanCycle.kt`) -- a real
+ *   14-day candidate window (calendar-blocked days from [BlockedDayDao],
+ *   real evening/day-after-show/prior-night-blocked flags from fetched
+ *   FlowSavvy events, and real deadline-heavy days from this tick's own
+ *   fetched incomplete-task load), fed to `plan()`, with its `create`/
+ *   wind-down actions applied via [FlowSavvyClient.createTask] (a TASK, not
+ *   a calendar event -- verified against `runner.py`'s `run_gym`/
+ *   `_logged_create` directly; see `GymPlanCycle.kt`'s own kdoc for the full
+ *   trace). Dedup is a live FlowSavvy re-read every tick (already-scheduled
+ *   "Gym" tasks feed `plan()`'s own busy-date exclusion; an existing
+ *   "Wind down" task is checked before each wind-down create) rather than a
+ *   new persisted id-list, since FlowSavvy's own current schedule is already
+ *   the authoritative source of "was this already booked" -- see
+ *   `GymPlanCycle.kt`'s top-level kdoc for why no new Room entity was added.
+ *   Gym's WINDOW-adherence math ([computeGymRing], below) is UNCHANGED by
+ *   this and still reused directly for the widget/attention 7-day-count
+ *   surfaces, which don't need a booked slot, just a count.
  *
  * Wired since the on-device SystemHealth design landed:
  * - **`SystemHealth`** -- see `OnDeviceSystemHealth.kt`'s top-level kdoc for
@@ -115,24 +133,14 @@ import com.lifeops.briefing.data.AttentionReason as UiAttentionReason
  *   below, and threaded into [runComputeTick]'s `systemHealth` parameter,
  *   which feeds [Attention.compute]'s `system` argument.
  *
- * Deliberately NOT wired (flagged as follow-up work, not silently dropped):
- * - **GymSchedule.kt's full `plan()`** (slot-booking/calendar-action
- *   creation/wind-down blocks) -- needs a next-N-days calendar-blocked/
- *   deadline-heavy/sleep-quality context this tick doesn't assemble. Gym's
- *   WINDOW-adherence math (`Routine.status`, which is what `GymSchedule.kt`'s
- *   own `gymRoutine()` + `scheduleRoutine` wrap) is reused directly instead,
- *   since that's the only piece the widget/attention surfaces actually need
- *   (a 7-day count, not a booked calendar slot).
- *
  * ## FlowSavvy config
  *
  * Reads `WidgetConfigStore.getFlowSavvyBaseUrl`/`getFlowSavvyToken` -- if
  * either is unconfigured, `doWork` no-ops (`Result.success()`) the same way
- * the old worker no-op'd on a missing panel URL/token. No Settings UI field
- * exists yet for these two values (building UI is out of scope for this
- * task); see `WidgetConfigStore.importFlowSavvyConfigFileIfPresent`'s kdoc
- * for the interim sideload path, mirroring the existing YNAB_TOKEN import
- * mechanism exactly.
+ * the old worker no-op'd on a missing panel URL/token. Set from the Settings
+ * screen (base URL + token fields alongside the panel/YNAB/Anthropic ones)
+ * or via `WidgetConfigStore.importFlowSavvyConfigFileIfPresent`'s sideload
+ * path, mirroring the existing YNAB_TOKEN import mechanism.
  */
 
 // ---------------------------------------------------------------------
@@ -423,11 +431,7 @@ internal suspend fun computeGymPlanRespectingBlocks(db: LifeOpsDatabase, now: Lo
     val persistedGym = db.routineDao().getById("gym")
     val rules = GymRules(target = persistedGym?.timesPerWindow ?: GymRules().target)
     val today = now.toLocalDate()
-    val windowStart = today.minusDays(7)
-    val completedDates = db.historyEventDao().getTimestampsIsoForDomain("gym")
-        .mapNotNull { runCatching { LocalDateTime.parse(it).toLocalDate() }.getOrNull() }
-        .filter { !it.isBefore(windowStart) }
-        .toSet()
+    val completedDates = gymCompletedInTrailingWindow(db, today)
     val days = gymDaysRespectingBlocks(db.blockedDayDao(), today, days = 14)
     val input = GymInput(
         today = today,
@@ -437,6 +441,21 @@ internal suspend fun computeGymPlanRespectingBlocks(db: LifeOpsDatabase, now: Lo
         rules = rules,
     )
     return plan(input)
+}
+
+/** The trailing-7-day set of dates the "gym" [HistoryEventDao] domain
+ * recorded a real session on -- the same rolling window
+ * `gather.py`'s `gym_input` uses for `completed_count`/`completed_dates`
+ * (see that function's own "ROLLING 7-day windows, not the calendar week"
+ * comment). Shared by [computeGymPlanRespectingBlocks] and
+ * [runGymPlanCycle] (`GymPlanCycle.kt`) so both read this real signal the
+ * exact same way instead of two independently-drifting copies. */
+internal suspend fun gymCompletedInTrailingWindow(db: LifeOpsDatabase, today: java.time.LocalDate): Set<java.time.LocalDate> {
+    val windowStart = today.minusDays(6)
+    return db.historyEventDao().getTimestampsIsoForDomain("gym")
+        .mapNotNull { runCatching { LocalDateTime.parse(it).toLocalDate() }.getOrNull() }
+        .filter { !it.isBefore(windowStart) }
+        .toSet()
 }
 
 /** Surfaces one sentence (e.g. [GymPlan.alert]'s text from
@@ -797,8 +816,15 @@ class LifeOpsComputeWorker(
         // always look perfectly fresh, making staleness undetectable).
         val systemHealth = computeOnDeviceSystemHealth(applicationContext, now)
 
-        val result = try {
-            runComputeTick(db, RealFlowSavvyFetch(client), discretionaryDollars, now, systemHealth = systemHealth)
+        // Fetched ONCE here (rather than inside runComputeTick, which used to
+        // own this fetch) so gym-plan-cycle's day-context assembly
+        // (buildGymCandidateDays' deadlineHeavy input) can reuse the exact
+        // same already-fetched incomplete-tasks list runComputeTick's own
+        // coursework-at-risk/overdue/due-today math is built from, instead of
+        // issuing a second, redundant `list_items(itemType="task", ...)` call
+        // every tick -- see GymPlanCycle.kt's top-level kdoc.
+        val fetchResult = try {
+            RealFlowSavvyFetch(client).fetch(now)
         } catch (e: FlowSavvyConnectionException) {
             Log.e(TAG, "FlowSavvy unreachable during on-device compute tick", e)
             return Result.retry()
@@ -813,6 +839,32 @@ class LifeOpsComputeWorker(
         // marker fresh for the NEXT tick's staleness computation. See
         // OnDeviceSystemHealth.kt's recordFlowSavvySyncSuccess kdoc.
         recordFlowSavvySyncSuccess(applicationContext, now.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli())
+
+        // Real gym scheduling write-back (runGymPlanCycle/GymPlanCycle.kt) --
+        // wrapped in its OWN try/catch for the exact same reason the chore
+        // cycle above is: a hiccup on this write-capable path (a malformed
+        // event/task response, an unexpected FlowSavvy error creating a gym
+        // block) must not abort the read-only attention/next-tasks compute
+        // below, and vice versa. If FlowSavvy is otherwise reachable (this
+        // point is only reached once the primary fetch above already
+        // succeeded), gym-plan-cycle's own reads (scheduled gym tasks,
+        // calendar events, existing wind-down blocks) are attempted fresh
+        // every tick regardless of whether a PRIOR tick's gym cycle failed --
+        // there is no persisted "gym cycle succeeded" state to get stuck on.
+        try {
+            runGymPlanCycle(
+                db,
+                RealGymPlanFetch(client),
+                fetchResult.incompleteTasks,
+                RealGymTaskCreator(client),
+                RealGymTaskDeleter(client),
+                now,
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "gym plan cycle failed, isolated from the rest of this tick", e)
+        }
+
+        val result = runComputeTick(db, FlowSavvyFetch { fetchResult }, discretionaryDollars, now, systemHealth = systemHealth)
 
         applyComputeTickResult(applicationContext, result)
         return Result.success()
