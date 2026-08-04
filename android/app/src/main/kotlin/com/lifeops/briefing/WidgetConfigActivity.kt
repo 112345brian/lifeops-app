@@ -1037,19 +1037,21 @@ private fun ComboGridPreview(
         }
         val compactStats = (preferredSections + fallbackSections).mapNotNull(::statFor)
         if (wideStrip) {
-            // The real Glance widget (BriefingWidget.kt's ComboStrip) lays
-            // this preset out as ONE flat row -- weather then up to 3 stat
-            // tiles, capped at 4 cells total to match ComboStrip's own
-            // cells.take(4) -- not the square weather-top/stats-bottom block
-            // below, which is what the other comboGrid presets actually
-            // look like. aspectRatio(250f / 56f) mirrors
-            // strip_widget_info.xml's own default placed footprint (see
-            // that file's comment) rather than an arbitrary wide ratio, so
-            // this preview's proportions track the real default size if
-            // that XML value ever changes.
-            val stripCells = (if (showWeather) 1 else 0) + compactStats.size
-            val weatherSlots = if (showWeather) 1 else 0
-            val statsForStrip = compactStats.take((4 - weatherSlots).coerceAtLeast(0))
+            // Mirrors BriefingWidget.kt's ComboStrip: weather rendered at
+            // DOUBLE the width of each other cell (confirmed 2026-08-04:
+            // "weather for the first two, one 1x1 with the gym, and then
+            // 1x1 with the discretionary spending"), not the square
+            // weather-top/stats-bottom block below, which is what the
+            // other comboGrid presets actually look like. This is plain
+            // Compose (not Glance), so unlike ComboStrip's nested 50/50
+            // splits (Glance's RowScope has no arbitrary-weight overload --
+            // see that function's own kdoc) this can just use
+            // Modifier.weight(2f) directly for the identical 2:1:1 ratio.
+            // aspectRatio(250f / 56f) mirrors strip_widget_info.xml's own
+            // default placed footprint (see that file's comment) rather
+            // than an arbitrary wide ratio, so this preview's proportions
+            // track the real default size if that XML value ever changes.
+            val statsForStrip = compactStats.take(3)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1061,7 +1063,7 @@ private fun ComboGridPreview(
                     Row(
                         modifier = Modifier
                             .fillMaxHeight()
-                            .weight(1f)
+                            .weight(2f)
                             .background(Color(0xFF2F4D80))
                             .padding((4 * scale).dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -1071,12 +1073,13 @@ private fun ComboGridPreview(
                             fontSize = (COMBO_TILE_VALUE_SP * scale).sp)
                         Text(text = weatherEmoji(previewState.weatherCondition), fontSize = (COMBO_TILE_VALUE_SP * scale).sp)
                     }
+                    if (statsForStrip.isNotEmpty()) ComboPreviewDivider()
                 }
                 statsForStrip.forEachIndexed { index, stat ->
-                    if (index > 0 || showWeather) ComboPreviewDivider()
+                    if (index > 0) ComboPreviewDivider()
                     ComboPreviewStatTile(stat, scale, Modifier.fillMaxHeight().weight(1f))
                 }
-                if (stripCells == 0) {
+                if (!showWeather && statsForStrip.isEmpty()) {
                     Spacer(modifier = Modifier.fillMaxSize())
                 }
             }

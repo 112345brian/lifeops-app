@@ -31,12 +31,11 @@ object WidgetPresets {
         SocialWidgetReceiver::class.java to WidgetDisplayConfig.singleStat(WidgetSection.SOCIAL),
         EventsWidgetReceiver::class.java to WidgetDisplayConfig.singleStat(WidgetSection.NOTABLE_EVENTS),
         ComboWidgetReceiver::class.java to WidgetDisplayConfig.comboGrid(),
-        // Same default cell priority/content as the Combo preset -- the
-        // difference is entirely in footprint (a slim 4x1 row vs. a 4x2
-        // block) and BriefingWidget.kt's ComboGridContent/comboLayoutFor
-        // already pick a dedicated single-row layout for a footprint this
-        // short, so no new WidgetDisplayConfig factory is needed here.
-        StripWidgetReceiver::class.java to WidgetDisplayConfig.comboGrid(),
+        // A fixed 3-section set (weather/gym/money), not Combo's
+        // priority-ordered "take what fits" subset -- see
+        // WidgetDisplayConfig.strip()'s own kdoc for why a 4x1 footprint
+        // gets a hand-picked default instead of reusing comboGrid()'s.
+        StripWidgetReceiver::class.java to WidgetDisplayConfig.strip(),
     )
 
     fun defaultConfigFor(receiverClassName: String?): WidgetDisplayConfig =

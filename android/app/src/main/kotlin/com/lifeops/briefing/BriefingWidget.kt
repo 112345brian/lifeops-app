@@ -1670,10 +1670,36 @@ private fun RowScope.ComboStrip(
     cells: List<ComboCell>, state: BriefingState, temperatureF: Int?, highF: Int?, lowF: Int?, condition: String?,
     scale: Float,
 ) {
-    cells.forEachIndexed { index, cell ->
-        if (index > 0) ComboTileDivider()
-        ComboRenderCell(cell, state, temperatureF, highF, lowF, condition, scale,
+    // Hand-built for the "LifeOps Strip" preset's literal spec (confirmed
+    // 2026-08-04: "weather for the first two, one 1x1 with the gym, and
+    // then 1x1 with the discretionary spending") -- weather rendered at
+    // DOUBLE the width of each other cell, not N equal-width cells the way
+    // this used to just take(4) and loop. Glance's RowScope only exposes
+    // defaultWeight() -- a fixed weight of 1, no arbitrary-weight overload
+    // (confirmed against the actual androidx.glance:glance-1.1.1 API via
+    // javap -- RowScope declares exactly one method,
+    // defaultWeight(GlanceModifier)) -- so "twice as wide" can't be a
+    // single weight=2 modifier. Built instead from two nested 50/50 splits:
+    // the outer Row (this function's own RowScope receiver) splits
+    // [weather | everything else] 50/50, then the "everything else" half
+    // splits again internally, landing weather at half the strip's total
+    // width and each remaining cell at a quarter.
+    val weatherCell = cells.firstOrNull { it.section == WidgetSection.WEATHER }
+    val otherCells = cells.filter { it.section != WidgetSection.WEATHER }
+
+    if (weatherCell != null) {
+        ComboRenderCell(weatherCell, state, temperatureF, highF, lowF, condition, scale,
             GlanceModifier.fillMaxSize().defaultWeight())
+        if (otherCells.isNotEmpty()) ComboTileDivider()
+    }
+    if (otherCells.isNotEmpty()) {
+        Row(modifier = GlanceModifier.fillMaxSize().defaultWeight()) {
+            otherCells.forEachIndexed { index, cell ->
+                if (index > 0) ComboTileDivider()
+                ComboRenderCell(cell, state, temperatureF, highF, lowF, condition, scale,
+                    GlanceModifier.fillMaxSize().defaultWeight())
+            }
+        }
     }
 }
 

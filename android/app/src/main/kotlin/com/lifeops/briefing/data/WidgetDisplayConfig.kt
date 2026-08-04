@@ -156,6 +156,33 @@ data class WidgetDisplayConfig(
             comboGrid = true,
         )
 
+        /** Exact sections the "LifeOps Strip" preset's default renders --
+         * weather, gym, discretionary spending, nothing else (confirmed
+         * 2026-08-04: "weather for the first two, one 1x1 with the gym,
+         * and then 1x1 with the discretionary spending"). Unlike
+         * [comboGrid]'s priority-ordered subset (which takes as many
+         * COMBO_GRID_SUPPORTED_SECTIONS cells as the placed size fits),
+         * this is a fixed, hand-picked 3-section set -- Notable Events and
+         * Social are deliberately excluded from the default rather than
+         * reachable via "if there's room," matching a real 4x1 strip's
+         * actual room for exactly 3 pieces of content (weather rendered
+         * double-wide by [ComboStrip]). Still a real, user-editable
+         * [WidgetDisplayConfig] like any other preset -- the configure
+         * screen can re-enable/reorder sections same as always; this is
+         * only the starting point. */
+        private val STRIP_DEFAULT_SECTIONS = listOf(
+            WidgetSection.WEATHER,
+            WidgetSection.GYM_RING,
+            WidgetSection.MONEY_TILE,
+        )
+
+        fun strip(): WidgetDisplayConfig = WidgetDisplayConfig(
+            sectionOrder = STRIP_DEFAULT_SECTIONS +
+                WidgetSection.entries.filter { it !in STRIP_DEFAULT_SECTIONS },
+            hiddenSections = WidgetSection.entries.filter { it !in STRIP_DEFAULT_SECTIONS }.toSet(),
+            comboGrid = true,
+        )
+
         /** Unknown/removed enum values (e.g. an older or newer app version's
          * section that this build doesn't recognize) are silently dropped
          * rather than throwing -- forward/backward compatibility across app
