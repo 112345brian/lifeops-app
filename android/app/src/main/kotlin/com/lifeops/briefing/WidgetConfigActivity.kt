@@ -374,6 +374,12 @@ private fun WidgetConfigScreen(
                             // android/CLAUDE.md) doesn't silently revert it
                             // back to the generic section-by-section layout.
                             comboGrid = loaded.config.comboGrid,
+                            // Same "not user-toggleable, carried through
+                            // unchanged" reasoning as comboGrid immediately
+                            // above -- a Strip/Strip Tall instance's Save
+                            // must not silently revert it to the generic
+                            // combo-grid renderer.
+                            stripLayout = loaded.config.stripLayout,
                         )
                         // rememberCoroutineScope, not GlobalScope -- tied to
                         // this composable's lifecycle so it can't leak past
@@ -414,7 +420,16 @@ private fun WidgetConfigScreen(
                         // precisely for this: a new Glance-side layout
                         // variant needs its own Compose preview counterpart,
                         // not silent reuse of an unrelated preset's shape.
-                        wideStrip = providerClassName == StripWidgetReceiver::class.java.name)
+                        wideStrip = providerClassName == StripWidgetReceiver::class.java.name ||
+                            providerClassName == StripTallWidgetReceiver::class.java.name,
+                        // The real widget (StripFamilyContent) decides this
+                        // purely from placed height, but this screen has no
+                        // live placed size to read -- Strip Tall's default
+                        // is always tall enough to show it (110dp clears
+                        // StripFamilyContent's 100dp threshold), so preset
+                        // identity is a fine proxy here, same reasoning as
+                        // wideStrip itself just above.
+                        stripShowsEventsRow = providerClassName == StripTallWidgetReceiver::class.java.name)
                 } else {
                     WidgetPreview(
                         state = loaded.state,
@@ -980,6 +995,7 @@ private fun ComboGridPreview(
     moneyDisplayMode: MoneyDisplayMode,
     ynabCategoryName: String,
     wideStrip: Boolean = false,
+    stripShowsEventsRow: Boolean = false,
 ) {
     val usingSample = state?.text == null
     val previewState = if (usingSample) SAMPLE_STATE else state
@@ -1052,38 +1068,62 @@ private fun ComboGridPreview(
             // than an arbitrary wide ratio, so this preview's proportions
             // track the real default size if that XML value ever changes.
             val statsForStrip = compactStats.take(3)
-            Row(
+            // "LifeOps Strip Tall" adds a second full-width row showing the
+            // single next NOTABLE_EVENTS entry (confirmed 2026-08-04: "the
+            // second row displays the next non-task event I have in my
+            // calendar") -- mirrors BriefingWidget.kt's NextEventRow/
+            // StripFamilyContent exactly, rather than the plain Strip's
+            // textual "would show if there's room" fallback note below.
+            // aspectRatio(250f / 110f) matches strip_tall_widget_info.xml's
+            // own default placed footprint (n=4 width x n=2 height).
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .aspectRatio(250f / 56f)
+                    .aspectRatio(if (stripShowsEventsRow) 250f / 110f else 250f / 56f)
                     .clip(RoundedCornerShape(COMBO_OUTER_RADIUS))
                     .background(COMBO_BG),
             ) {
-                if (showWeather) {
+                Row(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                    if (showWeather) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxHeight()
+                                .weight(2f)
+                                .background(Color(0xFF2F4D80))
+                                .padding((4 * scale).dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(text = "${previewState.temperatureF}°F", color = Color.White, fontWeight = FontWeight.Bold,
+                                fontSize = (COMBO_TILE_VALUE_SP * scale).sp)
+                            Text(text = weatherEmoji(previewState.weatherCondition), fontSize = (COMBO_TILE_VALUE_SP * scale).sp)
+                        }
+                        if (statsForStrip.isNotEmpty()) ComboPreviewDivider()
+                    }
+                    statsForStrip.forEachIndexed { index, stat ->
+                        if (index > 0) ComboPreviewDivider()
+                        ComboPreviewStatTile(stat, scale, Modifier.fillMaxHeight().weight(1f))
+                    }
+                    if (!showWeather && statsForStrip.isEmpty()) {
+                        Spacer(modifier = Modifier.fillMaxSize())
+                    }
+                }
+                if (stripShowsEventsRow) {
+                    ComboPreviewDividerHorizontal()
                     Row(
-                        modifier = Modifier
-                            .fillMaxHeight()
-                            .weight(2f)
-                            .background(Color(0xFF2F4D80))
-                            .padding((4 * scale).dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth().weight(1f).padding(horizontal = (8 * scale).dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text(text = "${previewState.temperatureF}°F", color = Color.White, fontWeight = FontWeight.Bold,
-                            fontSize = (COMBO_TILE_VALUE_SP * scale).sp)
-                        Text(text = weatherEmoji(previewState.weatherCondition), fontSize = (COMBO_TILE_VALUE_SP * scale).sp)
+                        val next = previewState.notableEvents.firstOrNull()
+                        Text(
+                            text = next?.let { "${it.weekday.take(3)} · ${it.title}" } ?: "Nothing scheduled",
+                            color = PREVIEW_ON_BG, fontWeight = FontWeight.Bold,
+                            fontSize = (COMBO_TILE_VALUE_SP * scale).sp, maxLines = 1,
+                        )
                     }
-                    if (statsForStrip.isNotEmpty()) ComboPreviewDivider()
-                }
-                statsForStrip.forEachIndexed { index, stat ->
-                    if (index > 0) ComboPreviewDivider()
-                    ComboPreviewStatTile(stat, scale, Modifier.fillMaxHeight().weight(1f))
-                }
-                if (!showWeather && statsForStrip.isEmpty()) {
-                    Spacer(modifier = Modifier.fillMaxSize())
                 }
             }
-            if (WidgetSection.NOTABLE_EVENTS in visibleComboSections) {
+            if (!stripShowsEventsRow && WidgetSection.NOTABLE_EVENTS in visibleComboSections) {
                 Text(
                     text = if (previewState.notableEvents.isEmpty()) {
                         "Notable events: nothing scheduled"

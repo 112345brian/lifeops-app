@@ -5,9 +5,11 @@
      minHeight reuses weather_widget_info.xml's own n=1-tier value (56dp,
      the same "well under the n=2 threshold" convention as that file) since
      weather is this project's other short-and-wide single-row preset.
-     Renders via BriefingWidget.kt's ComboGridContent, whose comboLayoutFor
-     picks a dedicated STRIP_4X1 layout (single horizontal row of cells,
-     not the two-column WIDE_4X2 stack) for footprints this short. -->
+     Renders via BriefingWidget.kt's StripFamilyContent, which this preset
+     shares with "LifeOps Strip Tall" (strip_tall_widget_info.xml): the
+     only difference between the two presets is this default placed height;
+     StripFamilyContent itself decides purely from the widget's real placed
+     height whether there's room for the second "next event" row. -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:minWidth="250dp"
     android:minHeight="56dp"

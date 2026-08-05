@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- "LifeOps Strip Tall": the same weather(2x)/gym/money row as "LifeOps
+     Strip" (strip_widget_info.xml), plus a second full-width row for the
+     next upcoming non-task calendar event (confirmed 2026-08-04: "the
+     second row displays the next non-task event I have in my calendar").
+     minWidth matches Strip's (250dp, the n=4 formula floor); minHeight is
+     the n=2 formula floor (70x2-30=110dp, see android/CLAUDE.md) so it
+     lands past StripFamilyContent's own 100dp "room for a second row"
+     threshold by default. minResizeHeight is deliberately set as low as
+     Strip's own (56dp), not 110dp, so this preset can also be resized down
+     to a 1-row strip: both presets share the exact same responsive
+     rendering logic (StripFamilyContent), so there's no reason to forbid
+     either one from covering the other's footprint. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="250dp"
+    android:minHeight="110dp"
+    android:minResizeWidth="250dp"
+    android:minResizeHeight="56dp"
+    android:maxResizeWidth="400dp"
+    android:maxResizeHeight="250dp"
+    android:targetCellWidth="4"
+    android:targetCellHeight="2"
+    android:resizeMode="horizontal|vertical"
+    android:widgetCategory="home_screen"
+    android:updatePeriodMillis="1800000"
+    android:description="@string/widget_description_strip_tall"
+    android:initialLayout="@layout/widget_loading"
+    android:previewLayout="@layout/widget_preview_strip_tall"
+    android:configure="com.lifeops.briefing.WidgetConfigActivity"
+    android:widgetFeatures="reconfigurable" />
