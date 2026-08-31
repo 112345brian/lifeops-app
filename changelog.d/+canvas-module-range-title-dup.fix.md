@@ -1,0 +1,1 @@
+Fixed Canvas sync producing redundant task titles like "M01: M01-M03: Problem Set 1" for assignments Canvas itself names with a module-range prefix — the module number is no longer re-prepended when the assignment name already carries one.

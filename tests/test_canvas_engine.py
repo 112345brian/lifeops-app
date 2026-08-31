@@ -217,6 +217,27 @@ def test_split_assignment_display_name_defaults_to_name():
     assert specs[0]["title"] == "M07: Thing"
 
 
+def test_split_assignment_does_not_double_prefix_module_range_name():
+    # Canvas itself names multi-module assignments "M01-M03: Problem Set 1" --
+    # prepending "M{mod_num:02d}: " on top produced "M01: M01-M03: Problem Set 1".
+    specs = ce.split_assignment(1, "M01-M03: Problem Set 1", "assignment",
+                                D(2026, 7, 20), UNLOCK, None, TODAY)
+    assert all(s["title"].startswith("M01-M03: Problem Set 1") for s in specs)
+    assert not any(s["title"].startswith("M01: M01-M03") for s in specs)
+
+
+def test_split_assignment_does_not_double_prefix_single_module_name():
+    specs = ce.split_assignment(4, "M04: Some Assignment", "reply",
+                                D(2026, 7, 20), UNLOCK, None, TODAY)
+    assert specs[0]["title"] == "M04: Some Assignment"
+
+
+def test_split_assignment_still_prefixes_plain_name():
+    specs = ce.split_assignment(4, "Plain Assignment Name", "reply",
+                                D(2026, 7, 20), UNLOCK, None, TODAY)
+    assert specs[0]["title"] == "M04: Plain Assignment Name"
+
+
 def test_reading_task_source_id_stable_and_distinct():
     a = ce.reading_task(7, "Perry, W.", "Predictive Policing", "documentation",
                         UNLOCK, D(2026, 7, 3), TODAY)

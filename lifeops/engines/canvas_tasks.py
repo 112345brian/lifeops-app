@@ -4,10 +4,18 @@ rules, and task-kwargs construction for assignments and readings.
 Pure decision logic, no I/O.
 """
 import datetime
+import re
 
 from .canvas_dedup import _assignment_source_id, _reading_source_id
 
 DAY = datetime.timedelta(days=1)
+
+# Canvas itself names multi-module assignments with a leading module-range
+# tag ("M01-M03: Problem Set 1", "M09-M12: ... Final Proposal"). Blindly
+# prepending "M{mod_num:02d}: " on top produced nonsense like
+# "M01: M01-M03: Problem Set 1" — skip the prepend whenever the name/
+# display_name already carries its own module (-range) prefix.
+_MOD_PREFIX_RE = re.compile(r"^M\d{1,2}(?:\s*-\s*M?\d{1,2})?\s*:", re.I)
 
 
 # ── assignment classification ──────────────────────────────────────────────────
@@ -94,7 +102,8 @@ def split_assignment(mod_num, name, atype, due_date, unlock_date, readings_due, 
     the "data smell" heuristic below, since a shortened name can drop the
     keywords those look for. Defaults to `name` when omitted.
     """
-    tag   = f"M{mod_num:02d}: {display_name or name}"
+    label = display_name or name
+    tag   = label if _MOD_PREFIX_RE.match(label.strip()) else f"M{mod_num:02d}: {label}"
     start = max(unlock_date, readings_due) if readings_due else unlock_date
     prio  = "high" if due_date and (due_date - today).days <= 3 else "normal"
     source_id = _assignment_source_id(assignment_id)
