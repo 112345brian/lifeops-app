@@ -80,16 +80,22 @@ def _spread(final_due, gaps_before, today=None):
     return dates + [final_due]
 
 
-# fallback durations for assignments Canvas gives us no due date for (unsplit)
+# fallback total-effort minutes for assignments Canvas gives us no due date
+# for (no due date to spread across, so no lead-days either -- see
+# _total_and_lead)
 _NO_DUE_DURATION = {"reply": 40, "discussion": 75, "prospectus": 180, "paper": 195,
                     "final_paper": 480, "final_project": 260, "lab": 260,
                     "assignment": 260, "presentation": 105}
 
-# No single work session should ever run longer than this -- a phase/reading
-# whose estimated duration exceeds it (several do: final_paper phases up to
-# 150min, the "book" reading type at 240min, every _NO_DUE_DURATION fallback
-# except reply/discussion) gets split into multiple chained sub-sessions
-# instead, each within the cap (see _expand_task/_expand_phases below).
+# No single work session should ever run longer than this. Rather than build
+# a few generic phases and then mechanically chop whichever one is too long
+# into "(1/2)"/"(2/2)" halves of the same vague blob -- not an ATOMIC task,
+# just an arbitrary time-slice -- split_assignment instead figures out up
+# front how many real sessions the total estimated effort needs (see
+# phase_count_for) and asks for that many DISTINCT, content-aware session
+# names directly (see llm.propose_assignment_phases / domains/canvas.py's
+# _phase_labels_for), falling back to a generic-but-still-distinct per-atype
+# name list only when no content-aware labels are available.
 _MAX_SESSION_MINUTES = 80
 
 
@@ -97,12 +103,11 @@ def _expand_task(task, max_minutes=_MAX_SESSION_MINUTES):
     """Split one task dict whose durationMinutes exceeds max_minutes into
     several same-day, dependency-chained sub-sessions (title suffixed
     " (i/N)"), each within the cap. Returns a list of 1+ task dicts -- a
-    single-element list, task unchanged, when it already fits. The task's
-    OWN `_dep_title` (if any, e.g. a cross-phase or cross-module dependency)
-    becomes the first sub-session's dep; later sub-sessions chain to the
-    previous one. A `_source_id`, if present, gets a ":session:<i>" suffix
-    per sub-session so each is dedup-tracked independently, same as
-    multi-phase assignments already are."""
+    single-element list, task unchanged, when it already fits. Used for
+    reading_task's "book" type (240min) -- a single reading has no separate
+    logical phases to name, so a plain duration-based split is the best
+    available option there. split_assignment does NOT use this: assignments
+    get real content-aware session names instead (see above)."""
     duration = task["durationMinutes"]
     if duration <= max_minutes:
         return [task]
@@ -128,54 +133,86 @@ def _expand_task(task, max_minutes=_MAX_SESSION_MINUTES):
     return sub_tasks
 
 
-def _expand_phases(phases, max_minutes=_MAX_SESSION_MINUTES):
-    """Run _expand_task over a dependency-chained phase list, rewiring any
-    phase that depended on a since-split predecessor to point at that
-    predecessor's LAST sub-session instead of its (no-longer-existing as a
-    single task) original title."""
-    flat = []
-    last_real_title = {}
-    for phase in phases:
-        dep = phase.get("_dep_title")
-        if dep in last_real_title:
-            phase = {**phase, "_dep_title": last_real_title[dep]}
-        original_title = phase["title"]
-        expanded = _expand_task(phase, max_minutes)
-        flat.extend(expanded)
-        last_real_title[original_title] = expanded[-1]["title"]
-    return flat
+def _split_even(total, n):
+    """n durations summing to `total`, each within 1 minute of total/n."""
+    base, extra = divmod(total, n)
+    return [base + (1 if i < extra else 0) for i in range(n)]
 
-# Default phase names per atype -- used whenever a caller doesn't supply
-# content-aware `phase_labels` (see split_assignment), or supplies the wrong
-# count. Order matters: it's the chronological/dependency-chain order.
+
+def _even_gaps(lead_days, n):
+    """n-1 evenly-spaced day-gaps before the deadline (most lead time first,
+    ending at gap 0 so the last session lands ON the deadline) -- feeds
+    _spread() to produce n total dates for an n-session assignment."""
+    if n <= 1:
+        return []
+    return [round(lead_days * (n - i) / n) for i in range(1, n)]
+
+
+def _is_data_discussion(name):
+    return any(w in name.lower() for w in ("data", "find", "identify", "research", "collect"))
+
+
+# Total estimated effort (minutes) and lead time (days before the deadline
+# the first session should start) per atype -- the basis for how many
+# sessions an assignment needs (phase_count_for: ceil(total/80)) and how
+# they're spread across the calendar (_even_gaps). "discussion_data" is the
+# data-smell-flagged discussion sub-case (see _is_data_discussion); plain
+# discussion/reply fit in one session and need no lead time.
+_TOTAL_MINUTES_WITH_DUE = {
+    "reply": 40, "discussion": 75, "discussion_data": 120,
+    "prospectus": 180, "paper": 195, "final_paper": 480,
+    "final_project": 260, "lab": 260, "assignment": 260, "presentation": 105,
+}
+_LEAD_DAYS = {
+    "discussion_data": 3, "prospectus": 5, "paper": 7, "final_paper": 14,
+    "final_project": 7, "lab": 7, "assignment": 7, "presentation": 3,
+}
+
+# Default session names per atype -- used only when no content-aware
+# `phase_labels` are available (no Canvas description, or the LLM call
+# failed/returned the wrong count). Length MUST match _TOTAL_MINUTES_WITH_DUE
+# ceil-divided by _MAX_SESSION_MINUTES for that key (asserted in tests) --
+# these are still distinct, ordered steps, never a duration-based "(i/N)"
+# split of one name.
 _DEFAULT_PHASE_NAMES = {
-    "discussion":     ["Research", "Write Post"],
-    "prospectus":     ["Outline", "Draft"],
-    "paper":          ["Outline & Notes", "Draft", "Revise"],
-    "final_paper":    ["Incorporate Feedback", "Rewrite & Expand", "Polish & Citations", "Proofread & Submit"],
-    "final_project":  ["Setup & Data Exploration", "Analysis & Visualization", "Write-Up"],
-    "lab":            ["Setup & Data Exploration", "Analysis & Visualization", "Write-Up"],
-    "assignment":     ["Setup & Data Exploration", "Analysis & Visualization", "Write-Up"],
+    "discussion_data": ["Research", "Write Post"],
+    "prospectus":      ["Outline", "Draft", "Polish"],
+    "paper":           ["Outline & Notes", "Draft", "Revise"],
+    "final_paper":     ["Incorporate Feedback", "Rewrite Introduction & Methods",
+                        "Rewrite Results & Discussion", "Polish & Citations",
+                        "Proofread", "Final Formatting & Submit"],
+    "final_project":   ["Setup & Data Exploration", "Analysis", "Visualization", "Write-Up"],
+    "lab":             ["Setup & Data Exploration", "Analysis", "Visualization", "Write-Up"],
+    "assignment":      ["Setup & Data Exploration", "Analysis", "Visualization", "Write-Up"],
+    "presentation":    ["Prepare Slides & Script", "Rehearse & Polish"],
 }
 
 
-def phase_count_for(name, atype, due_date):
-    """How many LOGICAL phases (Outline/Draft/Revise-style) split_assignment
-    will emit for this (name, atype, due_date) -- a pure lookup, safe for
-    callers (e.g. the runner, before it decides whether to bother requesting
-    LLM-authored phase_labels) to call without duplicating split_assignment's
-    own branching. Content-aware phase_labels describe THIS count. Note the
-    actual number of FlowSavvy tasks created can be higher: any phase whose
-    estimated duration exceeds one sitting gets further split into several
-    chained sessions (see _expand_task) -- that split is purely about
-    duration, not about what the phase covers, so it doesn't change how many
-    labels to request."""
-    if due_date is None:
-        return 1
+def _effort_key(name, atype):
+    """Resolves atype (+ the discussion data-smell heuristic) to the key
+    used for total-minutes/lead-days/default-name lookups above."""
     if atype == "discussion":
-        return 2 if any(w in name.lower() for w in
-                        ("data", "find", "identify", "research", "collect")) else 1
-    return len(_DEFAULT_PHASE_NAMES.get(atype, ()))  or 1
+        return "discussion_data" if _is_data_discussion(name) else "discussion"
+    return atype
+
+
+def _total_and_lead(name, atype, due_date):
+    key = _effort_key(name, atype)
+    if due_date is None:
+        return _NO_DUE_DURATION.get(atype, 60), 0
+    return _TOTAL_MINUTES_WITH_DUE.get(key, 60), _LEAD_DAYS.get(key, 0)
+
+
+def phase_count_for(name, atype, due_date):
+    """How many sessions split_assignment will emit for this (name, atype,
+    due_date) -- a pure lookup, safe for callers (e.g. the runner, before it
+    decides whether to bother requesting LLM-authored phase_labels) to call
+    without duplicating split_assignment's own branching. This is the REAL
+    session count (duration-driven, capped at _MAX_SESSION_MINUTES each),
+    not a fixed "3 generic phases" guess -- content-aware phase_labels
+    describe exactly this many distinct, actionable sessions."""
+    total, _ = _total_and_lead(name, atype, due_date)
+    return max(1, -(-total // _MAX_SESSION_MINUTES))
 
 
 def split_assignment(mod_num, name, atype, due_date, unlock_date, readings_due, today,
@@ -193,15 +230,14 @@ def split_assignment(mod_num, name, atype, due_date, unlock_date, readings_due, 
     Study/Evaluation Paper"). `name` itself is still used for classification/
     the "data smell" heuristic below, since a shortened name can drop the
     keywords those look for. Defaults to `name` when omitted.
-    phase_labels: content-aware phase names (e.g. from
+    phase_labels: content-aware session names (e.g. from
     llm.propose_assignment_phases, reading the assignment's actual Canvas
     description) to use INSTEAD of the generic per-atype defaults in
     _DEFAULT_PHASE_NAMES — e.g. ["Pull NYC Open Data", "Clean & Explore",
     "Build Visualizations"] instead of "Setup & Data Exploration"/etc. Used
-    only when its length matches the phase count this atype/due_date
-    combination actually produces (see phase_count_for); otherwise silently
-    falls back to the generic defaults so a stale/malformed/absent label set
-    never breaks scheduling.
+    only when its length matches phase_count_for's result for this
+    (name, atype, due_date); otherwise silently falls back to the generic
+    defaults so a stale/malformed/absent label set never breaks scheduling.
     """
     # The module number/range used to be glued onto the TITLE ("M01: Thing",
     # or "M01: M01-M03: Thing" before that double-prefix fix) -- moved into
@@ -234,92 +270,48 @@ def split_assignment(mod_num, name, atype, due_date, unlock_date, readings_due, 
         }
         return {k: v for k, v in t.items() if v is not None}
 
-    def _valid_labels(for_atype, count):
-        """`phase_labels` when it's a usable override for this many phases,
-        else the generic per-atype default -- a stale/malformed/absent
-        label set (e.g. the LLM call failed, or was cached against a
-        different phase count) must never break scheduling."""
-        if (phase_labels and len(phase_labels) == count
-                and all(isinstance(x, str) and x.strip() for x in phase_labels)):
-            return [x.strip() for x in phase_labels]
-        return _DEFAULT_PHASE_NAMES.get(for_atype, [])
+    key = _effort_key(name, atype)
+    total, lead_days = _total_and_lead(name, atype, due_date)
+    n = max(1, -(-total // _MAX_SESSION_MINUTES))
+    durations = _split_even(total, n)
+    dates = [None] * n if due_date is None else _spread(due_date, _even_gaps(lead_days, n), today)
 
-    def _chain(durations, dates, names):
-        """Build len(durations) dependency-chained tasks: phase i is
-        blockedBy phase i-1, and can start once phase i-1's own due date
-        (dates[i-1]) has passed -- phase 0 starts at `start`."""
-        tasks = []
-        prev_title = None
-        for i, (dur, due, nm) in enumerate(zip(durations, dates, names)):
-            can_start = start if i == 0 else dates[i - 1]
-            title = f"{tag} — {nm}"
-            tasks.append(_task(title, dur, due, can_start, dep_title=prev_title))
-            prev_title = title
-        return tasks
-
-    # No due date from Canvas → phase spreading has nothing to anchor on.
-    # Emit ONE unsplit task with no deadline instead of crashing in _spread.
-    if due_date is None:
-        phases = [_task(tag, _NO_DUE_DURATION.get(atype, 60), None, start)]
-
-    elif atype == "reply":
-        phases = [_task(tag, 40, due_date, start)]
-
-    elif atype == "discussion":
-        # check if it smells like it needs data work first
-        if any(w in name.lower() for w in ("data", "find", "identify", "research", "collect")):
-            dates = _spread(due_date, [3, 0], today)
-            phases = _chain([55, 65], dates, _valid_labels("discussion", 2))
-        else:
-            phases = [_task(tag, 75, due_date, start)]
-
-    elif atype == "prospectus":
-        dates = _spread(due_date, [5, 0], today)
-        phases = _chain([60, 120], dates, _valid_labels("prospectus", 2))
-
-    elif atype == "paper":
-        dates = _spread(due_date, [7, 3, 0], today)
-        phases = _chain([45, 110, 40], dates, _valid_labels("paper", 3))
-
-    elif atype == "final_paper":
-        # 4 phases → 4 gaps; last gap 0 so the final phase lands ON the deadline
-        dates = _spread(due_date, [14, 9, 5, 0], today)
-        phases = _chain([120, 150, 120, 90], dates, _valid_labels("final_paper", 4))
-
-    elif atype in ("final_project", "lab", "assignment"):
-        dates = _spread(due_date, [7, 3, 0], today)
-        phases = _chain([80, 105, 75], dates, _valid_labels(atype, 3))
-
-    elif atype == "presentation":
-        phases = [_task(tag, 105, due_date, start)]
-
+    if n == 1:
+        phases = [_task(tag, durations[0], dates[0], start)]
     else:
-        phases = [_task(tag, 60, due_date, start)]
+        if (phase_labels and len(phase_labels) == n
+                and all(isinstance(x, str) and x.strip() for x in phase_labels)):
+            names = [x.strip() for x in phase_labels]
+        else:
+            names = _DEFAULT_PHASE_NAMES.get(key) or [f"Part {i + 1}" for i in range(n)]
+        phases = []
+        prev_title = None
+        for i in range(n):
+            # no due date -> nothing to sequence sessions BY date, only by
+            # the dependency chain itself -- every session starts eligible
+            # at `start`, same as the single-task no-due-date case always did.
+            can_start = start if (i == 0 or due_date is None) else dates[i - 1]
+            title = f"{tag} — {names[i]}"
+            phases.append(_task(title, durations[i], dates[i], can_start, dep_title=prev_title))
+            prev_title = title
 
     if source_id:
-        total = len(phases)
+        phase_total = len(phases)
         for i, phase in enumerate(phases, start=1):
             # A shared assignment-level source_id across phases would make
             # plan()'s exact-id dedup treat every phase after the first as
             # "already seen" the moment the first phase is created within the
-            # SAME planning run -- silently collapsing e.g. a 3-phase
-            # assignment down to just "Setup & Data Exploration", never
-            # creating "Analysis & Visualization"/"Write-Up" at all. Scope the
-            # id to the phase when there's more than one, so phases of one
-            # assignment can never collide with each other; the same phase
+            # SAME planning run -- silently collapsing a multi-session
+            # assignment down to just its first session. Scope the id to the
+            # phase when there's more than one, so sessions of one assignment
+            # can never collide with each other; the same session
             # re-encountered across repeat module occurrences (or future
             # runs) still shares one id and correctly dedups.
-            phase["_source_id"] = f"{source_id}:phase:{i}" if total > 1 else source_id
-            if total > 1:
+            phase["_source_id"] = f"{source_id}:phase:{i}" if phase_total > 1 else source_id
+            if phase_total > 1:
                 phase["_phase_index"] = i
-                phase["_phase_total"] = total
-    # A phase's estimated duration (or, unsplit, the whole assignment's) can
-    # still exceed one sitting -- e.g. final_paper's 150min "Rewrite & Expand"
-    # phase, or its 480min no-due-date fallback -- so expand AFTER phase
-    # numbering above (phase_index/phase_total describe the logical Outline/
-    # Draft/Revise-style breakdown; every physical session of one phase
-    # shares the same values) but before returning.
-    return _expand_phases(phases)
+                phase["_phase_total"] = phase_total
+    return phases
 
 
 # ── reading tasks ──────────────────────────────────────────────────────────────

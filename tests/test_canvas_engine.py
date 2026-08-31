@@ -173,19 +173,15 @@ def test_split_assignment_tags_source_id_and_phase_count():
     assert len(ids) == 2
 
 
-def test_split_assignment_session_split_gets_its_own_source_id_suffix():
-    # "Draft" (110min) exceeds the 80min cap and becomes 2 sessions -- each
-    # must be independently dedup-tracked (":phase:2:session:1"/":...:session:2"),
-    # while still sharing the same _phase_index/_phase_total (they're both
-    # still "phase 2 of 3", just split across two sittings).
+def test_split_assignment_sessions_have_distinct_phase_ids():
+    # "paper" needs exactly 3 sessions under the 80min cap (195min total ->
+    # 65/65/65) -- each one gets a distinct, stable "assignment:<id>:phase:<n>".
     specs = ce.split_assignment(7, "Thing", "paper", D(2026, 7, 20), UNLOCK, None, TODAY,
                                 assignment_id=555)
-    draft_sessions = [s for s in specs if s["title"].startswith("Thing — Draft")]
-    assert len(draft_sessions) == 2
-    assert draft_sessions[0]["_source_id"] == "assignment:555:phase:2:session:1"
-    assert draft_sessions[1]["_source_id"] == "assignment:555:phase:2:session:2"
-    assert draft_sessions[0]["_phase_index"] == draft_sessions[1]["_phase_index"] == 2
-    assert draft_sessions[0]["_phase_total"] == draft_sessions[1]["_phase_total"] == 3
+    assert [s["_source_id"] for s in specs] == [
+        "assignment:555:phase:1", "assignment:555:phase:2", "assignment:555:phase:3",
+    ]
+    assert all(s["_phase_total"] == 3 for s in specs)
 
 
 def test_split_assignment_single_phase_has_no_phase_count():
@@ -266,34 +262,38 @@ def test_reading_task_notes_have_no_link_line_when_no_url():
 
 
 def test_phase_count_for_matches_actual_split_counts():
+    # session count is duration-driven (ceil(total_minutes/80)), not a fixed
+    # "3 generic phases" guess -- e.g. final_paper's 480min total effort
+    # needs 6 real sessions, not the old 4-phase template's literal count.
     assert ce.phase_count_for("X", "reply", D(2026, 7, 20)) == 1
-    assert ce.phase_count_for("X", "prospectus", D(2026, 7, 20)) == 2
-    assert ce.phase_count_for("X", "paper", D(2026, 7, 20)) == 3
-    assert ce.phase_count_for("X", "final_paper", D(2026, 7, 20)) == 4
-    assert ce.phase_count_for("X", "assignment", D(2026, 7, 20)) == 3
-    assert ce.phase_count_for("X", "assignment", None) == 1          # no due date -> unsplit
-    assert ce.phase_count_for("Find the data", "discussion", D(2026, 7, 20)) == 2
-    assert ce.phase_count_for("Just discuss", "discussion", D(2026, 7, 20)) == 1
+    assert ce.phase_count_for("X", "prospectus", D(2026, 7, 20)) == 3     # 180min / 80
+    assert ce.phase_count_for("X", "paper", D(2026, 7, 20)) == 3          # 195min / 80
+    assert ce.phase_count_for("X", "final_paper", D(2026, 7, 20)) == 6    # 480min / 80
+    assert ce.phase_count_for("X", "assignment", D(2026, 7, 20)) == 4     # 260min / 80
+    assert ce.phase_count_for("X", "assignment", None) == 4               # no-due fallback is also 260min
+    assert ce.phase_count_for("Find the data", "discussion", D(2026, 7, 20)) == 2   # 120min / 80
+    assert ce.phase_count_for("Just discuss", "discussion", D(2026, 7, 20)) == 1    # 75min, fits
 
 
 def test_split_assignment_uses_content_aware_phase_labels():
-    # "Clean & Explore" (the middle phase, 105min) exceeds the 80min session
-    # cap and comes back as its own 2 chained sessions.
-    labels = ["Pull NYC Open Data", "Clean & Explore", "Write Findings"]
+    # "assignment" atype needs 4 sessions (260min total / 80) -- content-aware
+    # labels replace the generic template one-to-one, not by mechanically
+    # slicing a shorter list's durations further.
+    labels = ["Pull NYC Open Data", "Clean the Data", "Build Visualizations", "Write Findings"]
     specs = ce.split_assignment(4, "NYC Open Data Analysis", "assignment", D(2026, 7, 20),
                                 UNLOCK, None, TODAY, phase_labels=labels)
-    phase_words = {s["title"].split(" — ")[-1].split(" (")[0] for s in specs}
-    assert phase_words == set(labels)
-    assert sum(1 for s in specs if "Clean & Explore" in s["title"]) == 2
+    titles = [s["title"].split(" — ")[-1] for s in specs]
+    assert titles == labels
+    assert "(1/" not in "".join(titles), "content-aware labels must not get a duration-split suffix too"
 
 
 def test_split_assignment_falls_back_when_phase_labels_count_mismatches():
     # a stale cache entry from before a re-classification, or a malformed
-    # LLM response -- either way, must not crash or silently drop phases.
+    # LLM response -- either way, must not crash or silently drop sessions.
     specs = ce.split_assignment(4, "X", "assignment", D(2026, 7, 20), UNLOCK, None, TODAY,
                                 phase_labels=["Only One"])
-    phase_words = {s["title"].split(" — ")[-1].split(" (")[0] for s in specs}
-    assert phase_words == {"Setup & Data Exploration", "Analysis & Visualization", "Write-Up"}
+    titles = [s["title"].split(" — ")[-1] for s in specs]
+    assert titles == ["Setup & Data Exploration", "Analysis", "Visualization", "Write-Up"]
 
 
 def test_split_assignment_display_name_used_for_tag_only():
@@ -526,31 +526,30 @@ def test_plan_dedups_by_source_id_even_with_different_title():
 
 
 def test_plan_dedups_each_phase_of_a_split_assignment_independently():
-    # A multi-phase assignment persists ONE source id per phase (further
-    # ":session:<n>"-scoped when that phase itself exceeds the 80min cap --
-    # "Analysis & Visualization" is 105min, so it's phase 2's 2 sessions) --
-    # simulates a prior run having already created phase 1 and phase 2's two
-    # sessions; only phase 3 (Write-Up) should still be missing.
+    # A multi-session assignment persists ONE source id per session
+    # ("assignment:<id>:phase:<n>") -- "Big Project" (default "assignment"
+    # atype) needs 4 -- simulates a prior run having already created
+    # sessions 1-3; only session 4 (Write-Up) should still be missing.
     mod = _module(assignments=[{"id": 77, "name": "Big Project", "due_at": "2026-07-20T23:59:59Z"}])
-    seen = {"assignment:77:phase:1", "assignment:77:phase:2:session:1", "assignment:77:phase:2:session:2"}
+    seen = {"assignment:77:phase:1", "assignment:77:phase:2", "assignment:77:phase:3"}
     out = ce.plan([mod], set(), TODAY, existing_source_ids=seen)
     assert len(out["creates"]) == 1
     assert out["creates"][0]["title"].endswith("Write-Up")
 
 
 def test_plan_creates_every_phase_of_a_split_assignment_on_first_sync():
-    # regression: sharing ONE source_id across all phases of an assignment
-    # made plan() treat phase 2+ as "already seen" the instant phase 1 was
-    # created within the SAME run, silently dropping every phase after the
-    # first -- big assignments never actually got broken into their full set
-    # of session pieces. "Analysis & Visualization" (105min) also exceeds the
-    # 80min session cap and becomes its own 2 chained sessions.
+    # regression: sharing ONE source_id across all sessions of an assignment
+    # made plan() treat session 2+ as "already seen" the instant session 1
+    # was created within the SAME run, silently dropping every session after
+    # the first -- big assignments never actually got broken into their full
+    # set of session pieces.
     mod = _module(assignments=[{"id": 77, "name": "Big Project", "due_at": "2026-07-20T23:59:59Z"}])
     out = ce.plan([mod], set(), TODAY)
     titles = [c["title"] for c in out["creates"]]
     assert len(titles) == 4
     assert any(t.endswith("Setup & Data Exploration") for t in titles)
-    assert sum(1 for t in titles if "Analysis & Visualization" in t) == 2
+    assert any(t.endswith("Analysis") for t in titles)
+    assert any(t.endswith("Visualization") for t in titles)
     assert any(t.endswith("Write-Up") for t in titles)
 
 

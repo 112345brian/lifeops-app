@@ -154,23 +154,20 @@ def test_multi_phase_assignment_dependencies_chain_through_real_creation(tmp_pat
 
     canvas_domain._canvas_sync(cv, lambda s: s, canvas_engine, FakeLLM(), fs, NOW)
 
-    # "Draft" (110min) exceeds the 80min session cap and becomes its own 2
-    # chained sessions -- 4 real tasks for 3 logical phases.
-    assert len(fs.created) == 4, "all sessions should have been created (below the flood guard)"
+    # "paper" needs 3 sessions under the 80min cap (195min total -> 65/65/65).
+    assert len(fs.created) == 3, "all sessions should have been created (below the flood guard)"
     assert [c["title"] for c in fs.created] == [
         "Case Study/Evaluation Paper — Outline & Notes",
-        "Case Study/Evaluation Paper — Draft (1/2)",
-        "Case Study/Evaluation Paper — Draft (2/2)",
+        "Case Study/Evaluation Paper — Draft",
         "Case Study/Evaluation Paper — Revise",
     ]
     # FakeFS.create_task returns ids in creation order ("new-1", "new-2", ...)
     # and plan() emits sessions in chronological order -- assert the chain of
     # real blockedByIds is unbroken start to finish.
-    outline, draft1, draft2, revise = fs.created
+    outline, draft, revise = fs.created
     assert "blockedByIds" not in outline, "the first session has nothing to depend on"
-    assert draft1["blockedByIds"] == ["new-1"]
-    assert draft2["blockedByIds"] == ["new-2"]
-    assert revise["blockedByIds"] == ["new-3"]
+    assert draft["blockedByIds"] == ["new-1"]
+    assert revise["blockedByIds"] == ["new-2"]
 
 
 class FakeLLMPerModuleReadings:
