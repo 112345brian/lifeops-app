@@ -142,6 +142,7 @@ def test_flood_hold_on_one_course_does_not_block_the_other(sandbox, monkeypatch)
 
 def test_legacy_flat_state_migrates_once(sandbox, monkeypatch):
     monkeypatch.setattr(config, "CANVAS_COURSE_ID", "legacy-course")
+    monkeypatch.setattr(config, "CANVAS_COURSES", "")   # force legacy single-course fallback
     monkeypatch.setattr(config, "LIST_COURSE", "legacy-list")
     sp = state_store.logs_path("canvas_state.json")
     state_store.save_json_atomic(sp, {

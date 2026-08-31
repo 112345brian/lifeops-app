@@ -80,6 +80,7 @@ def test_due_date_change_synced_after_all_modules_already_synced(tmp_path, monke
     # already-created task must still propagate to FlowSavvy.
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
     monkeypatch.setattr(config, "CANVAS_COURSE_ID", COURSE_ID)
+    monkeypatch.setattr(config, "CANVAS_COURSES", "")   # force legacy single-course fallback
     monkeypatch.setattr(config, "LIST_COURSE", "list-course")
     _write_state(str(tmp_path), synced_modules=[2],
                  task_titles=["M02: NYC Open Data Analysis [AS.470.703.81.SU26]"])
@@ -109,6 +110,7 @@ def test_no_update_when_due_dates_match(tmp_path, monkeypatch):
     # Fully synced, Canvas due date unchanged → no spurious update_task churn.
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
     monkeypatch.setattr(config, "CANVAS_COURSE_ID", COURSE_ID)
+    monkeypatch.setattr(config, "CANVAS_COURSES", "")   # force legacy single-course fallback
     monkeypatch.setattr(config, "LIST_COURSE", "list-course")
     _write_state(str(tmp_path), synced_modules=[2],
                  task_titles=["M02: NYC Open Data Analysis [AS.470.703.81.SU26]"])

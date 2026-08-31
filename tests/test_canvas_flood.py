@@ -73,6 +73,7 @@ class _FakeFS:
 def sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(history, "ROOT", str(tmp_path))
     monkeypatch.setattr(config, "CANVAS_COURSE_ID", COURSE_ID)
+    monkeypatch.setattr(config, "CANVAS_COURSES", "")   # force legacy single-course fallback
     monkeypatch.setattr(config, "LIST_COURSE", "list-course")
     monkeypatch.setattr(config, "SH_COURSE", "sh-course")
     monkeypatch.setattr(canvas_domain, "_touch", lambda *a, **k: None)

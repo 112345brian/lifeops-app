@@ -60,6 +60,7 @@ def _run_sync(tmp_path, monkeypatch, modules, state):
     # Point history's durable-file root at a throwaway dir.
     monkeypatch.setattr(history, "ROOT", str(tmp_path))
     monkeypatch.setattr(config, "CANVAS_COURSE_ID", COURSE_ID)
+    monkeypatch.setattr(config, "CANVAS_COURSES", "")   # force legacy single-course fallback
     monkeypatch.setattr(config, "LIST_COURSE", "list-course")
 
     state_store.save_json_atomic(state_store.logs_path("canvas_state.json"),
