@@ -29,6 +29,7 @@ from .canvas_tasks import (  # noqa: F401 — re-exported for existing callers
     _spread,
     _NO_DUE_DURATION,
     split_assignment,
+    phase_count_for,
     _READING_DURATION,
     reading_task,
 )
@@ -129,7 +130,8 @@ def plan(modules_data, existing_titles, today, existing_source_ids=None):
             due   = _parse_date(a.get("due_at"))
             specs = split_assignment(num, name, atype, due, unlock, readings_due, today,
                                      assignment_id=a.get("id"),
-                                     display_name=a.get("display_name"))
+                                     display_name=a.get("display_name"),
+                                     phase_labels=a.get("_phase_labels"))
             for spec in specs:
                 sid = spec.get("_source_id")
                 if sid in seen_source_ids:

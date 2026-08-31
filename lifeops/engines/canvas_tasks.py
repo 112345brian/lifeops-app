@@ -85,9 +85,35 @@ _NO_DUE_DURATION = {"reply": 40, "discussion": 75, "prospectus": 180, "paper": 1
                     "final_paper": 480, "final_project": 260, "lab": 260,
                     "assignment": 260, "presentation": 105}
 
+# Default phase names per atype -- used whenever a caller doesn't supply
+# content-aware `phase_labels` (see split_assignment), or supplies the wrong
+# count. Order matters: it's the chronological/dependency-chain order.
+_DEFAULT_PHASE_NAMES = {
+    "discussion":     ["Research", "Write Post"],
+    "prospectus":     ["Outline", "Draft"],
+    "paper":          ["Outline & Notes", "Draft", "Revise"],
+    "final_paper":    ["Incorporate Feedback", "Rewrite & Expand", "Polish & Citations", "Proofread & Submit"],
+    "final_project":  ["Setup & Data Exploration", "Analysis & Visualization", "Write-Up"],
+    "lab":            ["Setup & Data Exploration", "Analysis & Visualization", "Write-Up"],
+    "assignment":     ["Setup & Data Exploration", "Analysis & Visualization", "Write-Up"],
+}
+
+
+def phase_count_for(name, atype, due_date):
+    """How many phases split_assignment will emit for this (name, atype,
+    due_date) -- a pure lookup, safe for callers (e.g. the runner, before
+    it decides whether to bother requesting LLM-authored phase_labels) to
+    call without duplicating split_assignment's own branching."""
+    if due_date is None:
+        return 1
+    if atype == "discussion":
+        return 2 if any(w in name.lower() for w in
+                        ("data", "find", "identify", "research", "collect")) else 1
+    return len(_DEFAULT_PHASE_NAMES.get(atype, ()))  or 1
+
 
 def split_assignment(mod_num, name, atype, due_date, unlock_date, readings_due, today,
-                      assignment_id=None, display_name=None):
+                      assignment_id=None, display_name=None, phase_labels=None):
     """Return list of task kwargs dicts for a single assignment.
 
     due_date, unlock_date, readings_due: datetime.date or None
@@ -101,6 +127,15 @@ def split_assignment(mod_num, name, atype, due_date, unlock_date, readings_due, 
     Study/Evaluation Paper"). `name` itself is still used for classification/
     the "data smell" heuristic below, since a shortened name can drop the
     keywords those look for. Defaults to `name` when omitted.
+    phase_labels: content-aware phase names (e.g. from
+    llm.propose_assignment_phases, reading the assignment's actual Canvas
+    description) to use INSTEAD of the generic per-atype defaults in
+    _DEFAULT_PHASE_NAMES — e.g. ["Pull NYC Open Data", "Clean & Explore",
+    "Build Visualizations"] instead of "Setup & Data Exploration"/etc. Used
+    only when its length matches the phase count this atype/due_date
+    combination actually produces (see phase_count_for); otherwise silently
+    falls back to the generic defaults so a stale/malformed/absent label set
+    never breaks scheduling.
     """
     label = display_name or name
     tag   = label if _MOD_PREFIX_RE.match(label.strip()) else f"M{mod_num:02d}: {label}"
@@ -120,6 +155,29 @@ def split_assignment(mod_num, name, atype, due_date, unlock_date, readings_due, 
         }
         return {k: v for k, v in t.items() if v is not None}
 
+    def _valid_labels(for_atype, count):
+        """`phase_labels` when it's a usable override for this many phases,
+        else the generic per-atype default -- a stale/malformed/absent
+        label set (e.g. the LLM call failed, or was cached against a
+        different phase count) must never break scheduling."""
+        if (phase_labels and len(phase_labels) == count
+                and all(isinstance(x, str) and x.strip() for x in phase_labels)):
+            return [x.strip() for x in phase_labels]
+        return _DEFAULT_PHASE_NAMES.get(for_atype, [])
+
+    def _chain(durations, dates, names):
+        """Build len(durations) dependency-chained tasks: phase i is
+        blockedBy phase i-1, and can start once phase i-1's own due date
+        (dates[i-1]) has passed -- phase 0 starts at `start`."""
+        tasks = []
+        prev_title = None
+        for i, (dur, due, nm) in enumerate(zip(durations, dates, names)):
+            can_start = start if i == 0 else dates[i - 1]
+            title = f"{tag} — {nm}"
+            tasks.append(_task(title, dur, due, can_start, dep_title=prev_title))
+            prev_title = title
+        return tasks
+
     # No due date from Canvas → phase spreading has nothing to anchor on.
     # Emit ONE unsplit task with no deadline instead of crashing in _spread.
     if due_date is None:
@@ -132,50 +190,26 @@ def split_assignment(mod_num, name, atype, due_date, unlock_date, readings_due, 
         # check if it smells like it needs data work first
         if any(w in name.lower() for w in ("data", "find", "identify", "research", "collect")):
             dates = _spread(due_date, [3, 0], today)
-            phases = [
-                _task(f"{tag} — Research",    55, dates[0], start),
-                _task(f"{tag} — Write Post",  65, dates[1], dates[0], dep_title=f"{tag} — Research"),
-            ]
+            phases = _chain([55, 65], dates, _valid_labels("discussion", 2))
         else:
             phases = [_task(tag, 75, due_date, start)]
 
     elif atype == "prospectus":
         dates = _spread(due_date, [5, 0], today)
-        phases = [
-            _task(f"{tag} — Outline",  60, dates[0], start),
-            _task(f"{tag} — Draft",   120, dates[1], dates[0], dep_title=f"{tag} — Outline"),
-        ]
+        phases = _chain([60, 120], dates, _valid_labels("prospectus", 2))
 
     elif atype == "paper":
         dates = _spread(due_date, [7, 3, 0], today)
-        phases = [
-            _task(f"{tag} — Outline & Notes", 45,  dates[0], start),
-            _task(f"{tag} — Draft",          110,  dates[1], dates[0], dep_title=f"{tag} — Outline & Notes"),
-            _task(f"{tag} — Revise",          40,  dates[2], dates[1], dep_title=f"{tag} — Draft"),
-        ]
+        phases = _chain([45, 110, 40], dates, _valid_labels("paper", 3))
 
     elif atype == "final_paper":
-        # 4 phases → 4 gaps; last gap 0 so Proofread & Submit lands ON the deadline
+        # 4 phases → 4 gaps; last gap 0 so the final phase lands ON the deadline
         dates = _spread(due_date, [14, 9, 5, 0], today)
-        phases = [
-            _task(f"{tag} — Incorporate Feedback", 120, dates[0], start),
-            _task(f"{tag} — Rewrite & Expand",     150, dates[1], dates[0],
-                  dep_title=f"{tag} — Incorporate Feedback"),
-            _task(f"{tag} — Polish & Citations",   120, dates[2], dates[1],
-                  dep_title=f"{tag} — Rewrite & Expand"),
-            _task(f"{tag} — Proofread & Submit",    90, dates[3], dates[2],
-                  dep_title=f"{tag} — Polish & Citations"),
-        ]
+        phases = _chain([120, 150, 120, 90], dates, _valid_labels("final_paper", 4))
 
     elif atype in ("final_project", "lab", "assignment"):
         dates = _spread(due_date, [7, 3, 0], today)
-        phases = [
-            _task(f"{tag} — Setup & Data Exploration",  80, dates[0], start),
-            _task(f"{tag} — Analysis & Visualization", 105, dates[1], dates[0],
-                  dep_title=f"{tag} — Setup & Data Exploration"),
-            _task(f"{tag} — Write-Up",                  75, dates[2], dates[1],
-                  dep_title=f"{tag} — Analysis & Visualization"),
-        ]
+        phases = _chain([80, 105, 75], dates, _valid_labels(atype, 3))
 
     elif atype == "presentation":
         phases = [_task(tag, 105, due_date, start)]

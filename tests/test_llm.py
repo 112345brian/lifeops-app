@@ -126,6 +126,61 @@ def test_extract_readings_returns_empty_list_when_client_raises(tmp_path, monkey
     assert llm.extract_readings("page text", 1) == []
 
 
+# ---- propose_assignment_phases ----
+
+def test_propose_assignment_phases_parses_valid_array(tmp_path, monkeypatch):
+    _configure(monkeypatch, tmp_path)
+    _install_fake_client(monkeypatch, json.dumps(["Pull NYC Open Data", "Clean & Explore", "Write Findings"]))
+
+    out = llm.propose_assignment_phases("NYC Open Data Analysis", "Use the NYC open data portal...",
+                                        "assignment", 3)
+    assert out == ["Pull NYC Open Data", "Clean & Explore", "Write Findings"]
+
+
+def test_propose_assignment_phases_rejects_wrong_count(tmp_path, monkeypatch):
+    _configure(monkeypatch, tmp_path)
+    _install_fake_client(monkeypatch, json.dumps(["Only", "Two"]))
+
+    assert llm.propose_assignment_phases("X", "instructions", "assignment", 3) is None
+
+
+def test_propose_assignment_phases_rejects_non_string_items(tmp_path, monkeypatch):
+    _configure(monkeypatch, tmp_path)
+    _install_fake_client(monkeypatch, json.dumps(["Fine", 2, "Also fine"]))
+
+    assert llm.propose_assignment_phases("X", "instructions", "assignment", 3) is None
+
+
+def test_propose_assignment_phases_returns_none_on_malformed_json(tmp_path, monkeypatch):
+    _configure(monkeypatch, tmp_path)
+    _install_fake_client(monkeypatch, "not json")
+
+    assert llm.propose_assignment_phases("X", "instructions", "assignment", 3) is None
+
+
+def test_propose_assignment_phases_returns_none_on_client_error(tmp_path, monkeypatch):
+    _configure(monkeypatch, tmp_path)
+
+    class _Raising:
+        class messages:
+            @staticmethod
+            def create(**kwargs):
+                raise ConnectionError("network down")
+
+    monkeypatch.setattr(llm, "_c", lambda: _Raising())
+
+    assert llm.propose_assignment_phases("X", "instructions", "assignment", 3) is None
+
+
+def test_propose_assignment_phases_skips_call_for_single_phase_or_empty_description(tmp_path, monkeypatch):
+    _configure(monkeypatch, tmp_path)
+    fake = _install_fake_client(monkeypatch, json.dumps(["should", "not", "be", "used"]))
+
+    assert llm.propose_assignment_phases("X", "instructions", "assignment", 1) is None
+    assert llm.propose_assignment_phases("X", "", "assignment", 3) is None
+    assert fake.messages.calls == []   # never actually called the model
+
+
 # ---- shorten_assignment_name ----
 
 def test_shorten_assignment_name_returns_model_text(tmp_path, monkeypatch):

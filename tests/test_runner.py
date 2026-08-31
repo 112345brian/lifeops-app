@@ -123,6 +123,64 @@ def test_display_name_falls_back_to_raw_name_when_llm_fails():
     assert short_titles == {}    # nothing cached -- so a later successful run can still shorten it
 
 
+class _FakePhaseLLM:
+    def __init__(self, labels):
+        self._labels = labels
+        self.calls = 0
+
+    def propose_assignment_phases(self, name, description, atype, count):
+        self.calls += 1
+        return self._labels
+
+
+def _strip_html(s):
+    return s or ""
+
+
+def test_phase_labels_for_returns_none_for_single_phase_assignment():
+    llm = _FakePhaseLLM(["should never be used"])
+    cache = {}
+    a = {"id": 1, "name": "Real Reply", "due_at": "2026-07-20T23:59:59Z", "description": "some text"}
+    assert canvas_domain._phase_labels_for(a, cache, llm, _strip_html) is None
+    assert llm.calls == 0
+    assert cache == {}
+
+
+def test_phase_labels_for_returns_none_without_description():
+    llm = _FakePhaseLLM(["a", "b", "c"])
+    cache = {}
+    a = {"id": 1, "name": "Problem Set 1", "due_at": "2026-07-20T23:59:59Z"}   # no description
+    assert canvas_domain._phase_labels_for(a, cache, llm, _strip_html) is None
+    assert llm.calls == 0
+
+
+def test_phase_labels_for_fetches_and_caches():
+    labels = ["Pull NYC Open Data", "Clean & Explore", "Write Findings"]
+    llm = _FakePhaseLLM(labels)
+    cache = {}
+    a = {"id": 42, "name": "NYC Open Data Analysis", "due_at": "2026-07-20T23:59:59Z",
+         "description": "<p>Use the NYC open data portal...</p>"}
+
+    first = canvas_domain._phase_labels_for(a, cache, llm, _strip_html)
+    assert first == labels
+    assert llm.calls == 1
+    assert cache["42"] == labels
+
+    # second call for the SAME assignment must hit the cache, not the LLM again
+    second = canvas_domain._phase_labels_for(a, cache, llm, _strip_html)
+    assert second == labels
+    assert llm.calls == 1
+
+
+def test_phase_labels_for_falls_back_when_llm_fails():
+    llm = _FakePhaseLLM(None)
+    cache = {}
+    a = {"id": 5, "name": "Problem Set 1", "due_at": "2026-07-20T23:59:59Z",
+         "description": "instructions here"}
+    assert canvas_domain._phase_labels_for(a, cache, llm, _strip_html) is None
+    assert cache == {}   # nothing cached -- a later successful run can still fill it in
+
+
 class _CompleteFakeFlowSavvy:
     def __init__(self):
         self.completed = []

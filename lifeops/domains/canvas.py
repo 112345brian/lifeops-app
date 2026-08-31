@@ -1,6 +1,8 @@
 """Canvas domain: sync newly-unlocked modules into FlowSavvy tasks."""
 import os, datetime
 from .. import actions, config, history, state_store
+from ..engines.canvas_tasks import classify as _classify, phase_count_for
+from ..engines.canvas_engine import _parse_date
 from ._shared import _save_json_atomic, _alert_once, _touch
 
 # Canvas flood guard: a healthy incremental sync creates a handful of tasks; the
@@ -105,6 +107,35 @@ def _display_name(assignment, short_titles, llm):
     return name
 
 
+def _phase_labels_for(assignment, cache, llm, strip_html):
+    """Content-aware phase names for one multi-phase assignment (e.g. "Pull
+    NYC Open Data" / "Clean & Explore" / "Build Visualizations" instead of
+    the generic "Setup & Data Exploration"/"Analysis & Visualization"/
+    "Write-Up" template), read from the assignment's actual Canvas
+    `description` via llm.propose_assignment_phases. Cached per assignment
+    id in `cache` (mutated in place) so the labels stay stable across runs
+    despite the LLM call itself not being deterministic. Returns None
+    (canvas_tasks.split_assignment then falls back to its generic template)
+    for single-phase assignments, an empty description, or any failure."""
+    name = assignment.get("name", "")
+    atype = _classify(name, assignment.get("submission_types", []))
+    due = _parse_date(assignment.get("due_at"))
+    count = phase_count_for(name, atype, due)
+    if count <= 1:
+        return None
+    aid = str(assignment.get("id"))
+    cached = cache.get(aid)
+    if cached and len(cached) == count:
+        return cached
+    description = strip_html(assignment.get("description") or "")
+    if not description:
+        return None
+    labels = llm.propose_assignment_phases(name, description, atype, count)
+    if labels:
+        cache[aid] = labels
+    return labels
+
+
 def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now, course=None):
     """Shared sync body for ONE Canvas course — `cv` is either canvas.Canvas
     or canvas_browser.BrowserCanvas; both expose the same modules/assignments/
@@ -133,6 +164,9 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now, course=None):
     # after, so a task's title stays stable across runs even though the
     # shortening call isn't deterministic between LLM invocations.
     short_titles = st.setdefault("short_titles", {})
+    # Cached content-aware phase names (see _phase_labels_for), keyed by
+    # Canvas assignment id (str) -- same stability rationale as short_titles.
+    phase_labels_cache = st.setdefault("phase_labels", {})
     synced  = set(st["synced_modules"])                 # legacy dedup key: module NUMBER (rename/collision-fragile)
     synced_ids = set(st.get("synced_module_ids", []))   # stable dedup key: Canvas module id
     # `task_titles` persists ONLY the titles THIS engine actually created (see the save block
@@ -283,6 +317,8 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now, course=None):
                 if cid and cid in all_assignments:
                     a = all_assignments[cid]
                     a.setdefault("display_name", _display_name(a, short_titles, llm))
+                    if "_phase_labels" not in a:
+                        a["_phase_labels"] = _phase_labels_for(a, phase_labels_cache, llm, strip_html)
                     asgns.append(a)
             elif item.get("type") == "Page":
                 t = (item.get("title") or "").lower()

@@ -140,6 +140,46 @@ def shorten_assignment_name(name, max_chars=35):
         return None
 
 
+def propose_assignment_phases(name, description_text, atype, phase_count):
+    """Propose `phase_count` content-aware phase names for one Canvas
+    assignment, read from its actual instructions, instead of the generic
+    per-atype template in canvas_tasks._DEFAULT_PHASE_NAMES (e.g. "Pull NYC
+    Open Data" / "Clean & Explore" / "Build Visualizations" instead of the
+    generic "Setup & Data Exploration"/"Analysis & Visualization"/"Write-Up").
+    Returns a list of `phase_count` short strings in chronological/dependency
+    order, or None on any failure or malformed output -- callers
+    (canvas_tasks.split_assignment via its `phase_labels` param) fall back to
+    the generic template whenever this returns anything else."""
+    if phase_count <= 1 or not description_text:
+        return None
+    prompt = (
+        f"An assignment named {name!r} (Canvas type: {atype}) is being broken into "
+        f"{phase_count} sequential work sessions on a task list, each its own calendar task. "
+        "Based on its ACTUAL instructions below, propose short (2-5 word) phase names, in "
+        "chronological order, specific to what this particular assignment requires — not "
+        "generic labels like \"Setup\"/\"Analysis\"/\"Write-Up\" unless the instructions "
+        "genuinely don't support anything more specific. Each name should read naturally as "
+        f"a task-list title suffix (e.g. \"Pull NYC Open Data\", \"Build Visualizations\").\n\n"
+        f"Instructions:\n{description_text[:3000]}\n\n"
+        f"Reply with ONLY a JSON array of exactly {phase_count} strings, in order."
+    )
+    try:
+        msg = _c().messages.create(
+            model=config.JUDGE_MODEL, max_tokens=200,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        _log_usage("propose_assignment_phases", config.JUDGE_MODEL, msg)
+        txt = msg.content[0].text.strip()
+        txt = txt[txt.find("["): txt.rfind("]") + 1]
+        names = json.loads(txt)
+        if (isinstance(names, list) and len(names) == phase_count
+                and all(isinstance(x, str) and x.strip() for x in names)):
+            return [x.strip() for x in names]
+        return None
+    except Exception:
+        return None
+
+
 def weekly_digest(facts):
     """Turn the week's adherence stats into a blunt, supportive accountability
     note. This is NL synthesis — a real LLM job, not deterministic logic."""

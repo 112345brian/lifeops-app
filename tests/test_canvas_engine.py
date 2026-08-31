@@ -207,6 +207,34 @@ def test_reading_task_notes_have_no_link_line_when_no_url():
     assert "- [ ] Downloaded" in t["notes"]
 
 
+def test_phase_count_for_matches_actual_split_counts():
+    assert ce.phase_count_for("X", "reply", D(2026, 7, 20)) == 1
+    assert ce.phase_count_for("X", "prospectus", D(2026, 7, 20)) == 2
+    assert ce.phase_count_for("X", "paper", D(2026, 7, 20)) == 3
+    assert ce.phase_count_for("X", "final_paper", D(2026, 7, 20)) == 4
+    assert ce.phase_count_for("X", "assignment", D(2026, 7, 20)) == 3
+    assert ce.phase_count_for("X", "assignment", None) == 1          # no due date -> unsplit
+    assert ce.phase_count_for("Find the data", "discussion", D(2026, 7, 20)) == 2
+    assert ce.phase_count_for("Just discuss", "discussion", D(2026, 7, 20)) == 1
+
+
+def test_split_assignment_uses_content_aware_phase_labels():
+    labels = ["Pull NYC Open Data", "Clean & Explore", "Write Findings"]
+    specs = ce.split_assignment(4, "NYC Open Data Analysis", "assignment", D(2026, 7, 20),
+                                UNLOCK, None, TODAY, phase_labels=labels)
+    titles = [s["title"].split(" — ")[-1] for s in specs]
+    assert titles == labels
+
+
+def test_split_assignment_falls_back_when_phase_labels_count_mismatches():
+    # a stale cache entry from before a re-classification, or a malformed
+    # LLM response -- either way, must not crash or silently drop phases.
+    specs = ce.split_assignment(4, "X", "assignment", D(2026, 7, 20), UNLOCK, None, TODAY,
+                                phase_labels=["Only One"])
+    titles = [s["title"].split(" — ")[-1] for s in specs]
+    assert titles == ["Setup & Data Exploration", "Analysis & Visualization", "Write-Up"]
+
+
 def test_split_assignment_display_name_used_for_tag_only():
     # display_name shortens the TITLE tag, but the "data smell" classification
     # heuristic inside split_assignment must still see the FULL original name
