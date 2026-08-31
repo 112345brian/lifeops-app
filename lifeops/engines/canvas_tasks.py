@@ -263,7 +263,13 @@ _READING_DURATION = {
 }
 
 def reading_task(mod_num, author, title, rtype, unlock_date, due_date, today, locator=None,
-                 book_title=None, url=None):
+                 book_title=None, url=None, dep_title=None):
+    """dep_title: title of a reading task this one shouldn't be started before
+    (see canvas_engine.plan(), which chains the FIRST reading of each module
+    to the LAST reading of the previous module) -- without it, two readings
+    with no due-date gating (e.g. every module already unlocked on a first
+    sync) are equally schedulable in any order, including module 8's reading
+    before module 6's."""
     duration = _READING_DURATION.get(rtype, 35)
     prio = "high" if due_date and (due_date - today).days <= 3 else "normal"
     short_author = author.split(",")[0].strip() if author else "Source"
@@ -275,7 +281,7 @@ def reading_task(mod_num, author, title, rtype, unlock_date, due_date, today, lo
         "dueDateTime":     f"{due_date.isoformat()}T23:59:00" if due_date else None,
         "canBeStartedAt":  f"{unlock_date.isoformat()}T08:00:00",
         "priority":        prio,
-        "_dep_title":      None,
+        "_dep_title":      dep_title,
         "_source_id":      _reading_source_id(mod_num, author, title),
     }
     # Full citation in notes — the title alone is truncated to 50 chars and

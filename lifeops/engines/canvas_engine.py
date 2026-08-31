@@ -78,6 +78,22 @@ def plan(modules_data, existing_titles, today, existing_source_ids=None):
     run_norms = set()
     seen_source_ids = set(existing_source_ids or ())
 
+    # Process modules in module-number order so reading dependencies (below)
+    # chain chronologically regardless of the order the caller happened to
+    # hand modules_data in.
+    modules_data = sorted(modules_data, key=lambda m: m.get("module_num") or 0)
+    # The title of the last reading CREATED so far (across every module
+    # processed, not just the current one) -- the next module's FIRST new
+    # reading gets blockedBy this, so e.g. Module 8's reading can never be
+    # scheduled before Module 6's even when Canvas gives no real unlock-date
+    # gating between them (confirmed happens: a first sync mid-semester sees
+    # every already-published module as equally "unlocked today"). Readings
+    # WITHIN the same module are left unchained/parallel -- only cross-module
+    # ordering is enforced. Persists across modules with zero new readings
+    # (e.g. everything in that module already existed) so the chain never
+    # silently breaks.
+    prev_module_last_reading = None
+
     for mod in modules_data:
         num         = mod.get("module_num") or 0
         unlock      = mod.get("unlock_date") or today
@@ -98,11 +114,13 @@ def plan(modules_data, existing_titles, today, existing_source_ids=None):
         mod_lines = []
 
         # readings
+        first_new_reading = True   # only the first NEW reading this module gets the cross-module dep
         for r in readings:
+            dep = prev_module_last_reading if first_new_reading else None
             t = reading_task(num, r.get("author",""), r.get("title",""),
                              r.get("type","article"), unlock, readings_due, today,
                              locator=r.get("locator"), book_title=r.get("book_title"),
-                             url=r.get("url"))
+                             url=r.get("url"), dep_title=dep)
             sid = t.get("_source_id")
             if sid in seen_source_ids:
                 skipped_dupes.append(t["title"]); continue
@@ -120,6 +138,8 @@ def plan(modules_data, existing_titles, today, existing_source_ids=None):
                 else:
                     run_norms.add(_normalize_title(t["title"]))
                 mod_lines.append(f"  + {t['title']} ({t['durationMinutes']}m)")
+                first_new_reading = False
+                prev_module_last_reading = t["title"]
             else:
                 skipped_dupes.append(t["title"])
 

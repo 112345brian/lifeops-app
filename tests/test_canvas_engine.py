@@ -375,6 +375,55 @@ def test_plan_report_counts_per_module():
     assert "M07 (+1 tasks):" in out["report"]
     assert "M08 (+1 tasks):" in out["report"]          # per-module, not cumulative
 
+def test_plan_chains_readings_across_modules_in_order():
+    # regression: readings had no dependency at all -- with no real Canvas
+    # unlock-date gating (e.g. a first sync mid-semester, where every already-
+    # published module reports unlock_at=null), nothing stopped a later
+    # module's reading from being scheduled before an earlier one's.
+    mods = [
+        _module(num=6, readings=[{"author": "A", "title": "M6-First", "type": "article"},
+                                 {"author": "A", "title": "M6-Second", "type": "article"}]),
+        _module(num=8, readings=[{"author": "B", "title": "M8-Only", "type": "article"}]),
+    ]
+    out = ce.plan(mods, set(), TODAY)
+    by_title = {c["title"]: c for c in out["creates"]}
+    m6_first  = by_title["Read A, M6-First"]
+    m6_second = by_title["Read A, M6-Second"]
+    m8_only   = by_title["Read B, M8-Only"]
+
+    assert m6_first.get("_dep_title") is None            # nothing before it
+    assert m6_second.get("_dep_title") is None            # same module -- parallel, not chained
+    assert m8_only["_dep_title"] == "Read A, M6-Second"   # blocked by the LAST reading of module 6
+
+
+def test_plan_chains_readings_regardless_of_input_module_order():
+    # module 8 handed in BEFORE module 6 -- plan() must still process them in
+    # module-number order so the dependency points the right direction.
+    mods = [
+        _module(num=8, readings=[{"author": "B", "title": "M8-Only", "type": "article"}]),
+        _module(num=6, readings=[{"author": "A", "title": "M6-Only", "type": "article"}]),
+    ]
+    out = ce.plan(mods, set(), TODAY)
+    by_title = {c["title"]: c for c in out["creates"]}
+    assert by_title["Read A, M6-Only"].get("_dep_title") is None
+    assert by_title["Read B, M8-Only"]["_dep_title"] == "Read A, M6-Only"
+
+
+def test_plan_reading_chain_survives_a_module_with_no_new_readings():
+    # module 7's only reading already exists (deduped) -- module 8's first
+    # reading must still chain back to module 6's, not silently drop the
+    # dependency just because module 7 contributed nothing new.
+    mods = [
+        _module(num=6, readings=[{"author": "A", "title": "M6-Only", "type": "article"}]),
+        _module(num=7, readings=[{"author": "C", "title": "Already Exists", "type": "article"}]),
+        _module(num=8, readings=[{"author": "B", "title": "M8-Only", "type": "article"}]),
+    ]
+    existing = {"Read C, Already Exists"}
+    out = ce.plan(mods, existing, TODAY)
+    by_title = {c["title"]: c for c in out["creates"]}
+    assert by_title["Read B, M8-Only"]["_dep_title"] == "Read A, M6-Only"
+
+
 def test_plan_readings_due_two_days_before_earliest_assignment():
     mod = _module(assignments=[{"name": "R", "due_at": "2026-07-10T23:59:59Z"}],
                   readings=[{"author": "A", "title": "T", "type": "article"}])

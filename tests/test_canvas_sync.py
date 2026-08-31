@@ -167,3 +167,59 @@ def test_multi_phase_assignment_dependencies_chain_through_real_creation(tmp_pat
     assert draft["blockedByIds"] == ["new-1"], "Draft must be blockedBy Outline's real created id"
     assert revise["blockedByIds"] == ["new-2"], "Revise must be blockedBy Draft's real created id"
 
+
+class FakeLLMPerModuleReadings:
+    """Returns one distinct reading per module -- extract_readings only ever
+    sees ONE module's page text per call, so this is keyed off module_num,
+    not off text content."""
+    def __init__(self, by_module):
+        self._by_module = by_module
+
+    def extract_readings(self, text, module_num):
+        return self._by_module.get(module_num, [])
+
+
+def test_reading_dependencies_chain_across_modules_through_real_creation(tmp_path, monkeypatch):
+    # regression: readings had NO dependency at all -- with no real Canvas
+    # unlock-date gating (confirmed on real data: a first sync mid-semester
+    # sees every already-published module as unlocked "today"), nothing
+    # stopped module 8's reading from being scheduled before module 6's.
+    monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
+    monkeypatch.setattr(config, "CANVAS_COURSE_ID", COURSE_ID)
+    monkeypatch.setattr(config, "CANVAS_COURSES", "")   # force legacy single-course fallback
+    monkeypatch.setattr(config, "LIST_COURSE", "list-course")
+    _write_state(str(tmp_path), synced_modules=[], task_titles=[])
+
+    class _CanvasWithReadingsPage(FakeCanvas):
+        def page(self, slug, course_id=None):
+            return {"body": "<p>non-empty so strip_html/extract_readings actually runs</p>"}
+
+    fs = FakeFS(course_tasks=[])
+    page_item = {"type": "Page", "title": "Readings and Resources", "page_url": "readings"}
+    cv = _CanvasWithReadingsPage(
+        # module 8 listed BEFORE module 6 -- must still chain in the right direction
+        modules=[
+            {"id": 200, "name": "Module 8", "unlock_at": "2026-06-20T00:00:00Z", "items": [page_item]},
+            {"id": 100, "name": "Module 6", "unlock_at": "2026-06-20T00:00:00Z", "items": [page_item]},
+        ],
+        assignments=[],
+    )
+    llm = FakeLLMPerModuleReadings({
+        6: [{"author": "A", "title": "M6 Reading", "type": "article"}],
+        8: [{"author": "B", "title": "M8 Reading", "type": "article"}],
+    })
+
+    canvas_domain._canvas_sync(cv, lambda s: s, canvas_engine, llm, fs, NOW)
+
+    assert len(fs.created) == 2
+    # FakeFS.create_task returns ids in creation order ("new-1", "new-2", ...)
+    # and plan() processes modules in module-number order (6 before 8)
+    # regardless of the input order above -- so fs.created[0] is module 6's
+    # reading (id "new-1") and fs.created[1] is module 8's (blockedBy it).
+    m6, m8 = fs.created
+    assert m6["title"] == "Read A, M6 Reading"
+    assert m8["title"] == "Read B, M8 Reading"
+    assert "blockedByIds" not in m6, "the first reading has nothing to depend on"
+    assert m8["blockedByIds"] == ["new-1"], "module 8's reading must be blockedBy module 6's"
+
+
