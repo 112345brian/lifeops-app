@@ -13,20 +13,22 @@ Two historical failure modes these lock down:
 import datetime
 import pytest
 
-from lifeops import runner, history, state_store
+from lifeops import runner, history, state_store, config
 from lifeops.engines import canvas_engine
+
+COURSE_ID = "test-course"
 
 
 class _FakeCanvas:
     def __init__(self, modules):
         self._modules = modules
-    def modules(self):
+    def modules(self, course_id=None):
         return self._modules
-    def assignments(self):
+    def assignments(self, course_id=None):
         return []
-    def page(self, slug):
+    def page(self, slug, course_id=None):
         return {"body": ""}
-    def announcements(self, since_date=None):
+    def announcements(self, since_date=None, course_id=None):
         return []
 
 
@@ -51,16 +53,21 @@ def _module(mod_id, name, unlock="2026-01-01"):
 
 def _run_sync(tmp_path, monkeypatch, modules, state):
     """Run _canvas_sync against fakes, returning the list of module ids that
-    were actually selected for syncing this run (i.e. handed to plan())."""
+    were actually selected for syncing this run (i.e. handed to plan()).
+    `state`/the returned `saved` are the per-course bucket shape — wrapped/
+    unwrapped under courses[COURSE_ID] to match the on-disk nested schema."""
     # Point history's durable-file root at a throwaway dir.
     monkeypatch.setattr(history, "ROOT", str(tmp_path))
+    monkeypatch.setattr(config, "CANVAS_COURSE_ID", COURSE_ID)
+    monkeypatch.setattr(config, "LIST_COURSE", "list-course")
 
-    state_store.save_json_atomic(state_store.logs_path("canvas_state.json"), state)
+    state_store.save_json_atomic(state_store.logs_path("canvas_state.json"),
+                                 {"courses": {COURSE_ID: state}})
 
     # Spy on plan() to capture which modules survived dedup, without running
     # the real task-planning/creation machinery.
     synced_this_run = []
-    def _spy_plan(modules_data, existing_titles, today):
+    def _spy_plan(modules_data, existing_titles, today, existing_source_ids=None):
         synced_this_run.extend(m["_mod_id"] for m in modules_data)
         return {"creates": [], "report": ""}
     monkeypatch.setattr(canvas_engine, "plan", _spy_plan)
@@ -69,7 +76,7 @@ def _run_sync(tmp_path, monkeypatch, modules, state):
     runner._canvas_sync(_FakeCanvas(modules), lambda s: s, canvas_engine,
                         _FakeLLM(), _FakeFlowSavvy(), now)
 
-    saved = state_store.load_json(state_store.logs_path("canvas_state.json"))
+    saved = state_store.load_json(state_store.logs_path("canvas_state.json"))["courses"][COURSE_ID]
     return synced_this_run, saved
 
 

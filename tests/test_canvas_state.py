@@ -32,7 +32,7 @@ class _FakeCanvas:
         self._num = module_num
         self._reading = reading
 
-    def modules(self):
+    def modules(self, course_id=None):
         return [{
             "id": 1000 + self._num,   # stable Canvas module id, distinct from the scraped number
             "name": f"Module {self._num}",
@@ -41,13 +41,13 @@ class _FakeCanvas:
                        "page_url": "readings-page"}],
         }]
 
-    def assignments(self):
+    def assignments(self, course_id=None):
         return []
 
-    def page(self, slug):
+    def page(self, slug, course_id=None):
         return {"body": "some html"}
 
-    def announcements(self, since_date=None):
+    def announcements(self, since_date=None, course_id=None):
         return []
 
 
@@ -76,10 +76,14 @@ class _FakeFS:
         return {}
 
 
+COURSE_ID = "test-course"
+
+
 @pytest.fixture
 def sandbox(tmp_path, monkeypatch):
     """Point history.ROOT at a tmp dir and silence side-effecting helpers."""
     monkeypatch.setattr(history, "ROOT", str(tmp_path))
+    monkeypatch.setattr(config, "CANVAS_COURSE_ID", COURSE_ID)
     monkeypatch.setattr(config, "LIST_COURSE", "list-course")
     monkeypatch.setattr(runner, "_alert_once", lambda *a, **k: None)
     monkeypatch.setattr(runner, "_touch", lambda *a, **k: None)
@@ -88,11 +92,15 @@ def sandbox(tmp_path, monkeypatch):
 
 
 def _write_state(sp, state):
-    state_store.save_json_atomic(sp, state)
+    """`state` is the per-course bucket shape (synced_modules/task_titles/...)
+    — wrapped under courses[COURSE_ID] to match the on-disk nested schema."""
+    state_store.save_json_atomic(sp, {"courses": {COURSE_ID: state}})
 
 
 def _read_state(sp):
-    return state_store.load_json(sp)
+    """Returns the per-course bucket for COURSE_ID (the shape callers care
+    about), unwrapping the top-level {"courses": {...}} nesting."""
+    return state_store.load_json(sp)["courses"][COURSE_ID]
 
 
 def _run(fs, llm, cv):

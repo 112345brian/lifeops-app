@@ -70,11 +70,20 @@ def categorize_unknown(payee, amount, category_names):
 
 def extract_readings(page_text, module_num):
     """Parse a Canvas Readings page into a structured list.
-    Returns [{author, title, type, estimated_minutes, locator}] or [] on failure.
+    Returns [{author, title, type, estimated_minutes, locator, book_title, url}]
+    or [] on failure.
     type: article | blog | chapter | accessible_chapter | tutorial | documentation | book
     locator: chapter/page info as written on the page (e.g. "Ch. 3, pp. 45-67"),
     or "" if the page doesn't specify one — needed in FlowSavvy's task notes so
     the reading is actually findable, since the title alone is truncated/short.
+    book_title: the containing book's title when `title` is just a chapter/
+    excerpt name, or "" when the reading itself IS the whole book/article (so
+    canvas_engine.reading_task's citation doesn't lose which book a chapter's
+    actually from).
+    url: the reading's direct link (JHU library permalink or open-source
+    copy), or "" if none — `page_text` carries it as a trailing "[URL]" after
+    each linked citation (see canvas.strip_html, which preserves <a href> for
+    exactly this).
     """
     prompt = (
         f"Module {module_num} Readings & Resources page:\n\n{page_text[:4000]}\n\n"
@@ -82,7 +91,10 @@ def extract_readings(page_text, module_num):
         '{"author":"Last, F. (or org name)","title":"Short title","type":"article|blog|chapter|'
         'accessible_chapter|tutorial|documentation|book","estimated_minutes":30,'
         '"locator":"chapter/page range as stated, e.g. \'Ch. 3, pp. 45-67\' or \'pp. 12-20\', '
-        'empty string if not specified"}\n'
+        'empty string if not specified","book_title":"the containing book\'s title, ONLY when '
+        '\'title\' is a chapter/excerpt name rather than the book itself — empty string otherwise",'
+        '"url":"the reading\'s own direct link, copied EXACTLY from its trailing \'[URL]\' marker '
+        'in the text above — empty string if it has no such marker. Never invent or guess a URL."}\n'
         "Duration guidelines — article/blog: 20-30, tutorial-with-code: 40-60, "
         "documentation: 45-60, academic chapter: 40-50, accessible chapter: 25-35, "
         "full short book: 240. Return ONLY the JSON array."
@@ -98,6 +110,33 @@ def extract_readings(page_text, module_num):
         return json.loads(txt)
     except Exception:
         return []
+
+def shorten_assignment_name(name, max_chars=35):
+    """Shorten a long Canvas assignment name to a short, still-recognizable
+    task-list label — e.g. "Predictive Policing Case Study/Evaluation Paper"
+    -> "Policing Paper" — instead of a naive character slice, which would cut
+    mid-word/mid-phrase and often lose exactly the words that make the title
+    recognizable. Returns None on any failure; callers fall back to the
+    original name (see runner._display_name, canvas_engine.split_assignment's
+    `display_name`)."""
+    prompt = (
+        f"Shorten this assignment name to at most {max_chars} characters for a task-list "
+        "title. Keep the most identifying words — the core topic and the deliverable type "
+        "(e.g. \"Paper\"/\"Analysis\"/\"Prospectus\") — and drop filler words and genre "
+        "qualifiers. Do not add any word that isn't already in the original. Reply with "
+        f"ONLY the shortened text, no quotes or extra punctuation.\n\nAssignment name: {name!r}"
+    )
+    try:
+        msg = _c().messages.create(
+            model=config.JUDGE_MODEL, max_tokens=30,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        _log_usage("shorten_assignment_name", config.JUDGE_MODEL, msg)
+        short = msg.content[0].text.strip().strip('"').strip("'")
+        return short if short and len(short) <= max_chars * 1.3 else None
+    except Exception:
+        return None
+
 
 def weekly_digest(facts):
     """Turn the week's adherence stats into a blunt, supportive accountability

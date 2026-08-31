@@ -126,6 +126,44 @@ def test_extract_readings_returns_empty_list_when_client_raises(tmp_path, monkey
     assert llm.extract_readings("page text", 1) == []
 
 
+# ---- shorten_assignment_name ----
+
+def test_shorten_assignment_name_returns_model_text(tmp_path, monkeypatch):
+    _configure(monkeypatch, tmp_path)
+    _install_fake_client(monkeypatch, "Policing Paper")
+
+    out = llm.shorten_assignment_name("Predictive Policing Case Study/Evaluation Paper")
+    assert out == "Policing Paper"
+
+
+def test_shorten_assignment_name_strips_surrounding_quotes(tmp_path, monkeypatch):
+    _configure(monkeypatch, tmp_path)
+    _install_fake_client(monkeypatch, '"Policing Paper"')
+
+    assert llm.shorten_assignment_name("Predictive Policing Case Study/Evaluation Paper") == "Policing Paper"
+
+
+def test_shorten_assignment_name_rejects_still_too_long_output(tmp_path, monkeypatch):
+    _configure(monkeypatch, tmp_path)
+    _install_fake_client(monkeypatch, "A" * 100)
+
+    assert llm.shorten_assignment_name("Some Long Name", max_chars=35) is None
+
+
+def test_shorten_assignment_name_returns_none_on_client_error(tmp_path, monkeypatch):
+    _configure(monkeypatch, tmp_path)
+
+    class _Raising:
+        class messages:
+            @staticmethod
+            def create(**kwargs):
+                raise ConnectionError("network down")
+
+    monkeypatch.setattr(llm, "_c", lambda: _Raising())
+
+    assert llm.shorten_assignment_name("Some Long Assignment Name Here") is None
+
+
 # ---- usage logging ----
 # daily_briefing (the original driver for this logging) was retired
 # 2026-07-15 -- categorize_unknown exercises the same _log_usage path.

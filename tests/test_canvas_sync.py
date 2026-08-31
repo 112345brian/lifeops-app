@@ -5,15 +5,15 @@ re-checked on EVERY sync, not just when a new module unlocks. A fully-synced
 course produces an empty modules_data every run; an early return on that
 condition silently disabled due-date re-sync for the rest of the semester.
 """
-import json
 import os
 import datetime
 
-from lifeops import runner
+from lifeops import runner, config
 from lifeops.engines import canvas_engine
 
 
 NOW = datetime.datetime(2026, 7, 8, 9, 0, 0)
+COURSE_ID = "test-course"
 
 
 class FakeCanvas:
@@ -23,16 +23,16 @@ class FakeCanvas:
         self._assignments = assignments
         self._announcements = announcements or []
 
-    def modules(self):
+    def modules(self, course_id=None):
         return self._modules
 
-    def assignments(self):
+    def assignments(self, course_id=None):
         return self._assignments
 
-    def page(self, slug):
+    def page(self, slug, course_id=None):
         return {"body": ""}
 
-    def announcements(self, since_date=None):
+    def announcements(self, since_date=None, course_id=None):
         return self._announcements
 
 
@@ -66,10 +66,11 @@ class FakeLLM:
 
 
 def _write_state(root, synced_modules, task_titles):
-    logs = os.path.join(root, "logs")
-    os.makedirs(logs, exist_ok=True)
-    with open(os.path.join(logs, "canvas_state.json"), "w", encoding="utf-8") as f:
-        json.dump({"synced_modules": synced_modules, "task_titles": task_titles}, f)
+    from lifeops import state_store
+    state_store.save_json_atomic(
+        os.path.join(root, "private", "logs", "canvas_state.json"),
+        {"courses": {COURSE_ID: {"synced_modules": synced_modules, "task_titles": task_titles}}},
+    )
 
 
 def test_due_date_change_synced_after_all_modules_already_synced(tmp_path, monkeypatch):
@@ -77,6 +78,8 @@ def test_due_date_change_synced_after_all_modules_already_synced(tmp_path, monke
     # modules_data is empty this run. A Canvas due-date shift on the
     # already-created task must still propagate to FlowSavvy.
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
+    monkeypatch.setattr(config, "CANVAS_COURSE_ID", COURSE_ID)
+    monkeypatch.setattr(config, "LIST_COURSE", "list-course")
     _write_state(str(tmp_path), synced_modules=[2],
                  task_titles=["M02: NYC Open Data Analysis [AS.470.703.81.SU26]"])
 
@@ -104,6 +107,8 @@ def test_due_date_change_synced_after_all_modules_already_synced(tmp_path, monke
 def test_no_update_when_due_dates_match(tmp_path, monkeypatch):
     # Fully synced, Canvas due date unchanged → no spurious update_task churn.
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
+    monkeypatch.setattr(config, "CANVAS_COURSE_ID", COURSE_ID)
+    monkeypatch.setattr(config, "LIST_COURSE", "list-course")
     _write_state(str(tmp_path), synced_modules=[2],
                  task_titles=["M02: NYC Open Data Analysis [AS.470.703.81.SU26]"])
 

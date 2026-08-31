@@ -127,6 +127,35 @@ CANVAS_TOKEN     = os.environ.get("CANVAS_TOKEN", "")
 CANVAS_BASE_URL  = os.environ.get("CANVAS_BASE_URL", "https://jhu.instructure.com")
 CANVAS_COURSE_ID = os.environ.get("CANVAS_COURSE_ID", "124987")
 SH_COURSE        = os.environ.get("SH_COURSE", "428026")  # FlowSavvy scheduling hours for coursework
+
+# Multiple courses in the same semester (or across semesters, before the old
+# one is removed): "course_id:list_id[:sh_id],..." — one entry per Canvas
+# course, each with its own FlowSavvy list (sh_id optional, defaults to
+# SH_COURSE). Unset = fall back to the single CANVAS_COURSE_ID/LIST_COURSE/
+# SH_COURSE trio above, so existing single-course .env files keep working.
+CANVAS_COURSES   = os.environ.get("CANVAS_COURSES", "")
+
+
+def canvas_courses():
+    """[{'course_id', 'list_id', 'sh_id'}, ...] — one dict per configured
+    course. State (logs/canvas_state.json) is keyed by course_id, which is
+    already stable and semester-specific (a new semester is a new Canvas
+    course id), so this doubles as the per-semester dedup boundary: an old
+    semester's course just stops appearing here and its state bucket is
+    never touched again — no separate archive/rollover step needed."""
+    if not CANVAS_COURSES:
+        if not CANVAS_COURSE_ID:
+            return []
+        return [{"course_id": CANVAS_COURSE_ID, "list_id": LIST_COURSE, "sh_id": SH_COURSE}]
+    courses = []
+    for entry in CANVAS_COURSES.split(","):
+        parts = [p.strip() for p in entry.split(":") if p.strip()]
+        if len(parts) < 2:
+            continue
+        course_id, list_id = parts[0], parts[1]
+        sh_id = parts[2] if len(parts) > 2 else SH_COURSE
+        courses.append({"course_id": course_id, "list_id": list_id, "sh_id": sh_id})
+    return courses
 HEARTBEAT_URL = os.environ.get("HEARTBEAT_URL", "")   # healthchecks.io ping (dead-man's switch)
 SLEEP_OK_MIN = _env_int("SLEEP_OK_MIN", 330)  # min minutes of real sleep to count "rested"
 

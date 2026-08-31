@@ -28,7 +28,7 @@ def test_partner_task_wins_over_generic_friend_note(monkeypatch):
 
 
 class _Canvas:
-    def modules(self):
+    def modules(self, course_id=None):
         return [{
             "id": 1,
             "name": "Module 1",
@@ -36,10 +36,10 @@ class _Canvas:
             "items": [{"type": "Assignment", "content_id": 10}],
         }]
 
-    def assignments(self):
+    def assignments(self, course_id=None):
         return [{"id": 10, "name": "Homework 1", "due_at": "2026-07-12T23:59:00Z"}]
 
-    def announcements(self, since_date=None):
+    def announcements(self, since_date=None, course_id=None):
         return []
 
 
@@ -65,6 +65,7 @@ def test_canvas_failed_creation_still_marks_module_synced(tmp_path, monkeypatch)
     This test documents current upstream behavior; it isn't asserting that
     behavior is correct. Worth a follow-up fix upstream."""
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
+    monkeypatch.setattr(config, "CANVAS_COURSE_ID", "the-course")
     monkeypatch.setattr(config, "LIST_COURSE", "course-list")
     monkeypatch.setattr(config, "SH_COURSE", "course-hours")
 
@@ -72,7 +73,51 @@ def test_canvas_failed_creation_still_marks_module_synced(tmp_path, monkeypatch)
                         _FlowSavvy(), datetime.datetime(2026, 7, 9, 9, 0))
 
     state = state_store.load_json(state_store.logs_path("canvas_state.json"))
-    assert state["synced_modules"] == [1]
+    assert state["courses"]["the-course"]["synced_modules"] == [1]
+
+
+class _FakeShortenLLM:
+    def __init__(self, short):
+        self._short = short
+        self.calls = 0
+
+    def shorten_assignment_name(self, name, max_chars=35):
+        self.calls += 1
+        return self._short
+
+
+def test_display_name_passes_through_short_names_without_calling_llm():
+    llm = _FakeShortenLLM("should never be used")
+    short_titles = {}
+    assert runner._display_name({"id": 1, "name": "Short Name"}, short_titles, llm) == "Short Name"
+    assert llm.calls == 0
+    assert short_titles == {}
+
+
+def test_display_name_shortens_and_caches_long_names():
+    llm = _FakeShortenLLM("Policing Paper")
+    short_titles = {}
+    long_name = "Predictive Policing Case Study/Evaluation Paper"
+    a = {"id": 42, "name": long_name}
+
+    first = runner._display_name(a, short_titles, llm)
+    assert first == "Policing Paper"
+    assert llm.calls == 1
+    assert short_titles["42"] == "Policing Paper"
+
+    # second call for the SAME assignment id must hit the cache, not the LLM
+    # again -- otherwise the title could drift between runs.
+    second = runner._display_name(a, short_titles, llm)
+    assert second == "Policing Paper"
+    assert llm.calls == 1
+
+
+def test_display_name_falls_back_to_raw_name_when_llm_fails():
+    llm = _FakeShortenLLM(None)
+    short_titles = {}
+    long_name = "Predictive Policing Case Study/Evaluation Paper"
+    assert runner._display_name({"id": 7, "name": long_name}, short_titles, llm) == long_name
+    assert short_titles == {}    # nothing cached -- so a later successful run can still shorten it
 
 
 class _CompleteFakeFlowSavvy:

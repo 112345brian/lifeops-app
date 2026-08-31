@@ -376,15 +376,18 @@ def _canvas_status():
     }
 
 def _canvas_pending():
-    """The Canvas flood guard (runner.py) writes logs/canvas_pending.json and
-    HOLDS creation when a sync would make an implausible number of tasks (the
-    state-loss re-sync signature). Surface it so the panel can show what was
-    held and offer a one-tap approve. Returns None when nothing is pending."""
+    """The Canvas flood guard (runner.py) writes logs/canvas_pending.json,
+    keyed by course_id, and HOLDS creation when a sync would make an
+    implausible number of tasks (the state-loss re-sync signature). Surface
+    it so the panel can show what was held per course and offer a one-tap
+    approve. Returns a list (possibly empty) — one entry per course with a
+    held sync."""
     p = state_store.load_json(state_store.logs_path("canvas_pending.json"))
     if not p:
-        return None
-    return {"count": p.get("count"), "at": p.get("at"),
-            "titles": (p.get("titles") or [])[:30]}
+        return []
+    return [{"course_id": course_id, "count": info.get("count"), "at": info.get("at"),
+             "titles": (info.get("titles") or [])[:30]}
+            for course_id, info in p.items()]
 
 def _format_briefing_text(text):
     """Briefing text from the LLM uses **bold** and newlines as plain markup —
@@ -1201,22 +1204,32 @@ def account_canvas_relogin():
     return RedirectResponse(f"/settings?msg={quote('Opening Chrome for Canvas — sign in, then it saves automatically.')}#accounts", 303)
 
 @app.post("/canvas/approve-sync")
-def canvas_approve_sync():
-    """Approve a Canvas sync the flood guard held. Sets a one-shot `flood_ack`
-    (today) in canvas_state.json, then re-runs canvas — the guard bypasses for
-    the day and creates the held tasks through the normal path (no replay)."""
+def canvas_approve_sync(course_id: str = Form(...)):
+    """Approve a Canvas sync the flood guard held for one course. Sets a
+    one-shot `flood_ack` (today) on that course's bucket in canvas_state.json,
+    then re-runs canvas — the guard bypasses for the day and creates the held
+    tasks through the normal path (no replay). Other courses' holds, if any,
+    are untouched."""
     sp = os.path.join(ROOT, "private", "logs", "canvas_state.json")
-    st = state_store.load_json(sp, default={})
-    st["flood_ack"] = datetime.date.today().isoformat()
-    state_store.save_json_atomic(sp, st)
+    st_root = state_store.load_json(sp, default={}) or {}
+    st_root.setdefault("courses", {}).setdefault(course_id, {})["flood_ack"] = \
+        datetime.date.today().isoformat()
+    state_store.save_json_atomic(sp, st_root)
     _run_domain("canvas")
     return RedirectResponse(f"/settings?msg={quote('Approved — creating the held Canvas tasks.')}#canvas", 303)
 
 @app.post("/canvas/dismiss-pending")
-def canvas_dismiss_pending():
-    """Discard a held Canvas sync without creating anything (e.g. you restored
-    canvas_state.json instead). Just removes the pending file."""
-    state_store.delete_key(state_store.logs_path("canvas_pending.json"))
+def canvas_dismiss_pending(course_id: str = Form(...)):
+    """Discard a held Canvas sync for one course without creating anything
+    (e.g. you restored canvas_state.json instead). Removes just that course's
+    entry from the pending file."""
+    pp = state_store.logs_path("canvas_pending.json")
+    pending_all = state_store.load_json(pp, default={}) or {}
+    pending_all.pop(course_id, None)
+    if pending_all:
+        state_store.save_json_atomic(pp, pending_all)
+    else:
+        state_store.delete_key(pp)
     return RedirectResponse(f"/settings?msg={quote('Dismissed the held Canvas sync.')}#canvas", 303)
 
 @app.post("/action/undo")

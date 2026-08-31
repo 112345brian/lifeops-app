@@ -156,17 +156,17 @@ class BrowserCanvas:
 
     # --- same interface as canvas.Canvas ---
 
-    def modules(self):
-        return self._get(f"/api/v1/courses/{self.course}/modules", {"include[]": "items"})
+    def modules(self, course_id=None):
+        return self._get(f"/api/v1/courses/{course_id or self.course}/modules", {"include[]": "items"})
 
-    def assignments(self):
-        return self._get(f"/api/v1/courses/{self.course}/assignments")
+    def assignments(self, course_id=None):
+        return self._get(f"/api/v1/courses/{course_id or self.course}/assignments")
 
-    def page(self, page_url_or_slug):
-        return self._get(f"/api/v1/courses/{self.course}/pages/{page_url_or_slug}")
+    def page(self, page_url_or_slug, course_id=None):
+        return self._get(f"/api/v1/courses/{course_id or self.course}/pages/{page_url_or_slug}")
 
-    def announcements(self, since_date=None):
-        extra = {"context_codes[]": f"course_{self.course}"}
+    def announcements(self, since_date=None, course_id=None):
+        extra = {"context_codes[]": f"course_{course_id or self.course}"}
         if since_date:
             extra["start_date"] = since_date
         return self._get("/api/v1/announcements", extra)

@@ -23,6 +23,12 @@ _PRIO = {"urgent": "urgent", "high": "high", "none": "default"}
 # a re-sync, not that many real new tasks — so hold and ask instead of flooding.
 _CANVAS_FLOOD_MAX = 8
 
+# Assignment names longer than this get LLM-shortened for the task TITLE only
+# (see llm.shorten_assignment_name / canvas_engine.split_assignment's
+# `display_name`) — a naive character slice would cut mid-phrase and lose the
+# words that make a long name recognizable in a task list.
+_ASSIGNMENT_NAME_SHORTEN_THRESHOLD = 35
+
 def _save_json_atomic(path, data):
     state_store.save_json_atomic(path, data)
 
@@ -824,7 +830,8 @@ def run_cashflow(fs, yn, now):
     print(f"[cashflow] 4wk projected; dips={proj['dips_below_zero']}")
 
 def run_canvas(fs, yn, now):
-    """Sync newly-unlocked Canvas modules → FlowSavvy tasks.
+    """Sync newly-unlocked Canvas modules → FlowSavvy tasks, once per
+    configured course (see config.canvas_courses()).
 
     Runs once per day. Two credential paths, tried in order:
       1. CANVAS_TOKEN (real API token) — used directly if set.
@@ -832,16 +839,29 @@ def run_canvas(fs, yn, now):
          when no token exists (JHU disables self-service tokens). Requires
          a one-time interactive login: `python scripts/canvas_login.py`.
          If that session has since expired, alerts instead of failing quiet.
-    State: logs/canvas_state.json — tracks which modules have been synced
-    and which task titles already exist (prevents duplicates across runs).
+    BrowserCanvas is expensive to construct (launches a persistent browser
+    context), so one instance is reused across every configured course
+    rather than one per course — see canvas_browser's per-call `course_id`
+    override.
+    State: logs/canvas_state.json — tracks, per course id, which modules
+    have been synced and which task titles already exist (prevents
+    duplicates across runs, and doubles as a per-semester dedup log since a
+    new semester is a new Canvas course id).
     """
     from .canvas import strip_html
     from .engines import canvas_engine
     from . import llm
 
+    courses = config.canvas_courses()
+    if not courses:
+        print("[canvas] skip (no CANVAS_COURSES / CANVAS_COURSE_ID configured)")
+        return
+
     if config.CANVAS_TOKEN:
         from .canvas import Canvas
-        _canvas_sync(Canvas(), strip_html, canvas_engine, llm, fs, now)
+        cv = Canvas()
+        for course in courses:
+            _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now, course)
         return
 
     from . import canvas_browser
@@ -858,18 +878,74 @@ def run_canvas(fs, yn, now):
                             click_anchor="settings#accounts")
                 print("[canvas] skip (browser session expired)")
                 return
-            _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now)
+            for course in courses:
+                _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now, course)
     except Exception as e:
         print(f"[canvas] browser session error: {e}")
 
 
-def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now):
-    """Shared sync body — `cv` is either canvas.Canvas or
-    canvas_browser.BrowserCanvas; both expose the same modules/assignments/
-    page/announcements interface, so this logic doesn't care which."""
+def _migrate_legacy_canvas_state(st_root, legacy_course_id):
+    """One-time migration: pre-multi-course canvas_state.json stored
+    synced_modules/task_titles/etc. flat at the top level for the single
+    configured course. Wrap them under courses[<course_id>] once — a
+    "courses" key already present means this has already run (or the state
+    was always empty), so this is idempotent."""
+    if "courses" in st_root:
+        return
+    legacy_keys = ("synced_modules", "synced_module_ids", "task_titles",
+                   "completed_cache", "flood_ack")
+    bucket = {k: st_root.pop(k) for k in legacy_keys if k in st_root}
+    st_root["courses"] = {legacy_course_id: bucket} if bucket else {}
+
+
+def _display_name(assignment, short_titles, llm):
+    """The name to render in a task title — LLM-shortened when the raw
+    Canvas name is too long for a task-list title, cached per assignment id
+    in `short_titles` (mutated in place) so the title stays stable across
+    runs even though the LLM call itself isn't deterministic. Falls back to
+    the raw name whenever shortening isn't needed or the call fails."""
+    name = assignment.get("name", "")
+    if len(name) <= _ASSIGNMENT_NAME_SHORTEN_THRESHOLD:
+        return name
+    aid = str(assignment.get("id"))
+    cached = short_titles.get(aid)
+    if cached:
+        return cached
+    short = llm.shorten_assignment_name(name, max_chars=_ASSIGNMENT_NAME_SHORTEN_THRESHOLD)
+    if short:
+        short_titles[aid] = short
+        return short
+    return name
+
+
+def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now, course=None):
+    """Shared sync body for ONE Canvas course — `cv` is either canvas.Canvas
+    or canvas_browser.BrowserCanvas; both expose the same modules/assignments/
+    page/announcements interface (with an optional course_id override), so
+    this logic doesn't care which. `course` is a dict from
+    config.canvas_courses() ({'course_id', 'list_id', 'sh_id'}); defaults to
+    the first configured course when omitted, for callers/tests written
+    before multi-course support."""
+    if course is None:
+        courses = config.canvas_courses()
+        if not courses:
+            print("[canvas] skip (no course configured)")
+            return
+        course = courses[0]
+    course_id = course["course_id"]
+
     sp = os.path.join(history.ROOT, "private", "logs", "canvas_state.json")
-    st = {"synced_modules": [], "task_titles": []}
-    st.update(state_store.load_json(sp, default={}))
+    st_root = state_store.load_json(sp, default={}) or {}
+    _migrate_legacy_canvas_state(st_root, course_id)
+    st = st_root["courses"].setdefault(course_id, {})
+    st.setdefault("synced_modules", [])
+    st.setdefault("task_titles", [])
+    st.setdefault("source_ids", [])
+    # Cached LLM-shortened assignment names, keyed by Canvas assignment id
+    # (str) — computed once (see _display_name below) and reused forever
+    # after, so a task's title stays stable across runs even though the
+    # shortening call isn't deterministic between LLM invocations.
+    short_titles = st.setdefault("short_titles", {})
     synced  = set(st["synced_modules"])                 # legacy dedup key: module NUMBER (rename/collision-fragile)
     synced_ids = set(st.get("synced_module_ids", []))   # stable dedup key: Canvas module id
     # `task_titles` persists ONLY the titles THIS engine actually created (see the save block
@@ -882,6 +958,11 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now):
     # evicted title lived on forever inside task_titles, so the cache never actually forgot.
     created_persisted = set(st["task_titles"])
     seen_titles = set(created_persisted)
+    # `source_ids` mirrors task_titles but as the exact-match `[canvas-ref: ...]`
+    # keys (see canvas_engine.extract_source_ids) — augmented below with ids
+    # scraped live out of FlowSavvy notes, same pattern as seen_titles.
+    created_source_ids = set(st["source_ids"])
+    seen_source_ids = set(created_source_ids)
     today = now.date()
 
     # 20-day rolling cache of completed task titles (avoids re-fetching history each run)
@@ -891,14 +972,15 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now):
     seen_titles.update(completed_cache)
 
     # pull live FlowSavvy titles — both incomplete and recently completed.
-    # No `query` filter: LIST_COURSE is a dedicated Canvas-sourced list, so
-    # scoping by listId alone is sufficient — a substring filter like "M0"
-    # would silently stop matching once modules reach M10+.
+    # No `query` filter: this course's list_id is a dedicated Canvas-sourced
+    # list, so scoping by listId alone is sufficient — a substring filter
+    # like "M0" would silently stop matching once modules reach M10+.
     existing = []
     try:
-        existing = fs.list_items(itemType="task", listId=config.LIST_COURSE,
+        existing = fs.list_items(itemType="task", listId=course["list_id"],
                                  completed=False).get("items", [])
         seen_titles.update(t.get("title", "") for t in existing)
+        seen_source_ids.update(canvas_engine.extract_source_ids(t.get("notes", "") for t in existing))
     except Exception:
         pass
 
@@ -911,32 +993,33 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now):
     # reliably be recovered from here (we don't know which modules were
     # truly already synced) but it should never again fail silently.
     if not synced and not synced_ids and len(existing) >= 5:
-        _alert_once("canvas:state-reset:" + today.isoformat(),
-                    f"⚠️ Canvas sync state looks lost (0 modules marked "
-                    f"synced, but {len(existing)} tasks already exist in "
+        _alert_once("canvas:state-reset:" + course_id + ":" + today.isoformat(),
+                    f"⚠️ Canvas sync state looks lost for course {course_id} (0 modules "
+                    f"marked synced, but {len(existing)} tasks already exist in "
                     f"FlowSavvy) — about to re-extract every unlocked "
                     f"module from scratch. Check logs/canvas_state.json "
                     f"before this creates near-duplicates.", "high")
     try:
-        done = fs.list_items(itemType="task", listId=config.LIST_COURSE,
+        done = fs.list_items(itemType="task", listId=course["list_id"],
                              completed=True).get("items", [])
         for t in done:
             title = t.get("title", "")
             if title and title not in completed_cache:
                 completed_cache[title] = (t.get("lastModified") or today.isoformat())[:10]
         seen_titles.update(completed_cache)
+        seen_source_ids.update(canvas_engine.extract_source_ids(t.get("notes", "") for t in done))
     except Exception:
         pass
 
     try:
-        modules = cv.modules()
+        modules = cv.modules(course_id=course_id)
     except Exception as e:
         # Same severity as the browser-session-expired path (both credential
         # paths must alert identically on auth failure — a revoked/stale
         # CANVAS_TOKEN should not degrade to print-only, which is silently
         # discarded under pythonw).
-        _alert_once("canvas:token:" + now.date().isoformat(),
-                    f"Canvas sync failed (token may be revoked/expired): {e}", "high")
+        _alert_once("canvas:token:" + course_id + ":" + now.date().isoformat(),
+                    f"Canvas sync failed for course {course_id} (token may be revoked/expired): {e}", "high")
         print(f"[canvas] failed to fetch modules: {e}"); return
 
     modules_data = []
@@ -995,7 +1078,7 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now):
     # AND to re-check due dates on already-synced tasks below, so this fetch must
     # happen even on the no-new-modules path.
     try:
-        all_assignments = {a["id"]: a for a in cv.assignments()}
+        all_assignments = {a["id"]: a for a in cv.assignments(course_id=course_id)}
     except Exception as e:
         print(f"[canvas] failed to fetch assignments: {e}"); return
 
@@ -1011,7 +1094,9 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now):
             if item.get("type") == "Assignment":
                 cid = item.get("content_id")
                 if cid and cid in all_assignments:
-                    asgns.append(all_assignments[cid])
+                    a = all_assignments[cid]
+                    a.setdefault("display_name", _display_name(a, short_titles, llm))
+                    asgns.append(a)
             elif item.get("type") == "Page":
                 t = (item.get("title") or "").lower()
                 if any(w in t for w in ("reading", "resource", "material")):
@@ -1023,7 +1108,7 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now):
         readings = []
         for slug in reading_page_slugs:
             try:
-                page = cv.page(slug)
+                page = cv.page(slug, course_id=course_id)
                 text = strip_html(page.get("body") or "")
                 if text:
                     readings.extend(llm.extract_readings(text, mod["module_num"]))
@@ -1034,7 +1119,8 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now):
         mod["readings"]    = readings
 
     # plan
-    result = canvas_engine.plan(modules_data, seen_titles, today)
+    result = canvas_engine.plan(modules_data, seen_titles, today,
+                                existing_source_ids=seen_source_ids)
 
     # Flood guard — HOLD instead of flooding when a run wants to create an
     # implausible number of tasks (the state-loss re-sync signature). Write the
@@ -1043,29 +1129,43 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now):
     # the next unapproved run re-triggers the guard). Approving from the panel
     # sets `flood_ack` = today in canvas_state.json and re-runs canvas; the guard
     # bypasses for that day and creates normally — no replay logic needed.
+    # canvas_pending.json is keyed by course_id so a hold on one course never
+    # blocks or clobbers another course's pending/normal sync.
     creates = result.get("creates", [])
     pp = os.path.join(history.ROOT, "private", "logs", "canvas_pending.json")
+    pending_all = state_store.load_json(pp, default={}) or {}
     if len(creates) > _CANVAS_FLOOD_MAX and st.get("flood_ack") != today.isoformat():
-        _save_json_atomic(pp, {"at": now.isoformat(), "count": len(creates),
-                               "report": result.get("report", ""),
-                               "titles": [c.get("title") for c in creates]})
-        _alert_once("canvas:flood:" + today.isoformat(),
-                    f"⚠️ Canvas sync wanted to create {len(creates)} tasks — held as suspicious "
-                    f"(usually a state-loss re-sync, not that many real new tasks). "
-                    f"Review + approve in the panel.", "high", click_anchor="settings#canvas")
-        print(f"[canvas] HELD {len(creates)} creates (flood guard > {_CANVAS_FLOOD_MAX})")
+        pending_all[course_id] = {"at": now.isoformat(), "count": len(creates),
+                                  "report": result.get("report", ""),
+                                  "titles": [c.get("title") for c in creates]}
+        _save_json_atomic(pp, pending_all)
+        _alert_once("canvas:flood:" + course_id + ":" + today.isoformat(),
+                    f"⚠️ Canvas sync for course {course_id} wanted to create {len(creates)} tasks — "
+                    f"held as suspicious (usually a state-loss re-sync, not that many real new "
+                    f"tasks). Review + approve in the panel.", "high", click_anchor="settings#canvas")
+        print(f"[canvas] HELD {len(creates)} creates for course {course_id} (flood guard > {_CANVAS_FLOOD_MAX})")
         return
-    # Cleared the guard: consume the one-shot ack and drop any stale pending state.
+    # Cleared the guard: consume the one-shot ack and drop any stale pending state
+    # for THIS course only.
     st.pop("flood_ack", None)
-    state_store.delete_key(pp)
+    if pending_all.pop(course_id, None) is not None:
+        if pending_all:
+            _save_json_atomic(pp, pending_all)
+        else:
+            state_store.delete_key(pp)
 
     # apply: create tasks in FlowSavvy
     created_titles = {}   # title → id (for dependency wiring)
     for spec in result["creates"]:
         dep_title = spec.pop("_dep_title", None)
+        source_id = spec.pop("_source_id", None)
+        phase_index = spec.pop("_phase_index", None)
+        phase_total = spec.pop("_phase_total", None)
+        spec["notes"] = canvas_engine.format_ref_note(spec.get("notes", ""), source_id,
+                                                       phase_index, phase_total)
         kwargs = {
-            "listId":            config.LIST_COURSE,
-            "schedulingHoursId": config.SH_COURSE,
+            "listId":            course["list_id"],
+            "schedulingHoursId": course["sh_id"],
             "isAutoScheduled":   True,
             **spec,
         }
@@ -1077,6 +1177,8 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now):
             tid = (r or {}).get("id") or (r or {}).get("item", {}).get("id")
             if tid:
                 created_titles[spec["title"]] = tid
+            if source_id:
+                created_source_ids.add(source_id)
             # durable audit trail — creations must survive discarded stdout.
             # creates_task=True tells the History page's undo button that
             # meta.id is a FlowSavvy item THIS log entry created (so undo
@@ -1099,7 +1201,7 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now):
             if not new_due:
                 continue
             # search FlowSavvy for matching title fragments
-            for item in fs.list_items(itemType="task", listId=config.LIST_COURSE,
+            for item in fs.list_items(itemType="task", listId=course["list_id"],
                                       completed=False, query=name[:30]).get("items", []):
                 # only the unsplit / final task carries the Canvas due date;
                 # phase tasks ("… — Draft") have staggered dues — leave them be
@@ -1120,7 +1222,7 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now):
     try:
         import datetime as _dt
         since = (_dt.date.today() - _dt.timedelta(days=7)).isoformat()
-        announcements = cv.announcements(since_date=since)
+        announcements = cv.announcements(since_date=since, course_id=course_id)
         for ann in announcements[:3]:
             title = ann.get("title", "")
             posted = (ann.get("posted_at") or "")[:10]
@@ -1141,12 +1243,14 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now):
     st["synced_modules"]     = sorted(synced)
     st["synced_module_ids"]  = sorted(synced_ids)
     st["task_titles"]        = sorted(created_persisted)
+    st["source_ids"]         = sorted(created_source_ids)
     st["completed_cache"]    = completed_cache
+    st_root["courses"][course_id] = st
     os.makedirs(os.path.dirname(sp), exist_ok=True)
-    _save_json_atomic(sp, st)
+    _save_json_atomic(sp, st_root)
 
     n = len(created_titles)
-    print(f"[canvas] {n} task(s) created\n{result['report']}")
+    print(f"[canvas] {n} task(s) created for course {course_id}\n{result['report']}")
 
 
 DOMAINS = {"gym": run_gym, "ynab": run_ynab, "chore": run_chore, "catchup": run_catchup,

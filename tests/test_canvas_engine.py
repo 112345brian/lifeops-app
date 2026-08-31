@@ -134,6 +134,30 @@ def test_start_respects_readings_due():
     assert specs[0]["canBeStartedAt"].startswith("2026-07-03")
 
 
+def test_split_assignment_tags_source_id_and_phase_count():
+    specs = ce.split_assignment(7, "Thing", "paper", D(2026, 7, 20), UNLOCK, None, TODAY,
+                                assignment_id=555)
+    assert len(specs) == 3
+    for i, s in enumerate(specs, start=1):
+        assert s["_source_id"] == "assignment:555"
+        assert s["_phase_index"] == i
+        assert s["_phase_total"] == 3
+
+
+def test_split_assignment_single_phase_has_no_phase_count():
+    specs = ce.split_assignment(7, "Thing", "reply", D(2026, 7, 20), UNLOCK, None, TODAY,
+                                assignment_id=555)
+    assert len(specs) == 1
+    assert specs[0]["_source_id"] == "assignment:555"
+    assert "_phase_index" not in specs[0]
+    assert "_phase_total" not in specs[0]
+
+
+def test_split_assignment_no_id_no_source_tag():
+    specs = ce.split_assignment(7, "Thing", "reply", D(2026, 7, 20), UNLOCK, None, TODAY)
+    assert "_source_id" not in specs[0]
+
+
 # ── reading_task ────────────────────────────────────────────────────────────────
 
 def test_reading_task_duration_by_type():
@@ -146,6 +170,63 @@ def test_reading_task_duration_by_type():
 def test_reading_task_unknown_type_default():
     t = ce.reading_task(7, "X", "Y", "weird", UNLOCK, D(2026, 7, 3), TODAY)
     assert t["durationMinutes"] == 35
+
+
+def test_reading_task_notes_include_full_citation_url_and_checkbox():
+    t = ce.reading_task(7, "Perry, W.", "Ch. 3: Predictive Policing", "chapter",
+                        UNLOCK, D(2026, 7, 3), TODAY, locator="Ch. 3, pp. 45-67",
+                        book_title="Policing the Planet", url="https://example.com/book")
+    notes = t["notes"]
+    assert "Ch. 3: Predictive Policing" in notes
+    assert "by Perry, W." in notes
+    assert "in Policing the Planet" in notes
+    assert "Ch. 3, pp. 45-67" in notes
+    assert "Type: chapter" in notes
+    assert "Link: https://example.com/book" in notes
+    assert "- [ ] Downloaded" in notes
+
+
+def test_reading_task_notes_omit_book_title_when_same_as_title():
+    # the reading itself IS the book/article -- book_title equal to title
+    # would just repeat the citation, not add information.
+    t = ce.reading_task(7, "A", "Some Article", "article", UNLOCK, D(2026, 7, 3), TODAY,
+                        book_title="Some Article")
+    assert " in Some Article" not in t["notes"]
+
+
+def test_reading_task_notes_have_no_link_line_when_no_url():
+    t = ce.reading_task(7, "A", "Some Article", "article", UNLOCK, D(2026, 7, 3), TODAY)
+    assert "Link:" not in t["notes"]
+    assert "- [ ] Downloaded" in t["notes"]
+
+
+def test_split_assignment_display_name_used_for_tag_only():
+    # display_name shortens the TITLE tag, but the "data smell" classification
+    # heuristic inside split_assignment must still see the FULL original name
+    # -- a shortened display_name could easily have dropped "data"/"find"/etc.
+    specs = ce.split_assignment(4, "Identifying and Sharing an API for Urban Data",
+                                "discussion", D(2026, 7, 5), UNLOCK, None, TODAY,
+                                display_name="API Discussion")
+    assert len(specs) == 2                       # still split -- "data" matched in the full name
+    assert all("API Discussion" in s["title"] for s in specs)
+    assert all("Identifying and Sharing" not in s["title"] for s in specs)
+
+
+def test_split_assignment_display_name_defaults_to_name():
+    specs = ce.split_assignment(7, "Thing", "reply", D(2026, 7, 20), UNLOCK, None, TODAY)
+    assert specs[0]["title"] == "M07: Thing"
+
+
+def test_reading_task_source_id_stable_and_distinct():
+    a = ce.reading_task(7, "Perry, W.", "Predictive Policing", "documentation",
+                        UNLOCK, D(2026, 7, 3), TODAY)
+    b = ce.reading_task(7, "Perry, W.", "Predictive Policing", "documentation",
+                        UNLOCK, D(2026, 7, 3), TODAY)
+    c = ce.reading_task(7, "Perry, W.", "A Different Reading", "documentation",
+                        UNLOCK, D(2026, 7, 3), TODAY)
+    assert a["_source_id"] == b["_source_id"]     # deterministic for identical inputs
+    assert a["_source_id"] != c["_source_id"]     # distinct readings, distinct ids
+    assert a["_source_id"].startswith("reading:")
 
 
 # ── plan ────────────────────────────────────────────────────────────────────────
@@ -243,6 +324,38 @@ def test_plan_missing_unlock_defaults_to_today():
     out = ce.plan([mod], set(), TODAY)          # no unlock_date key at all
     assert len(out["creates"]) == 1
     assert out["creates"][0]["canBeStartedAt"].startswith(TODAY.isoformat())
+
+
+def test_plan_dedups_by_source_id_even_with_different_title():
+    # A resplit/reworded task for the same Canvas assignment must not be
+    # recreated just because its title no longer matches — the exact-id check
+    # is authoritative over the fuzzy title check.
+    mod = _module(assignments=[{"id": 42, "name": "Totally Reworded Title",
+                                "due_at": "2026-07-20T23:59:59Z"}])
+    out = ce.plan([mod], set(), TODAY, existing_source_ids={"assignment:42"})
+    assert out["creates"] == []
+    assert "skipped" in out["report"]
+
+
+def test_plan_creates_when_source_id_not_seen():
+    mod = _module(assignments=[{"id": 42, "name": "Real Reply",
+                                "due_at": "2026-07-05T23:59:59Z"}])
+    out = ce.plan([mod], set(), TODAY, existing_source_ids={"assignment:999"})
+    assert len(out["creates"]) == 1
+
+
+def test_extract_source_ids_scrapes_ref_markers():
+    notes = ["some notes\n\n[canvas-ref: assignment:7]", "no marker here", None]
+    assert ce.extract_source_ids(notes) == {"assignment:7"}
+
+
+def test_format_ref_note_appends_marker_and_phase():
+    note = ce.format_ref_note("original notes", "assignment:7", phase_index=2, phase_total=3)
+    assert "original notes" in note
+    assert "[canvas-ref: assignment:7]" in note
+    assert "part 2 of 3" in note
+    assert ce.format_ref_note("", "assignment:7") == "[canvas-ref: assignment:7]"
+    assert ce.format_ref_note("notes", None) == "notes"
 
 
 # ── _parse_date ─────────────────────────────────────────────────────────────────

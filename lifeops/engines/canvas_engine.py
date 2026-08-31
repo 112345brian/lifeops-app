@@ -3,7 +3,7 @@
 Pure decision logic: no I/O, no API calls. Given structured module data
 (assignments + readings), returns FlowSavvy task specs ready to POST.
 """
-import re, datetime, difflib
+import re, datetime, difflib, hashlib
 
 DAY = datetime.timedelta(days=1)
 
@@ -66,6 +66,55 @@ def _find_duplicate(title, existing_norms):
         if difflib.SequenceMatcher(None, norm, e).ratio() >= _SIMILARITY_THRESHOLD:
             return e
     return None
+
+
+# ── dedup by source id: exact-match fallback/primary key ───────────────────────
+# Title-based dedup (above) is inherently fuzzy — a re-split into differently
+# worded phases, or an LLM re-extraction of a reading that isn't byte-stable,
+# can slip past it either as a false negative (new duplicate) or false
+# positive (legit new task dropped). Every created task also carries a
+# `[canvas-ref: ...]` marker in its notes pointing back at the Canvas object
+# that produced it — an assignment id for assignment-derived tasks (stable,
+# straight from Canvas), or a content hash for LLM-extracted readings (Canvas
+# gives readings no id at all). Callers scrape that marker out of live
+# FlowSavvy task notes and pass the resulting id set in as `existing_source_ids`
+# to `plan()`, where an exact id match short-circuits the fuzzy title check.
+
+REF_MARKER_RE = re.compile(r"\[canvas-ref:\s*([^\]]+?)\s*\]")
+
+
+def extract_source_ids(notes_texts):
+    """Scrape `[canvas-ref: ...]` markers out of an iterable of task `notes`
+    strings (as fetched live from FlowSavvy) into a set of source ids."""
+    ids = set()
+    for notes in notes_texts:
+        ids.update(REF_MARKER_RE.findall(notes or ""))
+    return ids
+
+
+def _assignment_source_id(assignment_id):
+    return f"assignment:{assignment_id}" if assignment_id is not None else None
+
+
+def _reading_source_id(mod_num, author, title):
+    """Readings have no Canvas id — hash the identifying fields instead. Not
+    fully re-extraction-stable (author/title text can shift slightly between
+    LLM runs), but exact when it does match, which title-fuzzy-matching alone
+    can't offer."""
+    digest = hashlib.sha1(f"{mod_num}|{author or ''}|{title or ''}".encode("utf-8")).hexdigest()[:16]
+    return f"reading:{digest}"
+
+
+def format_ref_note(base_notes, source_id, phase_index=None, phase_total=None):
+    """Append the `[canvas-ref: ...]` marker (+ phase-of-N, when the engine
+    split one assignment into several dependent tasks) to a task's notes."""
+    if not source_id:
+        return base_notes
+    marker = f"[canvas-ref: {source_id}]"
+    if phase_total and phase_total > 1:
+        marker += f" (part {phase_index} of {phase_total})"
+    return f"{base_notes}\n\n{marker}" if base_notes else marker
+
 
 # ── assignment classification ──────────────────────────────────────────────────
 
@@ -135,14 +184,26 @@ _NO_DUE_DURATION = {"reply": 40, "discussion": 75, "prospectus": 180, "paper": 1
                     "assignment": 260, "presentation": 105}
 
 
-def split_assignment(mod_num, name, atype, due_date, unlock_date, readings_due, today):
+def split_assignment(mod_num, name, atype, due_date, unlock_date, readings_due, today,
+                      assignment_id=None, display_name=None):
     """Return list of task kwargs dicts for a single assignment.
 
     due_date, unlock_date, readings_due: datetime.date or None
+    assignment_id: Canvas assignment id, when known — every phase task
+    returned carries a `_source_id` tag (plus `_phase_index`/`_phase_total`
+    when split into more than one phase) so the runner can stamp a
+    `[canvas-ref: assignment:<id>]` marker into its notes at creation.
+    display_name: shortened name to use in the task TITLE tag, when the raw
+    `name` is too long for a task-list title (see runner._display_name — an
+    LLM-abbreviated name, e.g. "Policing Paper" for "Predictive Policing Case
+    Study/Evaluation Paper"). `name` itself is still used for classification/
+    the "data smell" heuristic below, since a shortened name can drop the
+    keywords those look for. Defaults to `name` when omitted.
     """
-    tag   = f"M{mod_num:02d}: {name}"
+    tag   = f"M{mod_num:02d}: {display_name or name}"
     start = max(unlock_date, readings_due) if readings_due else unlock_date
     prio  = "high" if due_date and (due_date - today).days <= 3 else "normal"
+    source_id = _assignment_source_id(assignment_id)
 
     def _task(title, duration, due, can_start, dep_title=None):
         t = {
@@ -159,40 +220,41 @@ def split_assignment(mod_num, name, atype, due_date, unlock_date, readings_due, 
     # No due date from Canvas → phase spreading has nothing to anchor on.
     # Emit ONE unsplit task with no deadline instead of crashing in _spread.
     if due_date is None:
-        return [_task(tag, _NO_DUE_DURATION.get(atype, 60), None, start)]
+        phases = [_task(tag, _NO_DUE_DURATION.get(atype, 60), None, start)]
 
-    if atype == "reply":
-        return [_task(tag, 40, due_date, start)]
+    elif atype == "reply":
+        phases = [_task(tag, 40, due_date, start)]
 
-    if atype == "discussion":
+    elif atype == "discussion":
         # check if it smells like it needs data work first
         if any(w in name.lower() for w in ("data", "find", "identify", "research", "collect")):
             dates = _spread(due_date, [3, 0], today)
-            return [
+            phases = [
                 _task(f"{tag} — Research",    55, dates[0], start),
                 _task(f"{tag} — Write Post",  65, dates[1], dates[0], dep_title=f"{tag} — Research"),
             ]
-        return [_task(tag, 75, due_date, start)]
+        else:
+            phases = [_task(tag, 75, due_date, start)]
 
-    if atype == "prospectus":
+    elif atype == "prospectus":
         dates = _spread(due_date, [5, 0], today)
-        return [
+        phases = [
             _task(f"{tag} — Outline",  60, dates[0], start),
             _task(f"{tag} — Draft",   120, dates[1], dates[0], dep_title=f"{tag} — Outline"),
         ]
 
-    if atype == "paper":
+    elif atype == "paper":
         dates = _spread(due_date, [7, 3, 0], today)
-        return [
+        phases = [
             _task(f"{tag} — Outline & Notes", 45,  dates[0], start),
             _task(f"{tag} — Draft",          110,  dates[1], dates[0], dep_title=f"{tag} — Outline & Notes"),
             _task(f"{tag} — Revise",          40,  dates[2], dates[1], dep_title=f"{tag} — Draft"),
         ]
 
-    if atype == "final_paper":
+    elif atype == "final_paper":
         # 4 phases → 4 gaps; last gap 0 so Proofread & Submit lands ON the deadline
         dates = _spread(due_date, [14, 9, 5, 0], today)
-        return [
+        phases = [
             _task(f"{tag} — Incorporate Feedback", 120, dates[0], start),
             _task(f"{tag} — Rewrite & Expand",     150, dates[1], dates[0],
                   dep_title=f"{tag} — Incorporate Feedback"),
@@ -202,9 +264,9 @@ def split_assignment(mod_num, name, atype, due_date, unlock_date, readings_due, 
                   dep_title=f"{tag} — Polish & Citations"),
         ]
 
-    if atype in ("final_project", "lab", "assignment"):
+    elif atype in ("final_project", "lab", "assignment"):
         dates = _spread(due_date, [7, 3, 0], today)
-        return [
+        phases = [
             _task(f"{tag} — Setup & Data Exploration",  80, dates[0], start),
             _task(f"{tag} — Analysis & Visualization", 105, dates[1], dates[0],
                   dep_title=f"{tag} — Setup & Data Exploration"),
@@ -212,10 +274,20 @@ def split_assignment(mod_num, name, atype, due_date, unlock_date, readings_due, 
                   dep_title=f"{tag} — Analysis & Visualization"),
         ]
 
-    if atype == "presentation":
-        return [_task(tag, 105, due_date, start)]
+    elif atype == "presentation":
+        phases = [_task(tag, 105, due_date, start)]
 
-    return [_task(tag, 60, due_date, start)]
+    else:
+        phases = [_task(tag, 60, due_date, start)]
+
+    if source_id:
+        total = len(phases)
+        for i, phase in enumerate(phases, start=1):
+            phase["_source_id"] = source_id
+            if total > 1:
+                phase["_phase_index"] = i
+                phase["_phase_total"] = total
+    return phases
 
 
 # ── reading tasks ──────────────────────────────────────────────────────────────
@@ -230,7 +302,8 @@ _READING_DURATION = {
     "book":         240,
 }
 
-def reading_task(mod_num, author, title, rtype, unlock_date, due_date, today, locator=None):
+def reading_task(mod_num, author, title, rtype, unlock_date, due_date, today, locator=None,
+                 book_title=None, url=None):
     duration = _READING_DURATION.get(rtype, 35)
     prio = "high" if due_date and (due_date - today).days <= 3 else "normal"
     short_author = author.split(",")[0].strip() if author else "Source"
@@ -243,22 +316,38 @@ def reading_task(mod_num, author, title, rtype, unlock_date, due_date, today, lo
         "canBeStartedAt":  f"{unlock_date.isoformat()}T08:00:00",
         "priority":        prio,
         "_dep_title":      None,
+        "_source_id":      _reading_source_id(mod_num, author, title),
     }
-    # full title + chapter/pages in notes — the title alone is truncated to
-    # 50 chars and never carries a locator, so it's not enough to know what
-    # to actually open and read.
-    note_bits = [title or "reading"]
+    # Full citation in notes — the title alone is truncated to 50 chars and
+    # never carries author/book/locator/type, so it's not enough on its own
+    # to find and confirm the actual source. `book_title` is the containing
+    # book when `title` is just a chapter/excerpt name (e.g. `title`="Ch. 3:
+    # Predictive Policing", `book_title`="Policing the Planet") — omitted
+    # when the reading itself IS the whole book/article.
+    citation_bits = [title or "reading"]
     if author:
-        note_bits.append(f"by {author}")
+        citation_bits.append(f"by {author}")
+    if book_title and isinstance(book_title, str) and book_title != title:
+        citation_bits.append(f"in {book_title}")
     if locator and isinstance(locator, str):
-        note_bits.append(locator)
-    t["notes"] = " — ".join(note_bits)
+        citation_bits.append(locator)
+    citation = " — ".join(citation_bits)
+    notes_lines = [citation, f"Type: {rtype}"]
+    if url and isinstance(url, str):
+        notes_lines.append(f"Link: {url}")
+    # A manual "- [ ] Downloaded" line — a plain markdown checkbox the user
+    # can check off in the FlowSavvy notes once the source is actually pulled
+    # down locally, since Canvas readings often need to be found/downloaded
+    # separately from the task itself.
+    notes_lines.append("")
+    notes_lines.append("- [ ] Downloaded")
+    t["notes"] = "\n".join(notes_lines)
     return t
 
 
 # ── top-level planner ─────────────────────────────────────────────────────────
 
-def plan(modules_data, existing_titles, today):
+def plan(modules_data, existing_titles, today, existing_source_ids=None):
     """
     modules_data: list of dicts — one per newly-unlocked module:
       {
@@ -269,6 +358,11 @@ def plan(modules_data, existing_titles, today):
       }
     existing_titles: set of task titles already in FlowSavvy.
     today: datetime.date
+    existing_source_ids: set of `[canvas-ref: ...]` ids already stamped into
+      live FlowSavvy task notes (see extract_source_ids) — an exact-match
+      dedup key that short-circuits the fuzzy title check below it, since a
+      resplit/reworded task with the same source id is still the same
+      underlying Canvas assignment or reading.
 
     Returns: {
         creates: [task_kwargs],   # ready to pass to fs.create_task(**t) after removing _dep_title
@@ -279,6 +373,7 @@ def plan(modules_data, existing_titles, today):
     report_lines = []
     skipped_dupes = []
     existing_norms = {_normalize_title(t) for t in existing_titles}
+    seen_source_ids = set(existing_source_ids or ())
 
     for mod in modules_data:
         num         = mod.get("module_num") or 0
@@ -303,12 +398,18 @@ def plan(modules_data, existing_titles, today):
         for r in readings:
             t = reading_task(num, r.get("author",""), r.get("title",""),
                              r.get("type","article"), unlock, readings_due, today,
-                             locator=r.get("locator"))
+                             locator=r.get("locator"), book_title=r.get("book_title"),
+                             url=r.get("url"))
+            sid = t.get("_source_id")
+            if sid in seen_source_ids:
+                skipped_dupes.append(t["title"]); continue
             dup = _find_duplicate(t["title"], existing_norms)
             if dup is None:
                 t["_module_num"] = num
                 creates.append(t)
                 existing_norms.add(_normalize_title(t["title"]))
+                if sid:
+                    seen_source_ids.add(sid)
                 mod_lines.append(f"  + {t['title']} ({t['durationMinutes']}m)")
             else:
                 skipped_dupes.append(t["title"])
@@ -318,13 +419,20 @@ def plan(modules_data, existing_titles, today):
             name  = a.get("name", "")
             atype = classify(name, a.get("submission_types", []))
             due   = _parse_date(a.get("due_at"))
-            specs = split_assignment(num, name, atype, due, unlock, readings_due, today)
+            specs = split_assignment(num, name, atype, due, unlock, readings_due, today,
+                                     assignment_id=a.get("id"),
+                                     display_name=a.get("display_name"))
             for spec in specs:
+                sid = spec.get("_source_id")
+                if sid in seen_source_ids:
+                    skipped_dupes.append(spec["title"]); continue
                 dup = _find_duplicate(spec["title"], existing_norms)
                 if dup is None:
                     spec["_module_num"] = num
                     creates.append(spec)
                     existing_norms.add(_normalize_title(spec["title"]))
+                    if sid:
+                        seen_source_ids.add(sid)
                     mod_lines.append(f"  + {spec['title']} ({spec['durationMinutes']}m)")
                 else:
                     skipped_dupes.append(spec["title"])

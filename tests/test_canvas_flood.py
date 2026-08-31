@@ -12,6 +12,7 @@ from lifeops import runner, history, config, state_store
 from lifeops.engines import canvas_engine
 
 NOW = datetime.datetime(2026, 7, 8, 9, 0, 0)
+COURSE_ID = "test-course"
 
 
 def _strip_html(s):
@@ -22,17 +23,17 @@ class _FakeCanvas:
     def __init__(self, n_readings):
         self._n = n_readings
 
-    def modules(self):
+    def modules(self, course_id=None):
         return [{"id": 9, "name": "Module 9", "unlock_at": "2026-01-01T00:00:00Z",
                  "items": [{"type": "Page", "title": "Readings", "page_url": "rp"}]}]
 
-    def assignments(self):
+    def assignments(self, course_id=None):
         return []
 
-    def page(self, slug):
+    def page(self, slug, course_id=None):
         return {"body": "x"}
 
-    def announcements(self, since_date=None):
+    def announcements(self, since_date=None, course_id=None):
         return []
 
 
@@ -70,6 +71,7 @@ class _FakeFS:
 @pytest.fixture
 def sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(history, "ROOT", str(tmp_path))
+    monkeypatch.setattr(config, "CANVAS_COURSE_ID", COURSE_ID)
     monkeypatch.setattr(config, "LIST_COURSE", "list-course")
     monkeypatch.setattr(config, "SH_COURSE", "sh-course")
     monkeypatch.setattr(runner, "_touch", lambda *a, **k: None)
@@ -85,12 +87,21 @@ def _sp(tmp):
     return state_store.logs_path("canvas_state.json")
 
 
+def _course_state(tmp):
+    """This course's bucket, unwrapped from the top-level {"courses": {...}}."""
+    st = state_store.load_json(_sp(tmp)) or {}
+    return st.get("courses", {}).get(COURSE_ID, {})
+
+
 def _pending(tmp):
-    return state_store.load_json(state_store.logs_path("canvas_pending.json"))
+    """This course's held-sync receipt, unwrapped from the top-level
+    {course_id: {...}} pending file."""
+    p = state_store.load_json(state_store.logs_path("canvas_pending.json"))
+    return (p or {}).get(COURSE_ID)
 
 
 def _run(tmp, fs, n_readings):
-    state_store.save_json_atomic(_sp(tmp), {"synced_modules": [], "task_titles": []})
+    state_store.save_json_atomic(_sp(tmp), {"courses": {COURSE_ID: {"synced_modules": [], "task_titles": []}}})
     runner._canvas_sync(_FakeCanvas(n_readings), _strip_html, canvas_engine,
                         _FakeLLM(n_readings), fs, NOW)
 
@@ -104,8 +115,7 @@ def test_big_run_is_held_not_flooded(sandbox):
     assert p and p["count"] == 12                       # held, with a pending receipt
     assert any(k.startswith("canvas:flood:") for k in alerts)
     # state NOT advanced — module 9 must not be marked synced while held
-    st = state_store.load_json(_sp(tmp))
-    assert 9 not in st.get("synced_modules", [])
+    assert 9 not in _course_state(tmp).get("synced_modules", [])
 
 
 def test_small_run_creates_normally(sandbox):
@@ -121,13 +131,13 @@ def test_approved_run_bypasses_guard_and_clears_pending(sandbox):
     tmp, alerts = sandbox
     fs = _FakeFS()
     # a stale pending file + a same-day ack (what the panel's approve writes)
-    state_store.save_json_atomic(state_store.logs_path("canvas_pending.json"), {"count": 12})
-    state_store.save_json_atomic(_sp(tmp), {"synced_modules": [], "task_titles": [],
-                                            "flood_ack": NOW.date().isoformat()})
+    state_store.save_json_atomic(state_store.logs_path("canvas_pending.json"), {COURSE_ID: {"count": 12}})
+    state_store.save_json_atomic(_sp(tmp), {"courses": {COURSE_ID: {
+        "synced_modules": [], "task_titles": [], "flood_ack": NOW.date().isoformat()}}})
     runner._canvas_sync(_FakeCanvas(12), _strip_html, canvas_engine,
                         _FakeLLM(12), fs, NOW)
     assert len(fs.created) == 12                        # bypassed → created
     assert _pending(tmp) is None                        # pending cleared
-    st = state_store.load_json(_sp(tmp))
+    st = _course_state(tmp)
     assert "flood_ack" not in st                        # one-shot ack consumed
     assert 9 in st.get("synced_modules", [])

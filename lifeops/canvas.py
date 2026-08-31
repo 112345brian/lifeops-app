@@ -24,32 +24,42 @@ class Canvas:
         r.raise_for_status()
         return r.json()
 
-    def modules(self):
+    def modules(self, course_id=None):
         """All modules with their items nested."""
         return self._get(
-            f"/api/v1/courses/{self.course}/modules",
+            f"/api/v1/courses/{course_id or self.course}/modules",
             extra_params=[("include[]", "items")],
         )
 
-    def assignments(self):
+    def assignments(self, course_id=None):
         """All assignments for the course."""
-        return self._get(f"/api/v1/courses/{self.course}/assignments")
+        return self._get(f"/api/v1/courses/{course_id or self.course}/assignments")
 
-    def page(self, page_url_or_slug):
+    def page(self, page_url_or_slug, course_id=None):
         """Page body (HTML in body field)."""
-        return self._get(f"/api/v1/courses/{self.course}/pages/{page_url_or_slug}")
+        return self._get(f"/api/v1/courses/{course_id or self.course}/pages/{page_url_or_slug}")
 
-    def announcements(self, since_date=None):
+    def announcements(self, since_date=None, course_id=None):
         """Recent announcements. since_date: 'YYYY-MM-DD'."""
-        extra = [("context_codes[]", f"course_{self.course}")]
+        extra = [("context_codes[]", f"course_{course_id or self.course}")]
         if since_date:
             extra.append(("start_date", since_date))
         return self._get("/api/v1/announcements", extra_params=extra)
 
 def strip_html(html):
-    """Minimal HTML → plain text for feeding to the LLM."""
+    """Minimal HTML → plain text for feeding to the LLM.
+
+    Readings pages link each citation straight to the JHU library/open-source
+    copy (see canvas_engine.reading_task's `url` field) — a plain tag-strip
+    would throw that href away with the rest of the markup, so every <a> is
+    rewritten as "anchor text [URL]" BEFORE the generic tag-strip below runs,
+    keeping the link visible in the plain text llm.extract_readings reads.
+    """
     text = re.sub(r"<br\s*/?>", "\n", html or "", flags=re.I)
     text = re.sub(r"<li[^>]*>", "\n• ", text, flags=re.I)
+    text = re.sub(r'<a\s[^>]*?href="([^"]*)"[^>]*>(.*?)</a>',
+                  lambda m: f"{re.sub('<[^>]+>', ' ', m.group(2)).strip()} [{m.group(1)}]",
+                  text, flags=re.I | re.S)
     text = re.sub(r"<[^>]+>", " ", text)
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
