@@ -14,6 +14,7 @@ import datetime
 import pytest
 
 from lifeops import runner, history, state_store, config
+from lifeops.domains import canvas as canvas_domain
 from lifeops.engines import canvas_engine
 
 COURSE_ID = "test-course"
@@ -73,7 +74,7 @@ def _run_sync(tmp_path, monkeypatch, modules, state):
     monkeypatch.setattr(canvas_engine, "plan", _spy_plan)
 
     now = datetime.datetime(2026, 7, 8, 9, 0, 0)
-    runner._canvas_sync(_FakeCanvas(modules), lambda s: s, canvas_engine,
+    canvas_domain._canvas_sync(_FakeCanvas(modules), lambda s: s, canvas_engine,
                         _FakeLLM(), _FakeFlowSavvy(), now)
 
     saved = state_store.load_json(state_store.logs_path("canvas_state.json"))["courses"][COURSE_ID]

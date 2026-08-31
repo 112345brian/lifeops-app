@@ -1,9 +1,10 @@
 """lifeops.actions — the 'what did LifeOps do?' audit feed + undo tracking,
-plus runner._logged_create wiring."""
+plus lifeops.domains._shared._logged_create wiring."""
 import json, os
 import pytest
 
-from lifeops import actions, history, runner
+from lifeops import actions, history
+from lifeops.domains import _shared
 
 
 @pytest.fixture(autouse=True)
@@ -48,8 +49,8 @@ class _FakeFS:
 
 def test_logged_create_records_an_undoable_action():
     fs = _FakeFS()
-    r = runner._logged_create(fs, "meal", op="added groceries",
-                              title="Groceries", listId="x")
+    r = _shared._logged_create(fs, "meal", op="added groceries",
+                               title="Groceries", listId="x")
     assert r == {"id": "new-123"}
     assert fs.created and fs.created[0]["title"] == "Groceries"   # still creates
     a = actions.recent(1)[0]

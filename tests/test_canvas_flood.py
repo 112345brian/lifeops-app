@@ -9,6 +9,7 @@ import datetime, os
 import pytest
 
 from lifeops import runner, history, config, state_store
+from lifeops.domains import canvas as canvas_domain
 from lifeops.engines import canvas_engine
 
 NOW = datetime.datetime(2026, 7, 8, 9, 0, 0)
@@ -74,11 +75,11 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "CANVAS_COURSE_ID", COURSE_ID)
     monkeypatch.setattr(config, "LIST_COURSE", "list-course")
     monkeypatch.setattr(config, "SH_COURSE", "sh-course")
-    monkeypatch.setattr(runner, "_touch", lambda *a, **k: None)
+    monkeypatch.setattr(canvas_domain, "_touch", lambda *a, **k: None)
     monkeypatch.setattr(history, "append", lambda *a, **k: None)
     monkeypatch.setattr(history, "days_with", lambda *a, **k: set())
     alerts = []
-    monkeypatch.setattr(runner, "_alert_once", lambda key, *a, **k: alerts.append(key))
+    monkeypatch.setattr(canvas_domain, "_alert_once", lambda key, *a, **k: alerts.append(key))
     os.makedirs(os.path.join(str(tmp_path), "private", "logs"), exist_ok=True)
     return tmp_path, alerts
 
@@ -102,7 +103,7 @@ def _pending(tmp):
 
 def _run(tmp, fs, n_readings):
     state_store.save_json_atomic(_sp(tmp), {"courses": {COURSE_ID: {"synced_modules": [], "task_titles": []}}})
-    runner._canvas_sync(_FakeCanvas(n_readings), _strip_html, canvas_engine,
+    canvas_domain._canvas_sync(_FakeCanvas(n_readings), _strip_html, canvas_engine,
                         _FakeLLM(n_readings), fs, NOW)
 
 
@@ -134,7 +135,7 @@ def test_approved_run_bypasses_guard_and_clears_pending(sandbox):
     state_store.save_json_atomic(state_store.logs_path("canvas_pending.json"), {COURSE_ID: {"count": 12}})
     state_store.save_json_atomic(_sp(tmp), {"courses": {COURSE_ID: {
         "synced_modules": [], "task_titles": [], "flood_ack": NOW.date().isoformat()}}})
-    runner._canvas_sync(_FakeCanvas(12), _strip_html, canvas_engine,
+    canvas_domain._canvas_sync(_FakeCanvas(12), _strip_html, canvas_engine,
                         _FakeLLM(12), fs, NOW)
     assert len(fs.created) == 12                        # bypassed → created
     assert _pending(tmp) is None                        # pending cleared

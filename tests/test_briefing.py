@@ -9,6 +9,7 @@ import datetime, os
 import pytest
 
 from lifeops import briefing_service, runner, history, gather, state_store
+from lifeops.domains import planning
 
 NOW = datetime.datetime(2026, 7, 8, 8, 0, 0)   # Wed morning
 
@@ -30,7 +31,7 @@ def sandbox(tmp_path, monkeypatch):
         "ynab_category_balances": {"Fun": 42.0},
         "events": [{"label": "Concert", "days_until": 3, "cost": 40, "type": "concert"}]})
     alerts = []
-    monkeypatch.setattr(runner, "_alert_once", lambda key, *a, **k: alerts.append(key))
+    monkeypatch.setattr(planning, "_alert_once", lambda key, *a, **k: alerts.append(key))
     os.makedirs(os.path.join(str(tmp_path), "private", "logs"), exist_ok=True)
     return tmp_path, alerts
 
@@ -41,7 +42,7 @@ def _briefing_file(tmp):
 
 def test_briefing_builds_facts_alerts_and_persists(sandbox):
     tmp, alerts = sandbox
-    runner.run_briefing(object(), object(), NOW)
+    planning.run_briefing(object(), object(), NOW)
 
     assert any(k.startswith("briefing:2026-07-08") for k in alerts)
     b = _briefing_file(tmp)
@@ -63,7 +64,7 @@ def test_briefing_builds_facts_alerts_and_persists(sandbox):
 
 def test_briefing_registered_as_domain_and_daily_tier():
     assert "briefing" in runner.DOMAINS
-    assert runner.DOMAINS["briefing"] is runner.run_briefing
+    assert runner.DOMAINS["briefing"] is planning.run_briefing
     assert "briefing" in runner.TIERS["daily"]
 
 
@@ -77,7 +78,7 @@ def test_briefing_mentions_a_same_day_zero_cost_event(sandbox, monkeypatch):
         "fun_money": 42.0,
         "events": [{"label": "Family BBQ", "days_until": 0, "cost": 0, "type": "family"}]})
 
-    runner.run_briefing(object(), object(), NOW)
+    planning.run_briefing(object(), object(), NOW)
 
     b = _briefing_file(tmp)
     assert "Also today: Family BBQ." in b["text"]
@@ -93,11 +94,11 @@ def test_briefing_includes_deterministic_deadline_phrase_and_does_not_repeat_it(
         {"title": "M08 Paper", "due_in_h": 12, "due_in_days": 0.5,
          "remaining_min": 180, "progress": 0, "due_iso": "2026-07-09T09:00:00"}])
 
-    runner.run_briefing(object(), object(), NOW)
+    planning.run_briefing(object(), object(), NOW)
     b = _briefing_file(tmp)
     assert 'Finish "M08 Paper" by Thursday 9:00am' in b["text"]
 
-    runner.run_briefing(object(), object(), NOW)
+    planning.run_briefing(object(), object(), NOW)
     b2 = _briefing_file(tmp)
     assert 'Finish "M08 Paper"' not in b2["text"]
 
@@ -108,7 +109,7 @@ def test_briefing_includes_upcoming_notable_events(sandbox, monkeypatch):
     monkeypatch.setattr(gather, "_upcoming_schedule", lambda fs, now: schedule_items)
 
     tmp, alerts = sandbox
-    runner.run_briefing(object(), object(), NOW)
+    planning.run_briefing(object(), object(), NOW)
 
     b = _briefing_file(tmp)
     assert "Family BBQ (Saturday)" in b["text"]
@@ -123,7 +124,7 @@ def test_briefing_dedupes_same_day_event_between_today_and_notable_sections(sand
     monkeypatch.setattr(gather, "_upcoming_schedule", lambda fs, now: schedule_items)
 
     tmp, alerts = sandbox
-    runner.run_briefing(object(), object(), NOW)
+    planning.run_briefing(object(), object(), NOW)
 
     text = _briefing_file(tmp)["text"]
     assert "Also today: Family BBQ." in text

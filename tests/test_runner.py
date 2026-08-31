@@ -1,6 +1,8 @@
 import datetime
 
 from lifeops import config, runner, state_store
+from lifeops.domains import _shared
+from lifeops.domains import canvas as canvas_domain
 from lifeops.engines import canvas_engine
 
 
@@ -69,8 +71,8 @@ def test_canvas_failed_creation_still_marks_module_synced(tmp_path, monkeypatch)
     monkeypatch.setattr(config, "LIST_COURSE", "course-list")
     monkeypatch.setattr(config, "SH_COURSE", "course-hours")
 
-    runner._canvas_sync(_Canvas(), lambda value: value, canvas_engine, _LLM(),
-                        _FlowSavvy(), datetime.datetime(2026, 7, 9, 9, 0))
+    canvas_domain._canvas_sync(_Canvas(), lambda value: value, canvas_engine, _LLM(),
+                               _FlowSavvy(), datetime.datetime(2026, 7, 9, 9, 0))
 
     state = state_store.load_json(state_store.logs_path("canvas_state.json"))
     assert state["courses"]["the-course"]["synced_modules"] == [1]
@@ -89,7 +91,7 @@ class _FakeShortenLLM:
 def test_display_name_passes_through_short_names_without_calling_llm():
     llm = _FakeShortenLLM("should never be used")
     short_titles = {}
-    assert runner._display_name({"id": 1, "name": "Short Name"}, short_titles, llm) == "Short Name"
+    assert canvas_domain._display_name({"id": 1, "name": "Short Name"}, short_titles, llm) == "Short Name"
     assert llm.calls == 0
     assert short_titles == {}
 
@@ -100,14 +102,14 @@ def test_display_name_shortens_and_caches_long_names():
     long_name = "Predictive Policing Case Study/Evaluation Paper"
     a = {"id": 42, "name": long_name}
 
-    first = runner._display_name(a, short_titles, llm)
+    first = canvas_domain._display_name(a, short_titles, llm)
     assert first == "Policing Paper"
     assert llm.calls == 1
     assert short_titles["42"] == "Policing Paper"
 
     # second call for the SAME assignment id must hit the cache, not the LLM
     # again -- otherwise the title could drift between runs.
-    second = runner._display_name(a, short_titles, llm)
+    second = canvas_domain._display_name(a, short_titles, llm)
     assert second == "Policing Paper"
     assert llm.calls == 1
 
@@ -116,7 +118,7 @@ def test_display_name_falls_back_to_raw_name_when_llm_fails():
     llm = _FakeShortenLLM(None)
     short_titles = {}
     long_name = "Predictive Policing Case Study/Evaluation Paper"
-    assert runner._display_name({"id": 7, "name": long_name}, short_titles, llm) == long_name
+    assert canvas_domain._display_name({"id": 7, "name": long_name}, short_titles, llm) == long_name
     assert short_titles == {}    # nothing cached -- so a later successful run can still shorten it
 
 
@@ -284,7 +286,7 @@ def test_ingest_ack_signal_marks_push_acked(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.ntfy, "poll", lambda since: [fake_message])
     runner.ingest(_CompleteFakeFlowSavvy(), datetime.datetime(2026, 7, 13, 9, 5))
 
-    state = state_store.load_json(runner._push_ack_state_file("next_tasks"))
+    state = state_store.load_json(_shared._push_ack_state_file("next_tasks"))
     assert state["acked"] is True
     assert state["version"] == version
 
@@ -296,12 +298,12 @@ def test_mark_push_acked_ignores_superseded_version(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
     (tmp_path / "private" / "logs").mkdir(parents=True, exist_ok=True)
 
-    runner._save_json_atomic(runner._push_ack_state_file("next_tasks"),
+    runner._save_json_atomic(_shared._push_ack_state_file("next_tasks"),
                              {"snapshot": {"tasks": []}, "version": "current-version", "acked": False})
 
     runner._mark_push_acked("next_tasks", "stale-version")
 
-    state = state_store.load_json(runner._push_ack_state_file("next_tasks"))
+    state = state_store.load_json(_shared._push_ack_state_file("next_tasks"))
     assert state["acked"] is False
     assert state["version"] == "current-version"
 
@@ -327,7 +329,7 @@ def test_push_with_ack_writes_no_state_when_nothing_was_sent(tmp_path, monkeypat
 
     runner._push_with_ack("next_tasks", {"tasks": []}, lambda version: False)
 
-    assert state_store.load_json(runner._push_ack_state_file("next_tasks")) is None
+    assert state_store.load_json(_shared._push_ack_state_file("next_tasks")) is None
 
 
 def test_push_with_ack_retries_cheaply_every_call_when_nothing_was_sent(tmp_path, monkeypatch):
@@ -393,7 +395,7 @@ def test_mark_push_acked_ignores_non_dict_state(tmp_path, monkeypatch):
     would also drop that poll batch's other already-processed signals."""
     monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
     (tmp_path / "private" / "logs").mkdir(parents=True, exist_ok=True)
-    runner._save_json_atomic(runner._push_ack_state_file("next_tasks"), ["not", "a", "dict"])
+    runner._save_json_atomic(_shared._push_ack_state_file("next_tasks"), ["not", "a", "dict"])
 
     runner._mark_push_acked("next_tasks", "some-version")  # must not raise
 

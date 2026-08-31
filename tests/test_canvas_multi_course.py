@@ -10,6 +10,7 @@ import datetime
 import pytest
 
 from lifeops import runner, history, config, state_store
+from lifeops.domains import canvas as canvas_domain
 from lifeops.engines import canvas_engine
 
 NOW = datetime.datetime(2026, 7, 8, 9, 0, 0)
@@ -70,8 +71,8 @@ def _assignment(aid, name="Reply", due="2026-07-05T23:59:59Z"):
 @pytest.fixture
 def sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(history, "ROOT", str(tmp_path))
-    monkeypatch.setattr(runner, "_touch", lambda *a, **k: None)
-    monkeypatch.setattr(runner, "_alert_once", lambda *a, **k: None)
+    monkeypatch.setattr(canvas_domain, "_touch", lambda *a, **k: None)
+    monkeypatch.setattr(canvas_domain, "_alert_once", lambda *a, **k: None)
     monkeypatch.setattr(history, "append", lambda *a, **k: None)
     return tmp_path
 
@@ -91,7 +92,7 @@ def test_two_courses_sync_independently(sandbox, monkeypatch):
     )
     fs = _FakeFS()
     for course in courses:
-        runner._canvas_sync(cv, lambda s: s, canvas_engine, _FakeLLM(), fs, NOW, course)
+        canvas_domain._canvas_sync(cv, lambda s: s, canvas_engine, _FakeLLM(), fs, NOW, course)
 
     # each course's tasks landed in its OWN FlowSavvy list
     list_ids = {t["listId"] for t in fs.created}
@@ -126,7 +127,7 @@ def test_flood_hold_on_one_course_does_not_block_the_other(sandbox, monkeypatch)
     monkeypatch.setattr(canvas_engine, "plan", _spy_plan)
 
     for course in courses:
-        runner._canvas_sync(cv, lambda s: s, canvas_engine, _FakeLLM(), fs, NOW, course)
+        canvas_domain._canvas_sync(cv, lambda s: s, canvas_engine, _FakeLLM(), fs, NOW, course)
 
     # course-a synced normally...
     sp = state_store.logs_path("canvas_state.json")
@@ -150,7 +151,7 @@ def test_legacy_flat_state_migrates_once(sandbox, monkeypatch):
 
     cv = _FakeMultiCanvas({"legacy-course": [_module(31, 4)]})
     fs = _FakeFS()
-    runner._canvas_sync(cv, lambda s: s, canvas_engine, _FakeLLM(), fs, NOW)
+    canvas_domain._canvas_sync(cv, lambda s: s, canvas_engine, _FakeLLM(), fs, NOW)
 
     st = state_store.load_json(sp)
     assert "synced_modules" not in st                 # no stray flat keys left behind
@@ -159,6 +160,6 @@ def test_legacy_flat_state_migrates_once(sandbox, monkeypatch):
     assert "M03: Old Task" in bucket["task_titles"]
 
     # running again must not re-trigger the migration / lose anything
-    runner._canvas_sync(cv, lambda s: s, canvas_engine, _FakeLLM(), fs, NOW)
+    canvas_domain._canvas_sync(cv, lambda s: s, canvas_engine, _FakeLLM(), fs, NOW)
     st2 = state_store.load_json(sp)
     assert st2["courses"]["legacy-course"]["synced_module_ids"] == [30, 31]

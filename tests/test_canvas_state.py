@@ -16,6 +16,7 @@ import datetime
 import pytest
 
 from lifeops import runner, history, config, state_store
+from lifeops.domains import canvas as canvas_domain
 from lifeops.engines import canvas_engine
 
 NOW = datetime.datetime(2026, 7, 8, 9, 0, 0)
@@ -85,8 +86,8 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(history, "ROOT", str(tmp_path))
     monkeypatch.setattr(config, "CANVAS_COURSE_ID", COURSE_ID)
     monkeypatch.setattr(config, "LIST_COURSE", "list-course")
-    monkeypatch.setattr(runner, "_alert_once", lambda *a, **k: None)
-    monkeypatch.setattr(runner, "_touch", lambda *a, **k: None)
+    monkeypatch.setattr(canvas_domain, "_alert_once", lambda *a, **k: None)
+    monkeypatch.setattr(canvas_domain, "_touch", lambda *a, **k: None)
     monkeypatch.setattr(history, "append", lambda *a, **k: None)
     return state_store.logs_path("canvas_state.json")
 
@@ -104,7 +105,7 @@ def _read_state(sp):
 
 
 def _run(fs, llm, cv):
-    runner._canvas_sync(cv, _strip_html, canvas_engine, llm, fs, NOW)
+    canvas_domain._canvas_sync(cv, _strip_html, canvas_engine, llm, fs, NOW)
 
 
 def test_live_fetched_titles_are_not_persisted_into_task_titles(sandbox):
@@ -154,7 +155,7 @@ def test_completed_cache_eviction_actually_forgets_across_runs(sandbox):
     # a completed task, so nothing is created — the run just caches the
     # completed title and marks module 6 synced.
     _write_state(sp, {"synced_modules": [], "task_titles": [], "completed_cache": {}})
-    runner._canvas_sync(_FakeCanvas(6, reading), _strip_html, canvas_engine,
+    canvas_domain._canvas_sync(_FakeCanvas(6, reading), _strip_html, canvas_engine,
                         _FakeLLM(reading), fs1,
                         datetime.datetime(2026, 6, 2, 9, 0, 0))
 
@@ -166,7 +167,7 @@ def test_completed_cache_eviction_actually_forgets_across_runs(sandbox):
     # live completed list, and module 14 legitimately re-issues the same
     # reading. The stale cache entry (2026-06-01) is past the 20-day cutoff. ──
     fs2 = _FakeFS(incomplete=[], completed=[])
-    runner._canvas_sync(_FakeCanvas(14, reading), _strip_html, canvas_engine,
+    canvas_domain._canvas_sync(_FakeCanvas(14, reading), _strip_html, canvas_engine,
                         _FakeLLM(reading), fs2,
                         datetime.datetime(2026, 7, 12, 9, 0, 0))
 

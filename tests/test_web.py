@@ -4,40 +4,41 @@ import os
 import pytest
 from fastapi.testclient import TestClient
 
-from lifeops import config, history, state_store, web, runner, weather
+from lifeops import config, fcm, history, location, state_store, web, runner, weather
+from lifeops.routers import api, core, settings
 
 
 def test_settings_writer_uses_same_env_file_as_runtime():
-    assert web.ENV == str(config.ENV_FILE)
+    assert core.ENV == str(config.ENV_FILE)
 
 
 def test_every_runner_domain_is_available_in_panel():
-    assert set(web.ALL_DOMAINS) == set(runner.DOMAINS)
+    assert set(core.ALL_DOMAINS) == set(runner.DOMAINS)
 
 
 def test_set_env_updates_runtime_env_file_atomically(tmp_path, monkeypatch):
     env = tmp_path / ".env"
     env.write_text("PARTNER_NAME=Old\nKEEP=value\n", encoding="utf-8")
-    monkeypatch.setattr(web, "ENV", str(env))
+    monkeypatch.setattr(core, "ENV", str(env))
 
-    web._set_env("PARTNER_NAME", "New")
+    settings._set_env("PARTNER_NAME", "New")
 
     assert env.read_text(encoding="utf-8") == "PARTNER_NAME=New\nKEEP=value\n"
 
 
 def test_config_groups_covers_every_editable_key_with_a_label():
-    grouped_keys = {item["key"] for group in web._config_groups() for item in group["fields"]}
+    grouped_keys = {item["key"] for group in core._config_groups() for item in group["fields"]}
 
-    assert grouped_keys == set(web.EDITABLE)
-    for key in web.EDITABLE:
-        group, label, _help = web.CONFIG_META[key]
+    assert grouped_keys == set(core.EDITABLE)
+    for key in core.EDITABLE:
+        group, label, _help = core.CONFIG_META[key]
         assert group and label  # every key has a real (non-key-name) label
 
 
 def test_config_bulk_save_writes_only_changed_editable_keys(tmp_path, monkeypatch):
     env = tmp_path / ".env"
     env.write_text("PARTNER_NAME=Old\nFRIENDS_TASK=Friends\n", encoding="utf-8")
-    monkeypatch.setattr(web, "ENV", str(env))
+    monkeypatch.setattr(core, "ENV", str(env))
     monkeypatch.setattr(config, "WEB_TOKEN", "")
     client = TestClient(web.app)
 
@@ -58,7 +59,7 @@ def test_config_bulk_save_writes_only_changed_editable_keys(tmp_path, monkeypatc
 def test_config_bulk_save_reports_no_changes_when_nothing_differs(tmp_path, monkeypatch):
     env = tmp_path / ".env"
     env.write_text("PARTNER_NAME=Same\n", encoding="utf-8")
-    monkeypatch.setattr(web, "ENV", str(env))
+    monkeypatch.setattr(core, "ENV", str(env))
     monkeypatch.setattr(config, "WEB_TOKEN", "")
     client = TestClient(web.app)
 
@@ -96,7 +97,7 @@ def test_api_token_query_returns_json_without_browser_redirect(monkeypatch):
 @pytest.mark.parametrize("path", ["/", "/gym", "/schedule", "/history", "/settings"])
 def test_non_recurring_pages_render_without_flowsavvy(path, monkeypatch):
     monkeypatch.setattr(config, "WEB_TOKEN", "")
-    monkeypatch.setattr(web, "FlowSavvy", lambda: (_ for _ in ()).throw(AssertionError("network client")))
+    monkeypatch.setattr(core, "FlowSavvy", lambda: (_ for _ in ()).throw(AssertionError("network client")))
 
     response = TestClient(web.app).get(path)
 
@@ -110,7 +111,7 @@ def test_recurring_page_shows_flowsavvy_outage_instead_of_500(monkeypatch):
             raise RuntimeError("offline")
 
     monkeypatch.setattr(config, "WEB_TOKEN", "")
-    monkeypatch.setattr(web, "FlowSavvy", BrokenFlowSavvy)
+    monkeypatch.setattr(core, "FlowSavvy", BrokenFlowSavvy)
 
     response = TestClient(web.app).get("/recurring")
 
@@ -120,7 +121,7 @@ def test_recurring_page_shows_flowsavvy_outage_instead_of_500(monkeypatch):
 
 def test_home_panel_uses_command_surface_classes(monkeypatch):
     monkeypatch.setattr(config, "WEB_TOKEN", "")
-    monkeypatch.setattr(web, "FlowSavvy", lambda: (_ for _ in ()).throw(AssertionError("network client")))
+    monkeypatch.setattr(core, "FlowSavvy", lambda: (_ for _ in ()).throw(AssertionError("network client")))
 
     response = TestClient(web.app).get("/")
 
@@ -131,7 +132,7 @@ def test_home_panel_uses_command_surface_classes(monkeypatch):
 
 def test_home_briefing_renders_kpi_grid(monkeypatch):
     monkeypatch.setattr(config, "WEB_TOKEN", "")
-    monkeypatch.setattr(web, "_today_briefing", lambda: {
+    monkeypatch.setattr(core, "_today_briefing", lambda: {
         "text": "Briefing text.",
         "facts": {
             "due_today": ["Paper"],
@@ -141,7 +142,7 @@ def test_home_briefing_renders_kpi_grid(monkeypatch):
             "discretionary_dollars": 80,
         },
     })
-    monkeypatch.setattr(web, "FlowSavvy", lambda: (_ for _ in ()).throw(AssertionError("network client")))
+    monkeypatch.setattr(core, "FlowSavvy", lambda: (_ for _ in ()).throw(AssertionError("network client")))
 
     response = TestClient(web.app).get("/")
 
@@ -161,13 +162,13 @@ def sandbox(tmp_path, monkeypatch):
     subprocess. Returns the recorded _run_domain calls."""
     monkeypatch.setattr(config, "WEB_TOKEN", "")
     os.makedirs(os.path.join(str(tmp_path), "logs"), exist_ok=True)
-    monkeypatch.setattr(web, "GYM_STATE_FILE", os.path.join(str(tmp_path), "logs", "gym_state.json"))
-    monkeypatch.setattr(web, "GYM_BLOCKS_FILE", os.path.join(str(tmp_path), "logs", "gym_blocks.json"))
-    monkeypatch.setattr(web, "SCHED_BLOCKS_FILE", os.path.join(str(tmp_path), "logs", "schedule_blocks.json"))
+    monkeypatch.setattr(core, "GYM_STATE_FILE", os.path.join(str(tmp_path), "logs", "gym_state.json"))
+    monkeypatch.setattr(core, "GYM_BLOCKS_FILE", os.path.join(str(tmp_path), "logs", "gym_blocks.json"))
+    monkeypatch.setattr(core, "SCHED_BLOCKS_FILE", os.path.join(str(tmp_path), "logs", "schedule_blocks.json"))
     monkeypatch.setattr(config, "BLOCK_CAL", "")  # skip the FlowSavvy busy-event branch
     ran = []
-    monkeypatch.setattr(web, "_run_domain", lambda name: ran.append(name))
-    monkeypatch.setattr(web, "_current_attention", lambda *a, **k: {"state": "ok"})
+    monkeypatch.setattr(core, "_run_domain", lambda name: ran.append(name))
+    monkeypatch.setattr(core, "_current_attention", lambda *a, **k: {"state": "ok"})
     return ran
 
 
@@ -196,11 +197,15 @@ def test_api_schedule_block_day_rejects_bad_date(sandbox):
 
 
 def test_api_schedule_block_day_blocks_and_replans(sandbox):
-    response = TestClient(web.app).post("/api/schedule/block-day", json={"date": "2026-08-01"})
+    # _gym_blocks() only returns future-or-today dates, so this has to float
+    # with the clock rather than a fixed date that inevitably lands in the
+    # past and silently empties the assertion.
+    date = (datetime.date.today() + datetime.timedelta(days=1)).isoformat()
+    response = TestClient(web.app).post("/api/schedule/block-day", json={"date": date})
 
     assert response.status_code == 200
     assert response.json()["ok"] is True
-    assert "2026-08-01" in web._gym_blocks()
+    assert date in core._gym_blocks()
     assert sandbox == ["gym"]
 
 
@@ -229,7 +234,7 @@ def test_api_register_fcm_token_persists_valid_token(tmp_path, monkeypatch):
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
-    assert web.fcm._device_token() == token
+    assert fcm._device_token() == token
 
 
 def test_api_register_fcm_token_rejects_malformed_token(tmp_path, monkeypatch):
@@ -240,7 +245,7 @@ def test_api_register_fcm_token_rejects_malformed_token(tmp_path, monkeypatch):
     response = TestClient(web.app).post("/api/register-fcm-token", json={"fcm_token": "short"})
 
     assert response.status_code == 400
-    assert web.fcm._device_token() == ""
+    assert fcm._device_token() == ""
 
 
 def test_api_health_reports_no_token_registered(tmp_path, monkeypatch):
@@ -269,8 +274,8 @@ def test_api_health_reports_registered_token_and_last_send(tmp_path, monkeypatch
     # with a fake token instead of the no-op path the test expects.
     monkeypatch.setattr(config, "FCM_SERVICE_ACCOUNT_FILE", str(tmp_path / "no-such-cred.json"))
     token = "d" * 20 + ":APA91b" + "x" * 100
-    web.fcm.register_token(token)
-    web.fcm.send_briefing("2026-07-13", "text", {"gym": 2}, "v1")  # no-ops, still records an attempt
+    fcm.register_token(token)
+    fcm.send_briefing("2026-07-13", "text", {"gym": 2}, "v1")  # no-ops, still records an attempt
 
     response = TestClient(web.app).get("/api/health")
 
@@ -293,11 +298,11 @@ def test_canvas_status_reads_needs_relogin_from_the_shared_alert_dedup_store(tmp
     monkeypatch.setattr(notify.ntfy, "alert", lambda *a, **k: None)
 
     today = datetime.date.today().isoformat()
-    assert web._canvas_status()["needs_relogin"] is False
+    assert core._canvas_status()["needs_relogin"] is False
 
     notify.alert("Canvas session expired", dedup_key=f"canvas:session:{today}")
 
-    assert web._canvas_status() == {"profile_exists": True, "needs_relogin": True}
+    assert core._canvas_status() == {"profile_exists": True, "needs_relogin": True}
 
 
 def test_api_location_persists_valid_coordinates(tmp_path, monkeypatch):
@@ -309,7 +314,7 @@ def test_api_location_persists_valid_coordinates(tmp_path, monkeypatch):
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
-    assert web.location.get_location() == ("39.29", "-76.61")
+    assert location.get_location() == ("39.29", "-76.61")
 
 
 def test_api_location_rejects_malformed_coordinates(tmp_path, monkeypatch):
@@ -320,7 +325,7 @@ def test_api_location_rejects_malformed_coordinates(tmp_path, monkeypatch):
     response = TestClient(web.app).post("/api/location", json={"lat": 200, "lon": -76.61})
 
     assert response.status_code == 400
-    assert web.location.get_location() is None
+    assert location.get_location() is None
 
 
 def test_current_attention_treats_missing_last_run_as_no_system_data(monkeypatch):
@@ -330,10 +335,10 @@ def test_current_attention_treats_missing_last_run_as_no_system_data(monkeypatch
     system={} as 'system data present but everything empty' (age_mins
     missing -> stale), which previously produced a false 'risk: LifeOps
     data is stale' reading on a machine that has simply never run yet."""
-    monkeypatch.setattr(web, "_last_run", lambda: None)
-    monkeypatch.setattr(web, "_today_briefing", lambda: None)
+    monkeypatch.setattr(core, "_last_run", lambda: None)
+    monkeypatch.setattr(core, "_today_briefing", lambda: None)
 
-    result = web._current_attention()
+    result = core._current_attention()
 
     assert result["state"] == "ok"
     assert result["reasons"] == []
@@ -353,7 +358,7 @@ def test_last_run_reads_through_state_store_not_the_stale_flat_file(tmp_path):
         {"ts": ts, "ran": ["gym"], "errors": {}, "details": {}},
     )
 
-    lr = web._last_run()
+    lr = core._last_run()
 
     assert lr is not None
     assert lr["ts"] == ts
@@ -361,7 +366,7 @@ def test_last_run_reads_through_state_store_not_the_stale_flat_file(tmp_path):
 
 
 def test_last_run_returns_none_when_never_run():
-    assert web._last_run() is None
+    assert core._last_run() is None
 
 
 def test_today_briefing_reads_through_state_store(tmp_path):
@@ -374,8 +379,8 @@ def test_today_briefing_reads_through_state_store(tmp_path):
         {"date": today, "text": "All clear.", "facts": {"gym_last_7d": 3}},
     )
 
-    b = web._today_briefing()
-    raw = web._today_briefing_raw()
+    b = core._today_briefing()
+    raw = core._today_briefing_raw()
 
     assert b is not None and "All clear." in b["text"]
     assert b["facts"]["gym_last_7d"] == 3
@@ -388,8 +393,8 @@ def test_today_briefing_is_none_when_stale(tmp_path):
         {"date": "2020-01-01", "text": "Old news.", "facts": {}},
     )
 
-    assert web._today_briefing() is None
-    assert web._today_briefing_raw() is None
+    assert core._today_briefing() is None
+    assert core._today_briefing_raw() is None
 
 
 def test_cashflow_reads_through_state_store(tmp_path):
@@ -399,25 +404,25 @@ def test_cashflow_reads_through_state_store(tmp_path):
         {"date": today, "start_balance": 100, "weeks": [{"balance": 50}, {"balance": -20}]},
     )
 
-    cf = web._cashflow()
+    cf = core._cashflow()
 
     assert cf is not None
     assert cf["weeks"][1]["negative"] is True
 
 
 def test_cashflow_is_none_when_stale_or_missing(tmp_path):
-    assert web._cashflow() is None
+    assert core._cashflow() is None
 
     state_store.save_json_atomic(
         os.path.join(str(tmp_path), "private", "logs", "cashflow.json"),
         {"date": "2020-01-01", "start_balance": 100, "weeks": []},
     )
-    assert web._cashflow() is None
+    assert core._cashflow() is None
 
 
 def test_api_task_complete_returns_fresh_tasks_and_events(monkeypatch):
     monkeypatch.setattr(config, "WEB_TOKEN", "")
-    monkeypatch.setattr(web, "_current_attention", lambda *a, **k: {"state": "ok"})
+    monkeypatch.setattr(core, "_current_attention", lambda *a, **k: {"state": "ok"})
 
     class FakeFlowSavvy:
         def __init__(self):
@@ -437,7 +442,7 @@ def test_api_task_complete_returns_fresh_tasks_and_events(monkeypatch):
             ]}
 
     fake = FakeFlowSavvy()
-    monkeypatch.setattr(web, "FlowSavvy", lambda: fake)
+    monkeypatch.setattr(api, "FlowSavvy", lambda: fake)
 
     response = TestClient(web.app).post("/api/tasks/t1/complete")
 
@@ -456,7 +461,7 @@ def test_api_next_tasks_includes_weather_refreshed_on_the_same_pull(monkeypatch)
     keeps showing whatever NOAA said that morning all day (confirmed
     2026-07-15: a stale 64°F reported mid-afternoon)."""
     monkeypatch.setattr(config, "WEB_TOKEN", "")
-    monkeypatch.setattr(web, "_current_attention", lambda *a, **k: {"state": "ok"})
+    monkeypatch.setattr(core, "_current_attention", lambda *a, **k: {"state": "ok"})
     monkeypatch.setattr(weather, "current", lambda now: {
         "temp_f": 71, "high_f": 80, "low_f": 60, "condition": "Cloudy"})
 
@@ -464,7 +469,7 @@ def test_api_next_tasks_includes_weather_refreshed_on_the_same_pull(monkeypatch)
         def get_schedule(self, start, end):
             return {"scheduleItems": []}
 
-    monkeypatch.setattr(web, "FlowSavvy", lambda: FakeFlowSavvy())
+    monkeypatch.setattr(api, "FlowSavvy", lambda: FakeFlowSavvy())
 
     response = TestClient(web.app).get("/api/next-tasks")
 

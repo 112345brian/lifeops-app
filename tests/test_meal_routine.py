@@ -7,6 +7,7 @@ import datetime
 import pytest
 
 from lifeops import config, history, runner
+from lifeops.domains import household
 
 
 NOW = datetime.datetime(2026, 7, 8, 9, 0, 0)
@@ -45,8 +46,8 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "LIST_PERSONAL", "list-personal")
     monkeypatch.setattr(config, "SH_PERSONAL", "sh-personal")
     monkeypatch.setattr(config, "PRIO_MEAL", "normal")
-    monkeypatch.setattr(runner, "_touch", lambda *a, **k: None)
-    monkeypatch.setattr(runner, "_alert_once", lambda *a, **k: None)
+    monkeypatch.setattr(household, "_touch", lambda *a, **k: None)
+    monkeypatch.setattr(household, "_alert_once", lambda *a, **k: None)
     monkeypatch.setattr(runner.ntfy, "poll", lambda since: [])
     return tmp_path
 
@@ -55,7 +56,7 @@ def test_not_due_when_recently_handled(sandbox, monkeypatch):
     monkeypatch.setattr(history, "last", lambda action: "2026-07-05T09:00:00")  # 3 days ago
     fs = _FakeFS()
 
-    runner.run_meal(fs, object(), NOW)
+    household.run_meal(fs, object(), NOW)
 
     assert fs.created == []
 
@@ -64,7 +65,7 @@ def test_due_at_six_days_creates_groceries_and_meal_prep(sandbox, monkeypatch):
     monkeypatch.setattr(history, "last", lambda action: "2026-07-02T09:00:00")  # 6 days ago
     fs = _FakeFS()
 
-    runner.run_meal(fs, object(), NOW)
+    household.run_meal(fs, object(), NOW)
 
     titles = [c["title"] for c in fs.created]
     assert titles == ["Groceries", "Meal prep"]
@@ -74,7 +75,7 @@ def test_due_when_never_logged(sandbox, monkeypatch):
     monkeypatch.setattr(history, "last", lambda action: None)
     fs = _FakeFS()
 
-    runner.run_meal(fs, object(), NOW)
+    household.run_meal(fs, object(), NOW)
 
     assert [c["title"] for c in fs.created] == ["Groceries", "Meal prep"]
 
@@ -83,7 +84,7 @@ def test_meal_prep_is_blocked_by_groceries_task_id(sandbox, monkeypatch):
     monkeypatch.setattr(history, "last", lambda action: None)
     fs = _FakeFS()
 
-    runner.run_meal(fs, object(), NOW)
+    household.run_meal(fs, object(), NOW)
 
     groceries, meal_prep = fs.created
     assert groceries["title"] == "Groceries"
@@ -94,7 +95,7 @@ def test_already_planned_is_a_noop(sandbox, monkeypatch):
     monkeypatch.setattr(history, "last", lambda action: None)
     fs = _FakeFS(open_titled=["Meal prep"])
 
-    runner.run_meal(fs, object(), NOW)
+    household.run_meal(fs, object(), NOW)
 
     assert fs.created == []
 
@@ -106,7 +107,7 @@ def test_skip_deletes_open_lifeops_meal_tasks_and_counts_as_handled(sandbox, mon
     monkeypatch.setattr(history, "append", lambda action, **k: logged.append((action, k)))
     fs = _FakeFS(open_titled=["Groceries", "Meal prep"])
 
-    runner.run_meal(fs, object(), NOW)
+    household.run_meal(fs, object(), NOW)
 
     assert set(fs.deleted) == {"groceries", "meal-prep"}
     assert logged == [("meal", {"source": "skipped"})]

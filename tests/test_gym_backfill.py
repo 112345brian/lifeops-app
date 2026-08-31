@@ -11,6 +11,7 @@ import datetime, os
 import pytest
 
 from lifeops import runner, history, state_store
+from lifeops.domains import household
 
 
 NOW = datetime.datetime(2026, 7, 8, 12, 0, 0)   # Wed noon
@@ -38,7 +39,7 @@ class _FakeFS:
 @pytest.fixture
 def sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(history, "ROOT", str(tmp_path))
-    monkeypatch.setattr(runner, "_touch", lambda *a, **k: None)
+    monkeypatch.setattr(household, "_touch", lambda *a, **k: None)
     logged = []
     monkeypatch.setattr(history, "append",
                         lambda action, **k: logged.append((action, k)))
@@ -61,7 +62,7 @@ def test_past_unmarked_gym_task_is_logged_and_marked(sandbox):
     tmp, logged = sandbox
     fs = _FakeFS()
     task = _task("g1", "Gym", "2026-07-05T10:00:00", "2026-07-05T11:00:00")
-    handled = runner._gym_backfill(fs, NOW, [task])
+    handled = household._gym_backfill(fs, NOW, [task])
 
     assert handled == {"g1"}
     assert ("gym", {"ts": "2026-07-05T10:00:00", "source": "manual"}) in logged
@@ -76,7 +77,7 @@ def test_system_scheduled_block_is_ignored(sandbox):
     fs = _FakeFS()
     block = _task("s1", "Gym", "2026-07-05T18:00:00", "2026-07-05T19:00:00",
                   notes="Auto-scheduled by LifeOps.")
-    handled = runner._gym_backfill(fs, NOW, [block])
+    handled = household._gym_backfill(fs, NOW, [block])
     assert handled == set()
     assert logged == []
 
@@ -85,7 +86,7 @@ def test_future_gym_without_keyword_is_left_alone(sandbox):
     tmp, logged = sandbox
     fs = _FakeFS()
     plan = _task("f1", "Gym", "2026-07-11T18:00:00", "2026-07-11T19:00:00")
-    handled = runner._gym_backfill(fs, NOW, [plan])
+    handled = household._gym_backfill(fs, NOW, [plan])
     assert handled == set()          # a plan, not attendance
     assert logged == []
 
@@ -95,7 +96,7 @@ def test_future_gym_with_keyword_is_logged(sandbox):
     fs = _FakeFS()
     # e.g. logging a session you'll do later today, or an explicit "went"
     t = _task("k1", "Gym - completed", "2026-07-11T18:00:00", "2026-07-11T19:00:00")
-    handled = runner._gym_backfill(fs, NOW, [t])
+    handled = household._gym_backfill(fs, NOW, [t])
     assert handled == {"k1"}
     assert any(a == "gym" for a, _ in logged)
 
@@ -106,7 +107,7 @@ def test_already_logged_item_is_not_relogged(sandbox):
                                  {"logged_backfills": {"g1": TODAY}})
     fs = _FakeFS()
     task = _task("g1", "✅ Gym (logged)", "2026-07-05T10:00:00", "2026-07-05T11:00:00")
-    handled = runner._gym_backfill(fs, NOW, [task])
+    handled = household._gym_backfill(fs, NOW, [task])
     assert handled == set()
     assert logged == []
 
@@ -118,7 +119,7 @@ def test_day_already_recorded_is_not_double_logged(sandbox, monkeypatch):
                         lambda action, a, b: {"2026-07-05"} if action == "gym" else set())
     fs = _FakeFS()
     task = _task("g1", "Gym", "2026-07-05T10:00:00", "2026-07-05T11:00:00")
-    handled = runner._gym_backfill(fs, NOW, [task])
+    handled = household._gym_backfill(fs, NOW, [task])
     # still handled (tracked + renamed) but NOT re-appended to history
     assert handled == {"g1"}
     assert not any(a == "gym" for a, _ in logged)
@@ -131,7 +132,7 @@ def test_old_logged_backfill_is_pruned_after_ttl(sandbox):
     state_store.save_json_atomic(state_store.logs_path("gym_state.json"),
                                  {"logged_backfills": {"old1": old, "keep1": recent}})
     fs = _FakeFS()
-    runner._gym_backfill(fs, NOW, [])
+    household._gym_backfill(fs, NOW, [])
     assert fs.deleted == ["old1"]                       # aged out → deleted
     st = _state(tmp)["logged_backfills"]
     assert "old1" not in st and "keep1" in st           # recent receipt kept
@@ -144,7 +145,7 @@ def test_manual_event_is_logged_without_rename(sandbox):
           "startDateTime": "2026-07-06T09:00:00", "endDateTime": "2026-07-06T10:00:00",
           "notes": ""}
     fs = _FakeFS(events=[ev])
-    handled = runner._gym_backfill(fs, NOW, [])
+    handled = household._gym_backfill(fs, NOW, [])
     assert handled == {"e1"}
     assert any(a == "gym" for a, _ in logged)
     assert fs.updated == []          # events are not renamed

@@ -9,6 +9,7 @@ import os
 import datetime
 
 from lifeops import runner, config
+from lifeops.domains import canvas as canvas_domain
 from lifeops.engines import canvas_engine
 
 
@@ -95,7 +96,7 @@ def test_due_date_change_synced_after_all_modules_already_synced(tmp_path, monke
                       "due_at": "2026-07-20T23:59:59Z"}],   # instructor moved it +5 days
     )
 
-    runner._canvas_sync(cv, lambda s: s, canvas_engine, FakeLLM(), fs, NOW)
+    canvas_domain._canvas_sync(cv, lambda s: s, canvas_engine, FakeLLM(), fs, NOW)
 
     assert fs.created == []                    # nothing new created
     assert len(fs.updated) == 1, "due-date change was not propagated"
@@ -124,7 +125,7 @@ def test_no_update_when_due_dates_match(tmp_path, monkeypatch):
                       "due_at": "2026-07-20T23:59:59Z"}],
     )
 
-    runner._canvas_sync(cv, lambda s: s, canvas_engine, FakeLLM(), fs, NOW)
+    canvas_domain._canvas_sync(cv, lambda s: s, canvas_engine, FakeLLM(), fs, NOW)
 
     assert fs.created == []
     assert fs.updated == []

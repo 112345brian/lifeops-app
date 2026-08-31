@@ -5,6 +5,7 @@ import pytest
 
 from lifeops.engines import load_engine
 from lifeops import runner, history, gather, state_store
+from lifeops.domains import finance, planning
 
 
 # ── deadline_risk ────────────────────────────────────────────────────────────────
@@ -51,9 +52,9 @@ NOW = datetime.datetime(2026, 7, 8, 9, 0, 0)
 def sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(history, "ROOT", str(tmp_path))
     # run_cashflow must NEVER notify — fail loudly if it tries
-    monkeypatch.setattr(runner, "_alert_once",
+    monkeypatch.setattr(finance, "_alert_once",
                         lambda *a, **k: pytest.fail("cashflow must not send notifications"))
-    monkeypatch.setattr(runner, "_touch", lambda *a, **k: None)
+    monkeypatch.setattr(finance, "_touch", lambda *a, **k: None)
     os.makedirs(os.path.join(str(tmp_path), "private", "logs"), exist_ok=True)
     return tmp_path
 
@@ -67,7 +68,7 @@ def test_cashflow_projects_weekly_and_never_notifies(sandbox, monkeypatch):
         "fun_money": 100.0,
         "events": [{"label": "Concert", "days_until": 3, "cost": 40},
                    {"label": "Date", "days_until": 10, "cost": 50}]})
-    runner.run_cashflow(object(), object(), NOW)   # would fail if it notified
+    finance.run_cashflow(object(), object(), NOW)   # would fail if it notified
     c = _cashflow_file(sandbox)
     assert c["start_balance"] == 100
     bals = [w["balance"] for w in c["weeks"]]
@@ -79,13 +80,13 @@ def test_cashflow_flags_going_negative(sandbox, monkeypatch):
     monkeypatch.setattr(gather, "spend_input", lambda fs, yn, now: {
         "fun_money": 30.0,
         "events": [{"label": "Show", "days_until": 2, "cost": 40}]})
-    runner.run_cashflow(object(), object(), NOW)
+    finance.run_cashflow(object(), object(), NOW)
     c = _cashflow_file(sandbox)
     assert c["weeks"][0]["balance"] == -10
     assert c["dips_below_zero"] is True
 
 
 def test_cashflow_and_deadlines_registered():
-    assert runner.DOMAINS["cashflow"] is runner.run_cashflow
-    assert runner.DOMAINS["deadlines"] is runner.run_deadlines
+    assert runner.DOMAINS["cashflow"] is finance.run_cashflow
+    assert runner.DOMAINS["deadlines"] is planning.run_deadlines
     assert "cashflow" in runner.TIERS["daily"] and "deadlines" in runner.TIERS["daily"]
