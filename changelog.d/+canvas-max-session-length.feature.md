@@ -1,0 +1,1 @@
+No Canvas work session is now longer than 80 minutes — any phase or reading whose estimated duration exceeded that (several did: final_paper phases up to 150min, "book"-type readings at 240min, several no-due-date fallbacks up to 480min) gets split into multiple chained sessions instead of one oversized task, each dependency-linked (`blockedBy`) to the one before it.

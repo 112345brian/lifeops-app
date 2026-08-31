@@ -85,6 +85,66 @@ _NO_DUE_DURATION = {"reply": 40, "discussion": 75, "prospectus": 180, "paper": 1
                     "final_paper": 480, "final_project": 260, "lab": 260,
                     "assignment": 260, "presentation": 105}
 
+# No single work session should ever run longer than this -- a phase/reading
+# whose estimated duration exceeds it (several do: final_paper phases up to
+# 150min, the "book" reading type at 240min, every _NO_DUE_DURATION fallback
+# except reply/discussion) gets split into multiple chained sub-sessions
+# instead, each within the cap (see _expand_task/_expand_phases below).
+_MAX_SESSION_MINUTES = 80
+
+
+def _expand_task(task, max_minutes=_MAX_SESSION_MINUTES):
+    """Split one task dict whose durationMinutes exceeds max_minutes into
+    several same-day, dependency-chained sub-sessions (title suffixed
+    " (i/N)"), each within the cap. Returns a list of 1+ task dicts -- a
+    single-element list, task unchanged, when it already fits. The task's
+    OWN `_dep_title` (if any, e.g. a cross-phase or cross-module dependency)
+    becomes the first sub-session's dep; later sub-sessions chain to the
+    previous one. A `_source_id`, if present, gets a ":session:<i>" suffix
+    per sub-session so each is dedup-tracked independently, same as
+    multi-phase assignments already are."""
+    duration = task["durationMinutes"]
+    if duration <= max_minutes:
+        return [task]
+    n = -(-duration // max_minutes)   # ceil division
+    base, extra = divmod(duration, n)
+    base_source_id = task.get("_source_id")
+    sub_tasks = []
+    prev_title = task.get("_dep_title")
+    for i in range(n):
+        dur = base + (1 if i < extra else 0)   # spread the remainder across the first sessions
+        sub = dict(task)
+        sub["title"] = f"{task['title']} ({i + 1}/{n})"
+        sub["durationMinutes"] = dur
+        sub["minLengthMinutes"] = min(dur, task.get("minLengthMinutes", dur))
+        if prev_title is not None:
+            sub["_dep_title"] = prev_title
+        else:
+            sub.pop("_dep_title", None)   # match _task()'s convention: absent, not None, when there's no dep
+        if base_source_id:
+            sub["_source_id"] = f"{base_source_id}:session:{i + 1}"
+        sub_tasks.append(sub)
+        prev_title = sub["title"]
+    return sub_tasks
+
+
+def _expand_phases(phases, max_minutes=_MAX_SESSION_MINUTES):
+    """Run _expand_task over a dependency-chained phase list, rewiring any
+    phase that depended on a since-split predecessor to point at that
+    predecessor's LAST sub-session instead of its (no-longer-existing as a
+    single task) original title."""
+    flat = []
+    last_real_title = {}
+    for phase in phases:
+        dep = phase.get("_dep_title")
+        if dep in last_real_title:
+            phase = {**phase, "_dep_title": last_real_title[dep]}
+        original_title = phase["title"]
+        expanded = _expand_task(phase, max_minutes)
+        flat.extend(expanded)
+        last_real_title[original_title] = expanded[-1]["title"]
+    return flat
+
 # Default phase names per atype -- used whenever a caller doesn't supply
 # content-aware `phase_labels` (see split_assignment), or supplies the wrong
 # count. Order matters: it's the chronological/dependency-chain order.
@@ -100,10 +160,16 @@ _DEFAULT_PHASE_NAMES = {
 
 
 def phase_count_for(name, atype, due_date):
-    """How many phases split_assignment will emit for this (name, atype,
-    due_date) -- a pure lookup, safe for callers (e.g. the runner, before
-    it decides whether to bother requesting LLM-authored phase_labels) to
-    call without duplicating split_assignment's own branching."""
+    """How many LOGICAL phases (Outline/Draft/Revise-style) split_assignment
+    will emit for this (name, atype, due_date) -- a pure lookup, safe for
+    callers (e.g. the runner, before it decides whether to bother requesting
+    LLM-authored phase_labels) to call without duplicating split_assignment's
+    own branching. Content-aware phase_labels describe THIS count. Note the
+    actual number of FlowSavvy tasks created can be higher: any phase whose
+    estimated duration exceeds one sitting gets further split into several
+    chained sessions (see _expand_task) -- that split is purely about
+    duration, not about what the phase covers, so it doesn't change how many
+    labels to request."""
     if due_date is None:
         return 1
     if atype == "discussion":
@@ -247,7 +313,13 @@ def split_assignment(mod_num, name, atype, due_date, unlock_date, readings_due, 
             if total > 1:
                 phase["_phase_index"] = i
                 phase["_phase_total"] = total
-    return phases
+    # A phase's estimated duration (or, unsplit, the whole assignment's) can
+    # still exceed one sitting -- e.g. final_paper's 150min "Rewrite & Expand"
+    # phase, or its 480min no-due-date fallback -- so expand AFTER phase
+    # numbering above (phase_index/phase_total describe the logical Outline/
+    # Draft/Revise-style breakdown; every physical session of one phase
+    # shares the same values) but before returning.
+    return _expand_phases(phases)
 
 
 # ── reading tasks ──────────────────────────────────────────────────────────────
@@ -264,7 +336,12 @@ _READING_DURATION = {
 
 def reading_task(mod_num, author, title, rtype, unlock_date, due_date, today, locator=None,
                  book_title=None, url=None, dep_title=None):
-    """dep_title: title of a reading task this one shouldn't be started before
+    """Returns a list of 1+ task kwargs dicts (dependency-chained) -- a
+    "book"-type reading (240min) exceeds one sitting, so it's split into
+    several chained sessions same as an overlong assignment phase (see
+    _expand_task); most readings fit in one sitting and come back as a
+    single-element list.
+    dep_title: title of a reading task this one shouldn't be started before
     (see canvas_engine.plan(), which chains the FIRST reading of each module
     to the LAST reading of the previous module) -- without it, two readings
     with no due-date gating (e.g. every module already unlocked on a first
@@ -310,4 +387,4 @@ def reading_task(mod_num, author, title, rtype, unlock_date, due_date, today, lo
     notes_lines.append("")
     notes_lines.append("- [ ] Downloaded")
     t["notes"] = "\n".join(notes_lines)
-    return t
+    return _expand_task(t)

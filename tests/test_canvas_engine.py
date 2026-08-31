@@ -84,30 +84,50 @@ def test_module_number_ignores_m_inside_words():
 def _split(atype, name="Thing", due=D(2026, 7, 20)):
     return ce.split_assignment(7, name, atype, due, UNLOCK, None, TODAY)
 
-def test_none_due_date_does_not_crash_returns_single_task():
+def test_none_due_date_does_not_crash_returns_at_least_one_session():
+    # no due date -> one UNSPLIT logical task, but its estimated duration can
+    # still exceed one sitting (e.g. final_paper's 480min fallback) and come
+    # back as several chained sessions instead -- never a single >80min task.
     for atype in ("paper", "final_paper", "lab", "discussion", "prospectus",
                   "reply", "presentation", "assignment"):
         specs = ce.split_assignment(7, "X", atype, None, UNLOCK, None, TODAY)
-        assert len(specs) == 1
-        assert "dueDateTime" not in specs[0]      # no invented deadline
-        assert specs[0]["durationMinutes"] > 0
+        assert len(specs) >= 1
+        for s in specs:
+            assert "dueDateTime" not in s      # no invented deadline
+            assert 0 < s["durationMinutes"] <= 80
+        assert sum(s["durationMinutes"] for s in specs) == ce._NO_DUE_DURATION.get(atype, 60)
 
 def test_paper_splits_three_phases_with_deps():
+    # "Draft" is 110min > the 80min session cap, so it comes back as its OWN
+    # two chained sessions -- 4 real tasks for 3 logical phases.
     specs = _split("paper")
-    assert [s["title"].split("— ")[-1] for s in specs] == \
-           ["Outline & Notes", "Draft", "Revise"]
+    titles = [s["title"] for s in specs]
+    assert any(t.startswith("Thing — Outline & Notes") for t in titles)
+    assert any(t.startswith("Thing — Draft") for t in titles)
+    assert any(t.startswith("Thing — Revise") for t in titles)
+    assert all(s["durationMinutes"] <= 80 for s in specs)
+    # the dependency chain must be unbroken start to finish, through the split
     assert "_dep_title" not in specs[0]
-    assert specs[1]["_dep_title"] == specs[0]["title"]
-    assert specs[2]["_dep_title"] == specs[1]["title"]
-    assert specs[2]["dueDateTime"].startswith("2026-07-20")
-
-def test_final_paper_four_phases():
-    specs = _split("final_paper")
-    assert len(specs) == 4
+    for prev, cur in zip(specs, specs[1:]):
+        assert cur["_dep_title"] == prev["title"]
     assert specs[-1]["dueDateTime"].startswith("2026-07-20")
 
-def test_lab_three_phases():
-    assert len(_split("lab")) == 3
+def test_final_paper_sessions_all_fit_the_cap_and_chain():
+    # every one of the 4 logical phases (120/150/120/90min) exceeds 80min,
+    # so all get split further -- more than 4 real tasks, all still chained.
+    specs = _split("final_paper")
+    assert len(specs) > 4
+    assert all(s["durationMinutes"] <= 80 for s in specs)
+    assert specs[-1]["dueDateTime"].startswith("2026-07-20")
+    assert "_dep_title" not in specs[0]
+    for prev, cur in zip(specs, specs[1:]):
+        assert cur["_dep_title"] == prev["title"]
+
+def test_lab_sessions_all_fit_the_cap():
+    # Setup(80, fits) + Analysis & Visualization(105 -> split into 2) + Write-Up(75, fits) = 4
+    specs = _split("lab")
+    assert len(specs) == 4
+    assert all(s["durationMinutes"] <= 80 for s in specs)
 
 def test_reply_single_task():
     specs = _split("reply")
@@ -138,17 +158,34 @@ def test_split_assignment_tags_source_id_and_phase_count():
     # Each phase gets its OWN source id ("assignment:<id>:phase:<n>"), not a
     # shared one -- a shared id would make plan()'s exact-id dedup treat
     # phase 2+ as "already seen" the moment phase 1 is created, collapsing
-    # every multi-phase assignment down to just its first phase.
-    specs = ce.split_assignment(7, "Thing", "paper", D(2026, 7, 20), UNLOCK, None, TODAY,
-                                assignment_id=555)
-    assert len(specs) == 3
+    # every multi-phase assignment down to just its first phase. Uses
+    # "discussion" with the data-smell heuristic (55/65min, both under the
+    # 80min cap) so this test isolates phase-numbering from session-splitting.
+    specs = ce.split_assignment(7, "Find the Data", "discussion", D(2026, 7, 20),
+                                UNLOCK, None, TODAY, assignment_id=555)
+    assert len(specs) == 2
     ids = set()
     for i, s in enumerate(specs, start=1):
         assert s["_source_id"] == f"assignment:555:phase:{i}"
         assert s["_phase_index"] == i
-        assert s["_phase_total"] == 3
+        assert s["_phase_total"] == 2
         ids.add(s["_source_id"])
-    assert len(ids) == 3
+    assert len(ids) == 2
+
+
+def test_split_assignment_session_split_gets_its_own_source_id_suffix():
+    # "Draft" (110min) exceeds the 80min cap and becomes 2 sessions -- each
+    # must be independently dedup-tracked (":phase:2:session:1"/":...:session:2"),
+    # while still sharing the same _phase_index/_phase_total (they're both
+    # still "phase 2 of 3", just split across two sittings).
+    specs = ce.split_assignment(7, "Thing", "paper", D(2026, 7, 20), UNLOCK, None, TODAY,
+                                assignment_id=555)
+    draft_sessions = [s for s in specs if s["title"].startswith("Thing — Draft")]
+    assert len(draft_sessions) == 2
+    assert draft_sessions[0]["_source_id"] == "assignment:555:phase:2:session:1"
+    assert draft_sessions[1]["_source_id"] == "assignment:555:phase:2:session:2"
+    assert draft_sessions[0]["_phase_index"] == draft_sessions[1]["_phase_index"] == 2
+    assert draft_sessions[0]["_phase_total"] == draft_sessions[1]["_phase_total"] == 3
 
 
 def test_split_assignment_single_phase_has_no_phase_count():
@@ -168,22 +205,42 @@ def test_split_assignment_no_id_no_source_tag():
 # ── reading_task ────────────────────────────────────────────────────────────────
 
 def test_reading_task_duration_by_type():
-    t = ce.reading_task(7, "Perry, W.", "Predictive Policing", "documentation",
-                        UNLOCK, D(2026, 7, 3), TODAY)
+    # reading_task returns a LIST (a "book"-type reading exceeds one sitting
+    # and comes back as several chained sessions -- see the dedicated test
+    # below); this one fits in a single session.
+    specs = ce.reading_task(7, "Perry, W.", "Predictive Policing", "documentation",
+                            UNLOCK, D(2026, 7, 3), TODAY)
+    assert len(specs) == 1
+    t = specs[0]
     assert t["durationMinutes"] == 55
     assert t["title"] == "Read Perry, Predictive Policing"
     assert t["priority"] == "normal"
     assert "Module: M07" in t["notes"]
 
 def test_reading_task_unknown_type_default():
-    t = ce.reading_task(7, "X", "Y", "weird", UNLOCK, D(2026, 7, 3), TODAY)
+    t = ce.reading_task(7, "X", "Y", "weird", UNLOCK, D(2026, 7, 3), TODAY)[0]
     assert t["durationMinutes"] == 35
+
+
+def test_reading_task_book_type_exceeds_cap_and_splits_into_chained_sessions():
+    # "book" is 240min -- 3x the 80min session cap.
+    specs = ce.reading_task(7, "Foucault, M.", "Discipline and Punish", "book",
+                            UNLOCK, D(2026, 7, 3), TODAY)
+    assert len(specs) == 3
+    assert all(s["durationMinutes"] <= 80 for s in specs)
+    assert sum(s["durationMinutes"] for s in specs) == 240
+    assert specs[0]["title"] == "Read Foucault, Discipline and Punish (1/3)"
+    assert "_dep_title" not in specs[0]
+    assert specs[1]["_dep_title"] == specs[0]["title"]
+    assert specs[2]["_dep_title"] == specs[1]["title"]
+    # each session independently dedup-tracked
+    assert len({s["_source_id"] for s in specs}) == 3
 
 
 def test_reading_task_notes_include_full_citation_url_and_checkbox():
     t = ce.reading_task(7, "Perry, W.", "Ch. 3: Predictive Policing", "chapter",
                         UNLOCK, D(2026, 7, 3), TODAY, locator="Ch. 3, pp. 45-67",
-                        book_title="Policing the Planet", url="https://example.com/book")
+                        book_title="Policing the Planet", url="https://example.com/book")[0]
     notes = t["notes"]
     assert "Ch. 3: Predictive Policing" in notes
     assert "by Perry, W." in notes
@@ -198,12 +255,12 @@ def test_reading_task_notes_omit_book_title_when_same_as_title():
     # the reading itself IS the book/article -- book_title equal to title
     # would just repeat the citation, not add information.
     t = ce.reading_task(7, "A", "Some Article", "article", UNLOCK, D(2026, 7, 3), TODAY,
-                        book_title="Some Article")
+                        book_title="Some Article")[0]
     assert " in Some Article" not in t["notes"]
 
 
 def test_reading_task_notes_have_no_link_line_when_no_url():
-    t = ce.reading_task(7, "A", "Some Article", "article", UNLOCK, D(2026, 7, 3), TODAY)
+    t = ce.reading_task(7, "A", "Some Article", "article", UNLOCK, D(2026, 7, 3), TODAY)[0]
     assert "Link:" not in t["notes"]
     assert "- [ ] Downloaded" in t["notes"]
 
@@ -220,11 +277,14 @@ def test_phase_count_for_matches_actual_split_counts():
 
 
 def test_split_assignment_uses_content_aware_phase_labels():
+    # "Clean & Explore" (the middle phase, 105min) exceeds the 80min session
+    # cap and comes back as its own 2 chained sessions.
     labels = ["Pull NYC Open Data", "Clean & Explore", "Write Findings"]
     specs = ce.split_assignment(4, "NYC Open Data Analysis", "assignment", D(2026, 7, 20),
                                 UNLOCK, None, TODAY, phase_labels=labels)
-    titles = [s["title"].split(" — ")[-1] for s in specs]
-    assert titles == labels
+    phase_words = {s["title"].split(" — ")[-1].split(" (")[0] for s in specs}
+    assert phase_words == set(labels)
+    assert sum(1 for s in specs if "Clean & Explore" in s["title"]) == 2
 
 
 def test_split_assignment_falls_back_when_phase_labels_count_mismatches():
@@ -232,8 +292,8 @@ def test_split_assignment_falls_back_when_phase_labels_count_mismatches():
     # LLM response -- either way, must not crash or silently drop phases.
     specs = ce.split_assignment(4, "X", "assignment", D(2026, 7, 20), UNLOCK, None, TODAY,
                                 phase_labels=["Only One"])
-    titles = [s["title"].split(" — ")[-1] for s in specs]
-    assert titles == ["Setup & Data Exploration", "Analysis & Visualization", "Write-Up"]
+    phase_words = {s["title"].split(" — ")[-1].split(" (")[0] for s in specs}
+    assert phase_words == {"Setup & Data Exploration", "Analysis & Visualization", "Write-Up"}
 
 
 def test_split_assignment_display_name_used_for_tag_only():
@@ -281,11 +341,11 @@ def test_split_assignment_plain_name_unaffected_module_still_in_notes():
 
 def test_reading_task_source_id_stable_and_distinct():
     a = ce.reading_task(7, "Perry, W.", "Predictive Policing", "documentation",
-                        UNLOCK, D(2026, 7, 3), TODAY)
+                        UNLOCK, D(2026, 7, 3), TODAY)[0]
     b = ce.reading_task(7, "Perry, W.", "Predictive Policing", "documentation",
-                        UNLOCK, D(2026, 7, 3), TODAY)
+                        UNLOCK, D(2026, 7, 3), TODAY)[0]
     c = ce.reading_task(7, "Perry, W.", "A Different Reading", "documentation",
-                        UNLOCK, D(2026, 7, 3), TODAY)
+                        UNLOCK, D(2026, 7, 3), TODAY)[0]
     assert a["_source_id"] == b["_source_id"]     # deterministic for identical inputs
     assert a["_source_id"] != c["_source_id"]     # distinct readings, distinct ids
     assert a["_source_id"].startswith("reading:")
@@ -308,8 +368,13 @@ def test_plan_dedups_against_existing_titles():
 
 
 def test_plan_dedups_legacy_prefixed_assignment_title():
-    mod = _module(num=4, assignments=[{"name": "Some Assignment", "due_at": None}])
-    existing = {"M04: Some Assignment"}   # pre-existing task, old title format
+    # "Some Reply" (atype "reply", 40min, single unsplit session) -- picked
+    # so this test isolates the legacy-title-format compat fix from the
+    # unrelated 80min session-split behavior (a split task's "(i/N)"-suffixed
+    # sessions don't fuzzy-match a legacy single-task title, which is fine:
+    # nothing pre-existing ever had a "(1/4)"-style title to begin with).
+    mod = _module(num=4, assignments=[{"name": "Some Reply", "due_at": None}])
+    existing = {"M04: Some Reply"}   # pre-existing task, old title format
     out = ce.plan([mod], existing, TODAY)
     assert out["creates"] == []
 
@@ -336,7 +401,7 @@ def test_plan_dedups_near_identical_title_via_similarity():
 
 def test_plan_does_not_suppress_genuinely_different_titles():
     mod = _module(readings=[
-        {"author": "Walker, K.", "title": "Analyzing U.S. Census Data", "type": "book"},
+        {"author": "Walker, K.", "title": "Analyzing U.S. Census Data", "type": "chapter"},
         {"author": "Walker, K.", "title": "Tidycensus Documentation", "type": "documentation"},
     ])
     out = ce.plan([mod], set(), TODAY)
@@ -355,8 +420,10 @@ def test_plan_paper_phases_not_dropped_by_similarity_dedup():
     out = ce.plan([mod], set(), TODAY)
     tag = name
     titles = {c["title"] for c in out["creates"]}
-    for phase in ("Outline & Notes", "Draft", "Revise"):
-        assert f"{tag} — {phase}" in titles
+    assert f"{tag} — Outline & Notes" in titles
+    assert f"{tag} — Revise" in titles
+    # Draft is 110min > the 80min session cap, so it's "Draft (1/2)"/"(2/2)"
+    assert any(t.startswith(f"{tag} — Draft") for t in titles)
     assert "skipped" not in out["report"]
 
 
@@ -459,11 +526,13 @@ def test_plan_dedups_by_source_id_even_with_different_title():
 
 
 def test_plan_dedups_each_phase_of_a_split_assignment_independently():
-    # A multi-phase assignment persists ONE source id per phase
-    # ("assignment:<id>:phase:<n>") -- simulates a prior run having already
-    # created phases 1-2; only phase 3 (Write-Up) should still be missing.
+    # A multi-phase assignment persists ONE source id per phase (further
+    # ":session:<n>"-scoped when that phase itself exceeds the 80min cap --
+    # "Analysis & Visualization" is 105min, so it's phase 2's 2 sessions) --
+    # simulates a prior run having already created phase 1 and phase 2's two
+    # sessions; only phase 3 (Write-Up) should still be missing.
     mod = _module(assignments=[{"id": 77, "name": "Big Project", "due_at": "2026-07-20T23:59:59Z"}])
-    seen = {"assignment:77:phase:1", "assignment:77:phase:2"}
+    seen = {"assignment:77:phase:1", "assignment:77:phase:2:session:1", "assignment:77:phase:2:session:2"}
     out = ce.plan([mod], set(), TODAY, existing_source_ids=seen)
     assert len(out["creates"]) == 1
     assert out["creates"][0]["title"].endswith("Write-Up")
@@ -474,13 +543,14 @@ def test_plan_creates_every_phase_of_a_split_assignment_on_first_sync():
     # made plan() treat phase 2+ as "already seen" the instant phase 1 was
     # created within the SAME run, silently dropping every phase after the
     # first -- big assignments never actually got broken into their full set
-    # of session pieces.
+    # of session pieces. "Analysis & Visualization" (105min) also exceeds the
+    # 80min session cap and becomes its own 2 chained sessions.
     mod = _module(assignments=[{"id": 77, "name": "Big Project", "due_at": "2026-07-20T23:59:59Z"}])
     out = ce.plan([mod], set(), TODAY)
     titles = [c["title"] for c in out["creates"]]
-    assert len(titles) == 3
+    assert len(titles) == 4
     assert any(t.endswith("Setup & Data Exploration") for t in titles)
-    assert any(t.endswith("Analysis & Visualization") for t in titles)
+    assert sum(1 for t in titles if "Analysis & Visualization" in t) == 2
     assert any(t.endswith("Write-Up") for t in titles)
 
 
