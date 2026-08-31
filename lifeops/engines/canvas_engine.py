@@ -61,7 +61,20 @@ def plan(modules_data, existing_titles, today, existing_source_ids=None):
     creates = []
     report_lines = []
     skipped_dupes = []
-    existing_norms = {_normalize_title(t) for t in existing_titles}
+    # `baseline_norms` is the pre-run FlowSavvy state (titles that already
+    # existed before this call) -- fixed for the whole run, checked against
+    # EVERY candidate (including id-tagged ones) so a task created before
+    # [canvas-ref] tagging existed still gets recognized as a duplicate.
+    # `run_norms` accumulates titles created THIS run, but only for
+    # candidates with no confirmed source_id: an id-tagged candidate is
+    # compared only against `baseline_norms`, never against `run_norms` --
+    # otherwise two genuinely distinct, differently-id'd items (e.g. an
+    # "Initial Proposal" and "Final Proposal" whose LLM-shortened display
+    # names happen to collapse to near-identical text) would fuzzy-match
+    # each other and one would be wrongly dropped, exactly backwards from
+    # what exact-id dedup is supposed to guarantee.
+    baseline_norms = {_normalize_title(t) for t in existing_titles}
+    run_norms = set()
     seen_source_ids = set(existing_source_ids or ())
 
     for mod in modules_data:
@@ -92,13 +105,19 @@ def plan(modules_data, existing_titles, today, existing_source_ids=None):
             sid = t.get("_source_id")
             if sid in seen_source_ids:
                 skipped_dupes.append(t["title"]); continue
-            dup = _find_duplicate(t["title"], existing_norms)
+            # sid is a best-effort content hash (Canvas gives readings no real
+            # id), not authoritative like an assignment id -- still compare
+            # against same-run titles too, as the real backstop against a
+            # hash miss (e.g. non-byte-stable LLM re-extraction).
+            compare_norms = baseline_norms if sid else (baseline_norms | run_norms)
+            dup = _find_duplicate(t["title"], compare_norms)
             if dup is None:
                 t["_module_num"] = num
                 creates.append(t)
-                existing_norms.add(_normalize_title(t["title"]))
                 if sid:
                     seen_source_ids.add(sid)
+                else:
+                    run_norms.add(_normalize_title(t["title"]))
                 mod_lines.append(f"  + {t['title']} ({t['durationMinutes']}m)")
             else:
                 skipped_dupes.append(t["title"])
@@ -115,13 +134,26 @@ def plan(modules_data, existing_titles, today, existing_source_ids=None):
                 sid = spec.get("_source_id")
                 if sid in seen_source_ids:
                     skipped_dupes.append(spec["title"]); continue
-                dup = _find_duplicate(spec["title"], existing_norms)
+                # A Canvas assignment id is authoritative -- confirmed NOT a
+                # duplicate of anything already seen (the check above) -- so
+                # only compare it against the pre-run baseline (for backward
+                # compat with tasks created before [canvas-ref] tagging
+                # existed), never against OTHER id-tagged titles created this
+                # same run. Without that split, two distinct assignments whose
+                # LLM-shortened display names happen to collapse to
+                # near-identical text (e.g. an "Initial Proposal" and a
+                # "Final Proposal" both shortened to "... Proposal") get
+                # fuzzy-merged despite having different, known-good ids --
+                # exactly backwards from what exact-id dedup should guarantee.
+                compare_norms = baseline_norms if sid else (baseline_norms | run_norms)
+                dup = _find_duplicate(spec["title"], compare_norms)
                 if dup is None:
                     spec["_module_num"] = num
                     creates.append(spec)
-                    existing_norms.add(_normalize_title(spec["title"]))
                     if sid:
                         seen_source_ids.add(sid)
+                    else:
+                        run_norms.add(_normalize_title(spec["title"]))
                     mod_lines.append(f"  + {spec['title']} ({spec['durationMinutes']}m)")
                 else:
                     skipped_dupes.append(spec["title"])

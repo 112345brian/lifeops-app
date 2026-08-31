@@ -186,7 +186,17 @@ def split_assignment(mod_num, name, atype, due_date, unlock_date, readings_due, 
     if source_id:
         total = len(phases)
         for i, phase in enumerate(phases, start=1):
-            phase["_source_id"] = source_id
+            # A shared assignment-level source_id across phases would make
+            # plan()'s exact-id dedup treat every phase after the first as
+            # "already seen" the moment the first phase is created within the
+            # SAME planning run -- silently collapsing e.g. a 3-phase
+            # assignment down to just "Setup & Data Exploration", never
+            # creating "Analysis & Visualization"/"Write-Up" at all. Scope the
+            # id to the phase when there's more than one, so phases of one
+            # assignment can never collide with each other; the same phase
+            # re-encountered across repeat module occurrences (or future
+            # runs) still shares one id and correctly dedups.
+            phase["_source_id"] = f"{source_id}:phase:{i}" if total > 1 else source_id
             if total > 1:
                 phase["_phase_index"] = i
                 phase["_phase_total"] = total

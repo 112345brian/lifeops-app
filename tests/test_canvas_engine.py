@@ -135,13 +135,20 @@ def test_start_respects_readings_due():
 
 
 def test_split_assignment_tags_source_id_and_phase_count():
+    # Each phase gets its OWN source id ("assignment:<id>:phase:<n>"), not a
+    # shared one -- a shared id would make plan()'s exact-id dedup treat
+    # phase 2+ as "already seen" the moment phase 1 is created, collapsing
+    # every multi-phase assignment down to just its first phase.
     specs = ce.split_assignment(7, "Thing", "paper", D(2026, 7, 20), UNLOCK, None, TODAY,
                                 assignment_id=555)
     assert len(specs) == 3
+    ids = set()
     for i, s in enumerate(specs, start=1):
-        assert s["_source_id"] == "assignment:555"
+        assert s["_source_id"] == f"assignment:555:phase:{i}"
         assert s["_phase_index"] == i
         assert s["_phase_total"] == 3
+        ids.add(s["_source_id"])
+    assert len(ids) == 3
 
 
 def test_split_assignment_single_phase_has_no_phase_count():
@@ -348,14 +355,57 @@ def test_plan_missing_unlock_defaults_to_today():
 
 
 def test_plan_dedups_by_source_id_even_with_different_title():
-    # A resplit/reworded task for the same Canvas assignment must not be
-    # recreated just because its title no longer matches — the exact-id check
-    # is authoritative over the fuzzy title check.
-    mod = _module(assignments=[{"id": 42, "name": "Totally Reworded Title",
+    # A reworded task for the same (single-phase) Canvas assignment must not
+    # be recreated just because its title no longer matches — the exact-id
+    # check is authoritative over the fuzzy title check.
+    mod = _module(assignments=[{"id": 42, "name": "Totally Reworded Reply",
                                 "due_at": "2026-07-20T23:59:59Z"}])
     out = ce.plan([mod], set(), TODAY, existing_source_ids={"assignment:42"})
     assert out["creates"] == []
     assert "skipped" in out["report"]
+
+
+def test_plan_dedups_each_phase_of_a_split_assignment_independently():
+    # A multi-phase assignment persists ONE source id per phase
+    # ("assignment:<id>:phase:<n>") -- simulates a prior run having already
+    # created phases 1-2; only phase 3 (Write-Up) should still be missing.
+    mod = _module(assignments=[{"id": 77, "name": "Big Project", "due_at": "2026-07-20T23:59:59Z"}])
+    seen = {"assignment:77:phase:1", "assignment:77:phase:2"}
+    out = ce.plan([mod], set(), TODAY, existing_source_ids=seen)
+    assert len(out["creates"]) == 1
+    assert out["creates"][0]["title"].endswith("Write-Up")
+
+
+def test_plan_creates_every_phase_of_a_split_assignment_on_first_sync():
+    # regression: sharing ONE source_id across all phases of an assignment
+    # made plan() treat phase 2+ as "already seen" the instant phase 1 was
+    # created within the SAME run, silently dropping every phase after the
+    # first -- big assignments never actually got broken into their full set
+    # of session pieces.
+    mod = _module(assignments=[{"id": 77, "name": "Big Project", "due_at": "2026-07-20T23:59:59Z"}])
+    out = ce.plan([mod], set(), TODAY)
+    titles = [c["title"] for c in out["creates"]]
+    assert len(titles) == 3
+    assert any(t.endswith("Setup & Data Exploration") for t in titles)
+    assert any(t.endswith("Analysis & Visualization") for t in titles)
+    assert any(t.endswith("Write-Up") for t in titles)
+
+
+def test_plan_does_not_merge_distinct_assignments_with_similar_shortened_names():
+    # regression: two DIFFERENT assignments whose LLM-shortened display names
+    # collapse to near-identical text (an "Initial Proposal" and a "Final
+    # Proposal" both shortened to "... Proposal") must not fuzzy-merge into
+    # one just because their titles look alike -- their distinct Canvas ids
+    # are authoritative.
+    mod = _module(assignments=[
+        {"id": 1, "name": "M03-M08: Machine Learning Model Revision - Initial Proposal",
+         "due_at": "2026-07-05T23:59:59Z", "display_name": "Machine Learning Model Revision Proposal"},
+        {"id": 2, "name": "M09-M12: Machine Learning Model Revision - Final Proposal",
+         "due_at": "2026-07-20T23:59:59Z", "display_name": "Machine Learning Model Revision Proposal"},
+    ])
+    out = ce.plan([mod], set(), TODAY)
+    outlines = [c for c in out["creates"] if c["title"].endswith("Outline")]
+    assert len(outlines) == 2, "both assignments' Outline phase should survive, not just one"
 
 
 def test_plan_creates_when_source_id_not_seen():
