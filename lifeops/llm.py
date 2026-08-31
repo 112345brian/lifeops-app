@@ -123,8 +123,10 @@ def shorten_assignment_name(name, max_chars=35):
         f"Shorten this assignment name to at most {max_chars} characters for a task-list "
         "title. Keep the most identifying words — the core topic and the deliverable type "
         "(e.g. \"Paper\"/\"Analysis\"/\"Prospectus\") — and drop filler words and genre "
-        "qualifiers. Do not add any word that isn't already in the original. Reply with "
-        f"ONLY the shortened text, no quotes or extra punctuation.\n\nAssignment name: {name!r}"
+        "qualifiers. Use standard abbreviations for well-known terms where it saves space "
+        "(e.g. \"Machine Learning\" -> \"ML\", \"Artificial Intelligence\" -> \"AI\"), but "
+        "otherwise do not add any word that isn't already in the original. Reply with ONLY "
+        f"the shortened text, no quotes or extra punctuation.\n\nAssignment name: {name!r}"
     )
     try:
         msg = _c().messages.create(
