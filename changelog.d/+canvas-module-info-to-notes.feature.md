@@ -1,0 +1,1 @@
+Canvas task titles no longer carry the module number/range ("M01: ..." / "M01-M03: ...") — that's moved to a "Module: ..." line in the task's notes instead, so titles read as just the assignment/reading name. Dedup now also recognizes the old prefixed-title format against the new bare one, so tasks created before this change still match correctly.

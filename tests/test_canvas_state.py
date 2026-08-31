@@ -128,7 +128,7 @@ def test_live_fetched_titles_are_not_persisted_into_task_titles(sandbox):
 
     # prior engine-created title survives + this run's creation is recorded
     assert "M02: Read Perry, Old Reading" in titles
-    assert "M12: Read Doe, Fresh M12 Reading" in titles
+    assert "Read Doe, Fresh M12 Reading" in titles
     # live-fetched FlowSavvy titles must NOT bleed into the persisted set
     assert "Some Manually Added Task" not in titles
     assert not any("NYC Open Data" in t for t in titles)
@@ -175,4 +175,4 @@ def test_completed_cache_eviction_actually_forgets_across_runs(sandbox):
     st = _read_state(sp)
     assert created_title not in st["completed_cache"]  # forgotten, as intended
     # the recurrence was created (would be suppressed forever under old code)
-    assert "M14: Read A, Recurring Topic" in st["task_titles"]
+    assert "Read A, Recurring Topic" in st["task_titles"]

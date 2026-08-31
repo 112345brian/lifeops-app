@@ -18,6 +18,15 @@ import hashlib
 _SUFFIX_RE = re.compile(r"\s*\[[\w.]+\]\s*$")
 _SIMILARITY_THRESHOLD = 0.93
 
+# Titles used to carry a leading "M01: "/"M01-M03: " module prefix (moved
+# into the task's notes as a plain "Module: ..." line instead — see
+# canvas_tasks.split_assignment/reading_task). Existing FlowSavvy tasks
+# created before that change still have the OLD prefixed titles, so a raw
+# comparison against a newly-generated bare title would miss them entirely
+# and recreate a duplicate. Strip it here too, same rationale as the
+# trailing course-tag suffix below.
+_LEADING_MOD_RE = re.compile(r"^M\d{1,2}(?:\s*-\s*M?\d{1,2})?\s*:\s*", re.I)
+
 # split_assignment() emits dependency-chained phases as "{tag} — {phase}".
 # Two phases of the same assignment share an identical tag and differ only in
 # the phase word ("Draft" vs "Revise"), which are short and near-identical:
@@ -31,7 +40,9 @@ _PHASE_SEP = " — "
 
 
 def _normalize_title(title):
-    return _SUFFIX_RE.sub("", title or "").strip().casefold()
+    t = _SUFFIX_RE.sub("", title or "").strip()
+    t = _LEADING_MOD_RE.sub("", t).strip()
+    return t.casefold()
 
 
 def _split_phase(norm):

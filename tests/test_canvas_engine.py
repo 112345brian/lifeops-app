@@ -171,8 +171,9 @@ def test_reading_task_duration_by_type():
     t = ce.reading_task(7, "Perry, W.", "Predictive Policing", "documentation",
                         UNLOCK, D(2026, 7, 3), TODAY)
     assert t["durationMinutes"] == 55
-    assert t["title"] == "M07: Read Perry, Predictive Policing"
+    assert t["title"] == "Read Perry, Predictive Policing"
     assert t["priority"] == "normal"
+    assert "Module: M07" in t["notes"]
 
 def test_reading_task_unknown_type_default():
     t = ce.reading_task(7, "X", "Y", "weird", UNLOCK, D(2026, 7, 3), TODAY)
@@ -249,28 +250,33 @@ def test_split_assignment_display_name_used_for_tag_only():
 
 def test_split_assignment_display_name_defaults_to_name():
     specs = ce.split_assignment(7, "Thing", "reply", D(2026, 7, 20), UNLOCK, None, TODAY)
-    assert specs[0]["title"] == "M07: Thing"
+    assert specs[0]["title"] == "Thing"
+    assert specs[0]["notes"] == "Module: M07"
 
 
-def test_split_assignment_does_not_double_prefix_module_range_name():
+def test_split_assignment_module_range_name_goes_to_notes_not_title():
     # Canvas itself names multi-module assignments "M01-M03: Problem Set 1" --
-    # prepending "M{mod_num:02d}: " on top produced "M01: M01-M03: Problem Set 1".
+    # that range is more informative than the single triggering module number,
+    # so it's what ends up in notes; the title carries no module info at all.
     specs = ce.split_assignment(1, "M01-M03: Problem Set 1", "assignment",
                                 D(2026, 7, 20), UNLOCK, None, TODAY)
-    assert all(s["title"].startswith("M01-M03: Problem Set 1") for s in specs)
-    assert not any(s["title"].startswith("M01: M01-M03") for s in specs)
+    assert all(s["title"].startswith("Problem Set 1") for s in specs)
+    assert not any("M01-M03" in s["title"] or "M01:" in s["title"] for s in specs)
+    assert all(s["notes"] == "Module: M01-M03" for s in specs)
 
 
-def test_split_assignment_does_not_double_prefix_single_module_name():
+def test_split_assignment_single_module_name_goes_to_notes_not_title():
     specs = ce.split_assignment(4, "M04: Some Assignment", "reply",
                                 D(2026, 7, 20), UNLOCK, None, TODAY)
-    assert specs[0]["title"] == "M04: Some Assignment"
+    assert specs[0]["title"] == "Some Assignment"
+    assert specs[0]["notes"] == "Module: M04"
 
 
-def test_split_assignment_still_prefixes_plain_name():
+def test_split_assignment_plain_name_unaffected_module_still_in_notes():
     specs = ce.split_assignment(4, "Plain Assignment Name", "reply",
                                 D(2026, 7, 20), UNLOCK, None, TODAY)
-    assert specs[0]["title"] == "M04: Plain Assignment Name"
+    assert specs[0]["title"] == "Plain Assignment Name"
+    assert specs[0]["notes"] == "Module: M04"
 
 
 def test_reading_task_source_id_stable_and_distinct():
@@ -292,8 +298,18 @@ def _module(num=7, assignments=None, readings=None):
             "assignments": assignments or [], "readings": readings or []}
 
 def test_plan_dedups_against_existing_titles():
+    # regression: titles used to carry a leading "M07: " module prefix; that
+    # moved into notes, but tasks created BEFORE this change still have the
+    # old prefixed title live in FlowSavvy -- must still match.
     mod = _module(readings=[{"author": "Perry, W.", "title": "RAND", "type": "article"}])
     existing = {"M07: Read Perry, RAND"}
+    out = ce.plan([mod], existing, TODAY)
+    assert out["creates"] == []
+
+
+def test_plan_dedups_legacy_prefixed_assignment_title():
+    mod = _module(num=4, assignments=[{"name": "Some Assignment", "due_at": None}])
+    existing = {"M04: Some Assignment"}   # pre-existing task, old title format
     out = ce.plan([mod], existing, TODAY)
     assert out["creates"] == []
 
@@ -337,7 +353,7 @@ def test_plan_paper_phases_not_dropped_by_similarity_dedup():
     mod = _module(assignments=[{"name": name, "due_at": "2026-07-20T23:59:59Z"}])
     assert ce.classify(name) == "paper"
     out = ce.plan([mod], set(), TODAY)
-    tag = f"M07: {name}"
+    tag = name
     titles = {c["title"] for c in out["creates"]}
     for phase in ("Outline & Notes", "Draft", "Revise"):
         assert f"{tag} — {phase}" in titles

@@ -137,8 +137,20 @@ def split_assignment(mod_num, name, atype, due_date, unlock_date, readings_due, 
     falls back to the generic defaults so a stale/malformed/absent label set
     never breaks scheduling.
     """
+    # The module number/range used to be glued onto the TITLE ("M01: Thing",
+    # or "M01: M01-M03: Thing" before that double-prefix fix) -- moved into
+    # the notes instead, as a plain "Module: ..." line, so the title itself
+    # stays just the assignment name + phase. Canvas's own module-range name
+    # (e.g. "M01-M03: Problem Set 1") is more informative than the single
+    # module that happened to trigger this sync, so prefer it when present.
     label = display_name or name
-    tag   = label if _MOD_PREFIX_RE.match(label.strip()) else f"M{mod_num:02d}: {label}"
+    prefix_match = _MOD_PREFIX_RE.match(label.strip())
+    if prefix_match:
+        tag = label.strip()[prefix_match.end():].strip()
+        module_note = f"Module: {prefix_match.group(0).rstrip(':').strip()}"
+    else:
+        tag = label
+        module_note = f"Module: M{mod_num:02d}"
     start = max(unlock_date, readings_due) if readings_due else unlock_date
     prio  = "high" if due_date and (due_date - today).days <= 3 else "normal"
     source_id = _assignment_source_id(assignment_id)
@@ -151,6 +163,7 @@ def split_assignment(mod_num, name, atype, due_date, unlock_date, readings_due, 
             "dueDateTime":         f"{due.isoformat()}T23:59:00" if due else None,
             "canBeStartedAt":      f"{can_start.isoformat()}T08:00:00",
             "priority":            prio,
+            "notes":               module_note,
             "_dep_title":          dep_title,   # resolved to id by runner
         }
         return {k: v for k, v in t.items() if v is not None}
@@ -256,7 +269,7 @@ def reading_task(mod_num, author, title, rtype, unlock_date, due_date, today, lo
     short_author = author.split(",")[0].strip() if author else "Source"
     short_title  = title[:50] if title else "reading"
     t = {
-        "title":           f"M{mod_num:02d}: Read {short_author}, {short_title}",
+        "title":           f"Read {short_author}, {short_title}",
         "durationMinutes": duration,
         "minLengthMinutes": min(duration, 20),
         "dueDateTime":     f"{due_date.isoformat()}T23:59:00" if due_date else None,
@@ -279,7 +292,9 @@ def reading_task(mod_num, author, title, rtype, unlock_date, due_date, today, lo
     if locator and isinstance(locator, str):
         citation_bits.append(locator)
     citation = " — ".join(citation_bits)
-    notes_lines = [citation, f"Type: {rtype}"]
+    # Module number moved here rather than glued onto the title (see
+    # split_assignment's identical move) so the title stays just the citation.
+    notes_lines = [f"Module: M{mod_num:02d}", citation, f"Type: {rtype}"]
     if url and isinstance(url, str):
         notes_lines.append(f"Link: {url}")
     # A manual "- [ ] Downloaded" line — a plain markdown checkbox the user

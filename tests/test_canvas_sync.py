@@ -131,3 +131,39 @@ def test_no_update_when_due_dates_match(tmp_path, monkeypatch):
 
     assert fs.created == []
     assert fs.updated == []
+
+
+def test_multi_phase_assignment_dependencies_chain_through_real_creation(tmp_path, monkeypatch):
+    # regression: this exercises the ACTUAL fs.create_task call site (not just
+    # canvas_engine.plan()'s _dep_title field) -- a multi-phase assignment's
+    # phases must come out the other end wired together via blockedByIds,
+    # each phase depending on the one before it.
+    monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
+    monkeypatch.setattr(config, "CANVAS_COURSE_ID", COURSE_ID)
+    monkeypatch.setattr(config, "CANVAS_COURSES", "")   # force legacy single-course fallback
+    monkeypatch.setattr(config, "LIST_COURSE", "list-course")
+    _write_state(str(tmp_path), synced_modules=[], task_titles=[])
+
+    fs = FakeFS(course_tasks=[])
+    cv = FakeCanvas(
+        modules=[{"id": 100, "name": "Module 4", "unlock_at": "2026-06-20T00:00:00Z",
+                  "items": [{"type": "Assignment", "content_id": 9}]}],
+        assignments=[{"id": 9, "name": "Case Study/Evaluation Paper",
+                      "due_at": "2026-07-20T23:59:59Z"}],   # classifies as "paper" -> 3 phases
+    )
+
+    canvas_domain._canvas_sync(cv, lambda s: s, canvas_engine, FakeLLM(), fs, NOW)
+
+    assert len(fs.created) == 3, "all 3 phases should have been created (below the flood guard)"
+    # FakeFS.create_task returns ids in creation order ("new-1", "new-2", ...)
+    # and plan() emits phases in chronological order, so fs.created[i] is
+    # phase i+1 -- assert the chain directly rather than by title lookup.
+    outline, draft, revise = fs.created
+    assert outline["title"] == "Case Study/Evaluation Paper — Outline & Notes"
+    assert draft["title"]   == "Case Study/Evaluation Paper — Draft"
+    assert revise["title"]  == "Case Study/Evaluation Paper — Revise"
+
+    assert "blockedByIds" not in outline, "the first phase has nothing to depend on"
+    assert draft["blockedByIds"] == ["new-1"], "Draft must be blockedBy Outline's real created id"
+    assert revise["blockedByIds"] == ["new-2"], "Revise must be blockedBy Draft's real created id"
+
