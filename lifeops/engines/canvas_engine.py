@@ -117,35 +117,31 @@ def plan(modules_data, existing_titles, today, existing_source_ids=None):
         first_new_reading = True   # only the first NEW reading this module gets the cross-module dep
         for r in readings:
             dep = prev_module_last_reading if first_new_reading else None
-            # reading_task returns a LIST -- most readings are one sitting
-            # (one-element list), but a "book"-type reading exceeds 80min and
-            # comes back as several chained sessions (see _expand_task).
-            specs = reading_task(num, r.get("author",""), r.get("title",""),
-                                 r.get("type","article"), unlock, readings_due, today,
-                                 locator=r.get("locator"), book_title=r.get("book_title"),
-                                 url=r.get("url"), dep_title=dep)
-            for t in specs:
-                sid = t.get("_source_id")
-                if sid in seen_source_ids:
-                    skipped_dupes.append(t["title"]); continue
-                # sid is a best-effort content hash (Canvas gives readings no real
-                # id), not authoritative like an assignment id -- still compare
-                # against same-run titles too, as the real backstop against a
-                # hash miss (e.g. non-byte-stable LLM re-extraction).
-                compare_norms = baseline_norms if sid else (baseline_norms | run_norms)
-                dup = _find_duplicate(t["title"], compare_norms)
-                if dup is None:
-                    t["_module_num"] = num
-                    creates.append(t)
-                    if sid:
-                        seen_source_ids.add(sid)
-                    else:
-                        run_norms.add(_normalize_title(t["title"]))
-                    mod_lines.append(f"  + {t['title']} ({t['durationMinutes']}m)")
-                    first_new_reading = False
-                    prev_module_last_reading = t["title"]
+            t = reading_task(num, r.get("author",""), r.get("title",""),
+                             r.get("type","article"), unlock, readings_due, today,
+                             locator=r.get("locator"), book_title=r.get("book_title"),
+                             url=r.get("url"), dep_title=dep)
+            sid = t.get("_source_id")
+            if sid in seen_source_ids:
+                skipped_dupes.append(t["title"]); continue
+            # sid is a best-effort content hash (Canvas gives readings no real
+            # id), not authoritative like an assignment id -- still compare
+            # against same-run titles too, as the real backstop against a
+            # hash miss (e.g. non-byte-stable LLM re-extraction).
+            compare_norms = baseline_norms if sid else (baseline_norms | run_norms)
+            dup = _find_duplicate(t["title"], compare_norms)
+            if dup is None:
+                t["_module_num"] = num
+                creates.append(t)
+                if sid:
+                    seen_source_ids.add(sid)
                 else:
-                    skipped_dupes.append(t["title"])
+                    run_norms.add(_normalize_title(t["title"]))
+                mod_lines.append(f"  + {t['title']} ({t['durationMinutes']}m)")
+                first_new_reading = False
+                prev_module_last_reading = t["title"]
+            else:
+                skipped_dupes.append(t["title"])
 
         # assignments
         for a in assignments:

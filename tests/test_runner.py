@@ -155,10 +155,7 @@ def test_phase_labels_for_returns_none_without_description():
 
 
 def test_phase_labels_for_fetches_and_caches():
-    # "NYC Open Data Analysis" is the default "assignment" atype, which needs
-    # 4 sessions (260min total effort / 80min cap) -- the label count must
-    # match phase_count_for's result or _phase_labels_for won't cache it.
-    labels = ["Pull NYC Open Data", "Clean the Data", "Build Visualizations", "Write Findings"]
+    labels = ["Pull NYC Open Data", "Clean & Explore", "Write Findings"]
     llm = _FakePhaseLLM(labels)
     cache = {}
     a = {"id": 42, "name": "NYC Open Data Analysis", "due_at": "2026-07-20T23:59:59Z",

@@ -154,20 +154,18 @@ def test_multi_phase_assignment_dependencies_chain_through_real_creation(tmp_pat
 
     canvas_domain._canvas_sync(cv, lambda s: s, canvas_engine, FakeLLM(), fs, NOW)
 
-    # "paper" needs 3 sessions under the 80min cap (195min total -> 65/65/65).
-    assert len(fs.created) == 3, "all sessions should have been created (below the flood guard)"
-    assert [c["title"] for c in fs.created] == [
-        "Case Study/Evaluation Paper — Outline & Notes",
-        "Case Study/Evaluation Paper — Draft",
-        "Case Study/Evaluation Paper — Revise",
-    ]
+    assert len(fs.created) == 3, "all 3 phases should have been created (below the flood guard)"
     # FakeFS.create_task returns ids in creation order ("new-1", "new-2", ...)
-    # and plan() emits sessions in chronological order -- assert the chain of
-    # real blockedByIds is unbroken start to finish.
+    # and plan() emits phases in chronological order, so fs.created[i] is
+    # phase i+1 -- assert the chain directly rather than by title lookup.
     outline, draft, revise = fs.created
-    assert "blockedByIds" not in outline, "the first session has nothing to depend on"
-    assert draft["blockedByIds"] == ["new-1"]
-    assert revise["blockedByIds"] == ["new-2"]
+    assert outline["title"] == "Case Study/Evaluation Paper — Outline & Notes"
+    assert draft["title"]   == "Case Study/Evaluation Paper — Draft"
+    assert revise["title"]  == "Case Study/Evaluation Paper — Revise"
+
+    assert "blockedByIds" not in outline, "the first phase has nothing to depend on"
+    assert draft["blockedByIds"] == ["new-1"], "Draft must be blockedBy Outline's real created id"
+    assert revise["blockedByIds"] == ["new-2"], "Revise must be blockedBy Draft's real created id"
 
 
 class FakeLLMPerModuleReadings:
