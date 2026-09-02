@@ -124,7 +124,7 @@ def _phase_labels_for(assignment, cache, llm, strip_html, cv=None, course_id=Non
     then falls back to its generic template) for single-phase assignments,
     no usable content at all, or any failure."""
     name = assignment.get("name", "")
-    atype = _classify(name, assignment.get("submission_types", []))
+    atype = _classify(name, assignment.get("submission_types", []), assignment.get("points_possible"))
     due = _parse_date(assignment.get("due_at"))
     count = phase_count_for(name, atype, due)
     if count <= 1:
@@ -505,7 +505,7 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now, course=None):
             if a is None:
                 continue
             name = a.get("name", "")
-            atype = canvas_engine.classify(name, a.get("submission_types", []))
+            atype = canvas_engine.classify(name, a.get("submission_types", []), a.get("points_possible"))
             due = canvas_engine._parse_date(a.get("due_at"))
             count = canvas_engine.phase_count_for(name, atype, due)
             new_labels = _phase_labels_for(a, phase_labels_cache, llm, strip_html,

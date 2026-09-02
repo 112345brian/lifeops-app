@@ -23,6 +23,19 @@ def test_classify_branches():
     assert ce.classify("Something Odd") == "assignment"
 
 
+def test_classify_quick_check_needs_both_zero_points_and_external_tool():
+    # regression: a due-date-less 0-point external-tool item ("Skills Check")
+    # fell through to the generic "assignment" atype's 260min no-due
+    # fallback -- wildly overestimating what's almost always a short,
+    # ungraded practice check. Requires BOTH signals together, not either
+    # alone, so a real 0-point draft submitted through some other tool isn't
+    # swept in just for being worth 0 points.
+    assert ce.classify("Skills Check", ["external_tool"], points_possible=0) == "quick_check"
+    assert ce.classify("Skills Check", ["external_tool"], points_possible=5) == "assignment"
+    assert ce.classify("Skills Check", ["online_text_entry"], points_possible=0) == "assignment"
+    assert ce.classify("Skills Check", points_possible=0) == "assignment"   # no submission_types at all
+
+
 # ── _spread ─────────────────────────────────────────────────────────────────────
 
 def test_spread_math():
@@ -112,6 +125,15 @@ def test_lab_three_phases():
 def test_reply_single_task():
     specs = _split("reply")
     assert len(specs) == 1 and specs[0]["durationMinutes"] == 40
+
+def test_quick_check_single_short_task_with_due_date():
+    specs = _split("quick_check")
+    assert len(specs) == 1 and specs[0]["durationMinutes"] == 25
+
+def test_quick_check_single_short_task_without_due_date():
+    specs = ce.split_assignment(7, "Skills Check", "quick_check", None, UNLOCK, None, TODAY)
+    assert len(specs) == 1 and specs[0]["durationMinutes"] == 25
+    assert "dueDateTime" not in specs[0]
 
 def test_discussion_with_data_smell_splits():
     specs = _split("discussion", name="Identifying and Sharing an API")

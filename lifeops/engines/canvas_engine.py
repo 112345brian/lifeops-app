@@ -146,7 +146,7 @@ def plan(modules_data, existing_titles, today, existing_source_ids=None):
         # assignments
         for a in assignments:
             name  = a.get("name", "")
-            atype = classify(name, a.get("submission_types", []))
+            atype = classify(name, a.get("submission_types", []), a.get("points_possible"))
             due   = _parse_date(a.get("due_at"))
             specs = split_assignment(num, name, atype, due, unlock, readings_due, today,
                                      assignment_id=a.get("id"),

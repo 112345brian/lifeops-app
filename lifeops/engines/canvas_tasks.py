@@ -20,9 +20,23 @@ _MOD_PREFIX_RE = re.compile(r"^M\d{1,2}(?:\s*-\s*M?\d{1,2})?\s*:", re.I)
 
 # ── assignment classification ──────────────────────────────────────────────────
 
-def classify(name, submission_types=None):
+def classify(name, submission_types=None, points_possible=None):
     n = name.lower()
     st = " ".join(submission_types or []).lower()
+    # A 0-point item submitted through an external tool (an embedded
+    # publisher quiz platform, a practice check) is almost always a quick,
+    # ungraded practice check, not real deliverable work -- without this,
+    # one with no due date (phase-spreading/content-aware labeling both
+    # require a real deadline to anchor to -- see split_assignment) fell all
+    # the way through to the generic "assignment" atype's 260min no-due
+    # fallback, wildly overestimating a task that's often genuinely just a
+    # few minutes (confirmed on real data: "Skills Check", 0 points,
+    # submission_types=["external_tool"], empty description). Both signals
+    # required together, not either alone, since a real 0-point draft/
+    # formative-feedback submission through some other tool shouldn't be
+    # swept in just for being worth 0 points.
+    if points_possible == 0 and "external_tool" in st:
+        return "quick_check"
     if ("reply" in n or "replies" in n            # Canvas: "Required Replies (1)"
             or "response to peer" in n or "peer response" in n):
         return "reply"
@@ -83,7 +97,7 @@ def _spread(final_due, gaps_before, today=None):
 # fallback durations for assignments Canvas gives us no due date for (unsplit)
 _NO_DUE_DURATION = {"reply": 40, "discussion": 75, "prospectus": 180, "paper": 195,
                     "final_paper": 480, "final_project": 260, "lab": 260,
-                    "assignment": 260, "presentation": 105}
+                    "assignment": 260, "presentation": 105, "quick_check": 25}
 
 # Default phase names per atype -- used whenever a caller doesn't supply
 # content-aware `phase_labels` (see split_assignment), or supplies the wrong
@@ -215,6 +229,12 @@ def split_assignment(mod_num, name, atype, due_date, unlock_date, readings_due, 
 
     elif atype == "reply":
         phases = [_task(tag, 40, due_date, start)]
+
+    elif atype == "quick_check":
+        # 0-point external-tool item (a practice/skills check) -- always a
+        # single short task, never split/content-aware-phased even with a
+        # real due date, since there's no substantive multi-step work here.
+        phases = [_task(tag, 25, due_date, start)]
 
     elif atype == "discussion":
         # check if it smells like it needs data work first
