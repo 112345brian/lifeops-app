@@ -157,7 +157,8 @@ def split_assignment(mod_num, name, atype, due_date, unlock_date, readings_due, 
     prio  = "high" if due_date and (due_date - today).days <= 3 else "normal"
     source_id = _assignment_source_id(assignment_id)
 
-    def _task(title, duration, due, can_start, dep_title=None):
+    def _task(title, duration, due, can_start, dep_title=None, covers=None):
+        notes = f"{module_note}\nCovers: {covers}" if covers else module_note
         t = {
             "title":               title,
             "durationMinutes":     duration,
@@ -165,39 +166,45 @@ def split_assignment(mod_num, name, atype, due_date, unlock_date, readings_due, 
             "dueDateTime":         f"{due.isoformat()}T23:59:00" if due else None,
             "canBeStartedAt":      f"{can_start.isoformat()}T08:00:00",
             "priority":            prio,
-            "notes":               module_note,
+            "notes":               notes,
             "_dep_title":          dep_title,   # resolved to id by runner
         }
         return {k: v for k, v in t.items() if v is not None}
 
     def _names_and_durations(for_atype, count, default_durations):
-        """(names, durations) from `phase_labels` when it's a usable override
-        for this many phases -- content-aware names AND REAL per-phase
-        minutes, estimated from the assignment's actual question count/
-        complexity rather than a fixed per-atype guess -- else the generic
-        per-atype default names paired with the generic fixed durations. A
-        stale/malformed/absent label set (e.g. the LLM call failed, or was
-        cached against a different phase count) must never break scheduling,
-        so ANY validation failure falls back to the fully generic pair."""
+        """(names, durations, covers) from `phase_labels` when it's a usable
+        override for this many phases -- content-aware names, REAL per-phase
+        minutes estimated from the assignment's actual question count/
+        complexity, AND exactly which numbered question(s)/section(s) each
+        phase covers (e.g. "Questions 1.1-1.5") so a phase is genuinely
+        actionable without re-reading the whole assignment to find its
+        boundaries -- else the generic per-atype default names paired with
+        the generic fixed durations and no coverage info (there's nothing
+        content-aware to reference). A stale/malformed/absent label set
+        (e.g. the LLM call failed, or was cached against a different phase
+        count) must never break scheduling, so ANY validation failure falls
+        back to the fully generic set."""
         if (phase_labels and len(phase_labels) == count
                 and all(isinstance(p, dict) and isinstance(p.get("name"), str) and p["name"].strip()
                         and isinstance(p.get("minutes"), (int, float)) and p["minutes"] > 0
                         for p in phase_labels)):
             names = [p["name"].strip() for p in phase_labels]
             durations = [max(15, int(round(p["minutes"]))) for p in phase_labels]
-            return names, durations
-        return _DEFAULT_PHASE_NAMES.get(for_atype, []), default_durations
+            covers = [p.get("covers", "").strip() or None for p in phase_labels]
+            return names, durations, covers
+        return _DEFAULT_PHASE_NAMES.get(for_atype, []), default_durations, [None] * count
 
-    def _chain(durations, dates, names):
+    def _chain(durations, dates, names, covers=None):
         """Build len(durations) dependency-chained tasks: phase i is
         blockedBy phase i-1, and can start once phase i-1's own due date
         (dates[i-1]) has passed -- phase 0 starts at `start`."""
+        covers = covers or [None] * len(durations)
         tasks = []
         prev_title = None
-        for i, (dur, due, nm) in enumerate(zip(durations, dates, names)):
+        for i, (dur, due, nm, cov) in enumerate(zip(durations, dates, names, covers)):
             can_start = start if i == 0 else dates[i - 1]
             title = f"{tag} — {nm}"
-            tasks.append(_task(title, dur, due, can_start, dep_title=prev_title))
+            tasks.append(_task(title, dur, due, can_start, dep_title=prev_title, covers=cov))
             prev_title = title
         return tasks
 
@@ -213,31 +220,31 @@ def split_assignment(mod_num, name, atype, due_date, unlock_date, readings_due, 
         # check if it smells like it needs data work first
         if any(w in name.lower() for w in ("data", "find", "identify", "research", "collect")):
             dates = _spread(due_date, [3, 0], today)
-            names, durations = _names_and_durations("discussion", 2, [55, 65])
-            phases = _chain(durations, dates, names)
+            names, durations, covers = _names_and_durations("discussion", 2, [55, 65])
+            phases = _chain(durations, dates, names, covers)
         else:
             phases = [_task(tag, 75, due_date, start)]
 
     elif atype == "prospectus":
         dates = _spread(due_date, [5, 0], today)
-        names, durations = _names_and_durations("prospectus", 2, [60, 120])
-        phases = _chain(durations, dates, names)
+        names, durations, covers = _names_and_durations("prospectus", 2, [60, 120])
+        phases = _chain(durations, dates, names, covers)
 
     elif atype == "paper":
         dates = _spread(due_date, [7, 3, 0], today)
-        names, durations = _names_and_durations("paper", 3, [45, 110, 40])
-        phases = _chain(durations, dates, names)
+        names, durations, covers = _names_and_durations("paper", 3, [45, 110, 40])
+        phases = _chain(durations, dates, names, covers)
 
     elif atype == "final_paper":
         # 4 phases → 4 gaps; last gap 0 so the final phase lands ON the deadline
         dates = _spread(due_date, [14, 9, 5, 0], today)
-        names, durations = _names_and_durations("final_paper", 4, [120, 150, 120, 90])
-        phases = _chain(durations, dates, names)
+        names, durations, covers = _names_and_durations("final_paper", 4, [120, 150, 120, 90])
+        phases = _chain(durations, dates, names, covers)
 
     elif atype in ("final_project", "lab", "assignment"):
         dates = _spread(due_date, [7, 3, 0], today)
-        names, durations = _names_and_durations(atype, 3, [80, 105, 75])
-        phases = _chain(durations, dates, names)
+        names, durations, covers = _names_and_durations(atype, 3, [80, 105, 75])
+        phases = _chain(durations, dates, names, covers)
 
     elif atype == "presentation":
         phases = [_task(tag, 105, due_date, start)]

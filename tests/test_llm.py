@@ -131,25 +131,26 @@ def test_extract_readings_returns_empty_list_when_client_raises(tmp_path, monkey
 def test_propose_assignment_phases_parses_valid_array(tmp_path, monkeypatch):
     _configure(monkeypatch, tmp_path)
     payload = json.dumps([
-        {"name": "Pull NYC Open Data", "minutes": 40},
-        {"name": "Clean & Explore", "minutes": 90},
-        {"name": "Write Findings", "minutes": 60},
+        {"name": "Pull NYC Open Data", "minutes": 40, "covers": "Steps 1-2"},
+        {"name": "Clean & Explore", "minutes": 90, "covers": "Steps 3-5"},
+        {"name": "Write Findings", "minutes": 60, "covers": "Step 6"},
     ])
     _install_fake_client(monkeypatch, payload)
 
     out = llm.propose_assignment_phases("NYC Open Data Analysis", "Use the NYC open data portal...",
                                         "assignment", 3)
     assert out == [
-        {"name": "Pull NYC Open Data", "minutes": 40},
-        {"name": "Clean & Explore", "minutes": 90},
-        {"name": "Write Findings", "minutes": 60},
+        {"name": "Pull NYC Open Data", "minutes": 40, "covers": "Steps 1-2"},
+        {"name": "Clean & Explore", "minutes": 90, "covers": "Steps 3-5"},
+        {"name": "Write Findings", "minutes": 60, "covers": "Step 6"},
     ]
 
 
 def test_propose_assignment_phases_rounds_float_minutes_to_int(tmp_path, monkeypatch):
     _configure(monkeypatch, tmp_path)
-    payload = json.dumps([{"name": "A", "minutes": 40.6}, {"name": "B", "minutes": 30},
-                          {"name": "C", "minutes": 25.2}])
+    payload = json.dumps([{"name": "A", "minutes": 40.6, "covers": "1.1-1.3"},
+                          {"name": "B", "minutes": 30, "covers": "1.4-1.5"},
+                          {"name": "C", "minutes": 25.2, "covers": "1.6-1.7"}])
     _install_fake_client(monkeypatch, payload)
 
     out = llm.propose_assignment_phases("X", "instructions", "assignment", 3)
@@ -159,7 +160,7 @@ def test_propose_assignment_phases_rounds_float_minutes_to_int(tmp_path, monkeyp
 
 def test_propose_assignment_phases_rejects_wrong_count(tmp_path, monkeypatch):
     _configure(monkeypatch, tmp_path)
-    _install_fake_client(monkeypatch, json.dumps([{"name": "Only", "minutes": 40}]))
+    _install_fake_client(monkeypatch, json.dumps([{"name": "Only", "minutes": 40, "covers": "all"}]))
 
     assert llm.propose_assignment_phases("X", "instructions", "assignment", 3) is None
 
@@ -167,9 +168,26 @@ def test_propose_assignment_phases_rejects_wrong_count(tmp_path, monkeypatch):
 def test_propose_assignment_phases_rejects_missing_or_bad_minutes(tmp_path, monkeypatch):
     _configure(monkeypatch, tmp_path)
     for bad_payload in (
-        [{"name": "A"}, {"name": "B", "minutes": 30}, {"name": "C", "minutes": 20}],       # missing minutes
-        [{"name": "A", "minutes": 0}, {"name": "B", "minutes": 30}, {"name": "C", "minutes": 20}],  # non-positive
-        [{"name": "A", "minutes": "forty"}, {"name": "B", "minutes": 30}, {"name": "C", "minutes": 20}],  # non-numeric
+        [{"name": "A", "covers": "x"}, {"name": "B", "minutes": 30, "covers": "x"},
+         {"name": "C", "minutes": 20, "covers": "x"}],       # missing minutes
+        [{"name": "A", "minutes": 0, "covers": "x"}, {"name": "B", "minutes": 30, "covers": "x"},
+         {"name": "C", "minutes": 20, "covers": "x"}],  # non-positive
+        [{"name": "A", "minutes": "forty", "covers": "x"}, {"name": "B", "minutes": 30, "covers": "x"},
+         {"name": "C", "minutes": 20, "covers": "x"}],  # non-numeric
+    ):
+        _install_fake_client(monkeypatch, json.dumps(bad_payload))
+        assert llm.propose_assignment_phases("X", "instructions", "assignment", 3) is None
+
+
+def test_propose_assignment_phases_rejects_missing_or_blank_covers(tmp_path, monkeypatch):
+    # `covers` is what makes a phase actionable without re-reading the whole
+    # assignment to find its boundaries (e.g. "Questions 1.1-1.5") -- a
+    # response missing it entirely is as unusable as one missing a name.
+    for bad_payload in (
+        [{"name": "A", "minutes": 10}, {"name": "B", "minutes": 10, "covers": "x"},
+         {"name": "C", "minutes": 10, "covers": "x"}],           # missing covers
+        [{"name": "A", "minutes": 10, "covers": "  "}, {"name": "B", "minutes": 10, "covers": "x"},
+         {"name": "C", "minutes": 10, "covers": "x"}],           # blank covers
     ):
         _install_fake_client(monkeypatch, json.dumps(bad_payload))
         assert llm.propose_assignment_phases("X", "instructions", "assignment", 3) is None

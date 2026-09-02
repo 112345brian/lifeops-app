@@ -142,24 +142,30 @@ def shorten_assignment_name(name, max_chars=35):
 
 def propose_assignment_phases(name, description_text, atype, phase_count):
     """Propose `phase_count` content-aware phases for one Canvas assignment
-    -- name AND a real per-phase minutes estimate, read from its actual
-    instructions -- instead of the generic per-atype template in
-    canvas_tasks._DEFAULT_PHASE_NAMES with its fixed generic durations (e.g.
-    "Calculate Descriptive Statistics" ~70min / "Fit & Interpret Regression
-    Models" ~90min instead of the same 80/105/75 for every assignment of
-    this type regardless of how many questions it actually has).
-    Returns a list of `phase_count` {"name": str, "minutes": int} dicts in
-    chronological/dependency order, or None on any failure or malformed
-    output -- callers (canvas_tasks.split_assignment via its `phase_labels`
-    param) fall back to the generic names AND generic fixed durations
-    whenever this returns anything else."""
+    -- name, a real per-phase minutes estimate, AND exactly which numbered
+    questions/sections it covers -- read from its actual instructions,
+    instead of the generic per-atype template in
+    canvas_tasks._DEFAULT_PHASE_NAMES with its fixed generic durations and no
+    indication of scope at all (e.g. "Calculate Descriptive Statistics",
+    ~45min, covering "Questions 1.1-1.5" instead of the same 80/105/75
+    "Analysis" bucket for every assignment of this type). The `covers` field
+    is what makes a phase actually actionable without re-reading the whole
+    assignment to figure out where one phase ends and the next begins --
+    e.g. "do 1.1 through 1.5, then 1.6 onwards next session" instead of two
+    vague, boundary-less "Analysis" phases.
+    Returns a list of `phase_count` {"name": str, "minutes": int, "covers": str}
+    dicts in chronological/dependency order, or None on any failure or
+    malformed output -- callers (canvas_tasks.split_assignment via its
+    `phase_labels` param) fall back to the generic names AND generic fixed
+    durations whenever this returns anything else."""
     if phase_count <= 1 or not description_text:
         return None
     prompt = (
         f"An assignment named {name!r} (Canvas type: {atype}) is being broken into "
         f"{phase_count} sequential work sessions on a task list, each its own calendar task. "
-        "Based on its ACTUAL instructions below, propose each phase's name AND a realistic "
-        "time estimate in minutes, in chronological order.\n\n"
+        "Based on its ACTUAL instructions below, propose each phase's name, a realistic time "
+        "estimate in minutes, AND exactly which part of the assignment it covers, in "
+        "chronological order.\n\n"
         "For the name: short (2-5 words), specific to the SUBSTANTIVE academic work this "
         "particular assignment requires — not generic labels like \"Setup\"/\"Analysis\"/"
         "\"Write-Up\" unless the instructions genuinely don't support anything more specific. "
@@ -173,6 +179,15 @@ def propose_assignment_phases(name, description_text, atype, phase_count):
         "isn't enough assignment-specific content to name every phase distinctly, it's fine "
         "for the later phases to be more generic (e.g. \"Complete Remaining Questions\") "
         "rather than inventing false specifics.\n\n"
+        "For the coverage (`covers`): this is what makes the phase actually usable without "
+        "re-reading the whole assignment to figure out where it starts and stops. If the "
+        "source material has numbered questions/exercises/sections, reference their ACTUAL "
+        "numbering exactly as written (e.g. \"Exercise 1, questions 1.1-1.5\", \"Questions "
+        "1.6-1.7 and Exercise 2\", \"Exercise 2, all parts\") so the split lands on real "
+        "question boundaries — never split a single numbered question across two phases. If "
+        "the assignment has no such numbering (an essay, a discussion post), describe the "
+        "scope in a short phrase instead (e.g. \"Draft the introduction and first two body "
+        "paragraphs\").\n\n"
         "For the minutes estimate: look at how many actual questions/sub-parts fall in each "
         "phase, their point values, and their apparent complexity (e.g. \"compute a mean\" vs "
         "\"fit and diagnose a regression model, then write up confounders\") — don't just "
@@ -182,11 +197,11 @@ def propose_assignment_phases(name, description_text, atype, phase_count):
         "response. Keep each estimate between 20 and 180 minutes.\n\n"
         f"Instructions:\n{description_text[:8000]}\n\n"
         f'Reply with ONLY a JSON array of exactly {phase_count} objects, each shaped '
-        '{"name": "...", "minutes": <integer>}, in order.'
+        '{"name": "...", "minutes": <integer>, "covers": "..."}, in order.'
     )
     try:
         msg = _c().messages.create(
-            model=config.JUDGE_MODEL, max_tokens=400,
+            model=config.JUDGE_MODEL, max_tokens=500,
             messages=[{"role": "user", "content": prompt}],
         )
         _log_usage("propose_assignment_phases", config.JUDGE_MODEL, msg)
@@ -195,9 +210,11 @@ def propose_assignment_phases(name, description_text, atype, phase_count):
         phases = json.loads(txt)
         if (isinstance(phases, list) and len(phases) == phase_count
                 and all(isinstance(p, dict) and isinstance(p.get("name"), str) and p["name"].strip()
+                        and isinstance(p.get("covers"), str) and p["covers"].strip()
                         and isinstance(p.get("minutes"), (int, float)) and p["minutes"] > 0
                         for p in phases)):
-            return [{"name": p["name"].strip(), "minutes": int(round(p["minutes"]))} for p in phases]
+            return [{"name": p["name"].strip(), "minutes": int(round(p["minutes"])),
+                     "covers": p["covers"].strip()} for p in phases]
         return None
     except Exception:
         return None

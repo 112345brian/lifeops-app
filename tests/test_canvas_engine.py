@@ -232,6 +232,29 @@ def test_split_assignment_uses_content_aware_phase_labels():
     assert [s["durationMinutes"] for s in specs] == [40, 130, 60]
 
 
+def test_split_assignment_covers_lands_in_notes():
+    # `covers` (e.g. "Questions 1.1-1.5") is what makes a phase actionable
+    # without re-reading the whole assignment to find its boundaries -- it
+    # must show up in the task's notes, not get silently dropped.
+    labels = [{"name": "Descriptive Stats", "minutes": 45, "covers": "Questions 1.1-1.5"},
+              {"name": "Regression", "minutes": 90, "covers": "Questions 1.6-1.7 and Exercise 2"},
+              {"name": "Write-Up", "minutes": 60, "covers": "Reflection section"}]
+    specs = ce.split_assignment(4, "Problem Set 1", "assignment", D(2026, 7, 20),
+                                UNLOCK, None, TODAY, phase_labels=labels)
+    assert "Covers: Questions 1.1-1.5" in specs[0]["notes"]
+    assert "Covers: Questions 1.6-1.7 and Exercise 2" in specs[1]["notes"]
+    assert "Covers: Reflection section" in specs[2]["notes"]
+    # module note still present alongside it, not replaced
+    assert all("Module: M04" in s["notes"] for s in specs)
+
+
+def test_split_assignment_no_covers_line_when_not_provided():
+    labels = [{"name": "A", "minutes": 40}, {"name": "B", "minutes": 40}, {"name": "C", "minutes": 40}]
+    specs = ce.split_assignment(4, "X", "assignment", D(2026, 7, 20), UNLOCK, None, TODAY,
+                                phase_labels=labels)
+    assert all("Covers:" not in s["notes"] for s in specs)
+
+
 def test_split_assignment_falls_back_when_phase_labels_malformed_or_wrong_count():
     # a stale cache entry from before a re-classification, or a malformed
     # LLM response -- either way, must not crash or silently drop phases,

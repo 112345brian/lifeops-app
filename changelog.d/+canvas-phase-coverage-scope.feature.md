@@ -1,0 +1,1 @@
+Content-aware phases now also specify exactly which numbered questions/sections they cover (e.g. "Exercise 1, questions 1.1-1.3"), landing in the task's notes as a "Covers: ..." line — so a session tells you precisely where to start and stop instead of just a topical label with no boundary.
