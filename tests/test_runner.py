@@ -167,7 +167,11 @@ def test_phase_labels_for_fetches_and_caches():
     first = canvas_domain._phase_labels_for(a, cache, llm, _strip_html)
     assert first == labels
     assert llm.calls == 1
-    assert cache["42"] == labels
+    # the cache stores the source content alongside the labels (not just the
+    # labels) so a later run/refresh can tell whether the underlying
+    # description actually changed -- see refresh_assignment.
+    assert cache["42"]["labels"] == labels
+    assert "NYC open data portal" in cache["42"]["content"]
 
     # second call for the SAME assignment must hit the cache, not the LLM again
     second = canvas_domain._phase_labels_for(a, cache, llm, _strip_html)

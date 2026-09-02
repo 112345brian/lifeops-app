@@ -19,10 +19,16 @@ COURSE_ID = "test-course"
 
 class FakeCanvas:
     """Stands in for canvas.Canvas / canvas_browser.BrowserCanvas."""
-    def __init__(self, modules, assignments, announcements=None):
+    def __init__(self, modules, assignments, announcements=None, file_texts=None):
         self._modules = modules
         self._assignments = assignments
         self._announcements = announcements or []
+        # {file_id (str): text} -- a linked file NOT in here (the default,
+        # empty dict) simulates a real link that exists but can't be read
+        # (no session, dead link, fetch error), same as the real
+        # Canvas.file_text/BrowserCanvas.file_text contract of returning ""
+        # on any failure.
+        self._file_texts = file_texts or {}
 
     def modules(self, course_id=None):
         return self._modules
@@ -35,6 +41,9 @@ class FakeCanvas:
 
     def announcements(self, since_date=None, course_id=None):
         return self._announcements
+
+    def file_text(self, file_id, course_id=None, max_chars=6000):
+        return self._file_texts.get(str(file_id), "")
 
 
 class FakeFS:
@@ -231,13 +240,21 @@ def test_generic_phase_names_get_renamed_once_a_description_shows_up(tmp_path, m
 
     assert llm2.calls == 1   # description now present -- actually asked this time
     assert len(fs.created) == 3, "nothing new should be CREATED -- these tasks already exist"
-    assert len(fs.updated) == 3, "all 3 existing phase tasks should be renamed in place"
+    assert len(fs.updated) == 3, "all 3 existing phase tasks should be upserted in place"
     renamed = {item_id: kwargs["title"] for item_id, kwargs in fs.updated}
     assert set(renamed.values()) == {f"Big Project — {label['name']}" for label in content_aware_labels}
-    # renaming only changes the title -- durations aren't retroactively
-    # updated on tasks that already exist (only NEW tasks get the
-    # content-aware minutes; changing an already-scheduled task's duration
-    # after the fact is a separate, riskier operation this doesn't attempt).
+    # the upsert is faithful across the whole phase, not just the title --
+    # duration and notes (including the re-stamped [canvas-ref] marker) get
+    # corrected too, since the first pass's generic guess was only ever as
+    # good as the empty description it had.
+    by_title = {kwargs["title"]: kwargs for _, kwargs in fs.updated}
+    for i, label in enumerate(content_aware_labels, start=1):
+        kwargs = by_title[f"Big Project — {label['name']}"]
+        assert kwargs["durationMinutes"] == label["minutes"]
+        # per-phase marker, matching what creation stamps -- NOT a bare
+        # "assignment:9" shared across all 3 phases, which would collapse
+        # exact-id dedup for all of them on a future state-loss resync.
+        assert f"[canvas-ref: assignment:9:phase:{i}]" in kwargs["notes"]
     # renamed the SAME task ids that were created in run 1 (id-based, not
     # duplicated) -- FakeFS.create_task assigns "new-1"/"new-2"/"new-3" in
     # creation order.
@@ -249,6 +266,263 @@ def test_generic_phase_names_get_renamed_once_a_description_shows_up(tmp_path, m
     canvas_domain._canvas_sync(cv2, lambda s: s, canvas_engine, llm3, fs, NOW)
     assert llm3.calls == 0     # already marked content_aware -- never rechecked again
     assert fs.updated == []
+
+
+def test_refresh_assignment_forces_upsert_even_when_already_content_aware(tmp_path, monkeypatch):
+    # An assignment can be marked content_aware from a first pass that only
+    # had thin/boilerplate content to go on (a linked file that couldn't be
+    # fetched yet) -- the normal rename check skips anything already marked
+    # content_aware forever. refresh_assignment() is the manual escape
+    # hatch: the user later supplies/points to better content, and the next
+    # sync must re-derive and upsert (title, duration, notes) faithfully.
+    monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
+    monkeypatch.setattr(config, "CANVAS_COURSE_ID", COURSE_ID)
+    monkeypatch.setattr(config, "CANVAS_COURSES", "")
+    monkeypatch.setattr(config, "LIST_COURSE", "list-course")
+    _write_state(str(tmp_path), synced_modules=[], task_titles=[])
+
+    fs = FakeFS(course_tasks=[])
+    modules = [{"id": 100, "name": "Module 4", "unlock_at": "2026-06-20T00:00:00Z",
+                "items": [{"type": "Assignment", "content_id": 9}]}]
+
+    # ── run 1: thin boilerplate description -- LLM guesses phases anyway,
+    # they get cached and marked content_aware (this models the PS3 case:
+    # validation only checks field shape, not whether the guess is grounded) ──
+    thin_labels = [
+        {"name": "Setup", "minutes": 25},
+        {"name": "Guessed Middle Step", "minutes": 85},
+        {"name": "Finish & Submit", "minutes": 50},
+    ]
+    llm1 = FakeLLMWithPhaseLabels(thin_labels)
+    cv1 = FakeCanvas(modules=modules,
+                     assignments=[{"id": 9, "name": "Big Project",
+                                   "due_at": "2026-07-20T23:59:59Z",
+                                   "description": "<p>Boilerplate only.</p>"}])
+    canvas_domain._canvas_sync(cv1, lambda s: s, canvas_engine, llm1, fs, NOW)
+    assert len(fs.created) == 3
+    assert [c["title"] for c in fs.created] == [f"Big Project — {l['name']}" for l in thin_labels]
+
+    # run 2 with the SAME thin content: already marked content_aware, so the
+    # rename check must NOT rerun the LLM or touch the tasks again.
+    fs.updated.clear()
+    llm_noop = FakeLLMWithPhaseLabels(thin_labels)
+    canvas_domain._canvas_sync(cv1, lambda s: s, canvas_engine, llm_noop, fs, NOW)
+    assert llm_noop.calls == 0
+    assert fs.updated == []
+
+    # ── the user points me at real content; I clear the cache ──
+    assert canvas_domain.refresh_assignment(COURSE_ID, 9) is True
+
+    # a second refresh on an assignment with nothing cached is a harmless no-op
+    assert canvas_domain.refresh_assignment(COURSE_ID, 999) is False
+
+    # ── run 3: better content now available -- must regenerate and upsert
+    # the SAME 3 tasks in place, not create new ones, DESPITE having been
+    # marked content_aware before ──
+    real_labels = [
+        {"name": "Pull the Real Dataset", "minutes": 45},
+        {"name": "Fit the Actual Model", "minutes": 120},
+        {"name": "Write the Real Report", "minutes": 60},
+    ]
+    llm2 = FakeLLMWithPhaseLabels(real_labels)
+    cv2 = FakeCanvas(modules=modules,
+                     assignments=[{"id": 9, "name": "Big Project",
+                                   "due_at": "2026-07-20T23:59:59Z",
+                                   "description": "<p>Real, richer instructions now.</p>"}])
+    canvas_domain._canvas_sync(cv2, lambda s: s, canvas_engine, llm2, fs, NOW)
+
+    assert llm2.calls == 1
+    assert len(fs.created) == 3, "still no new tasks created"
+    assert len(fs.updated) == 3, "all 3 phase tasks upserted with the real content"
+    by_title = {kwargs["title"]: kwargs for _, kwargs in fs.updated}
+    for label in real_labels:
+        kwargs = by_title[f"Big Project — {label['name']}"]
+        assert kwargs["durationMinutes"] == label["minutes"]
+    assert {item_id for item_id, _ in fs.updated} == {"new-1", "new-2", "new-3"}
+
+
+def test_refresh_assignment_with_unchanged_content_still_upserts_but_warns(tmp_path, monkeypatch, capsys):
+    # If the user asks for a refresh but the newly-fetched content is
+    # IDENTICAL to what was already used (e.g. the linked file still can't
+    # be fetched, or nothing on Canvas actually changed), re-upserting from
+    # the same content isn't real progress -- this must still happen (a
+    # re-roll of the LLM call can legitimately differ, and the user
+    # explicitly asked for a recheck) but it must say so plainly, so a
+    # silent "updated!" doesn't look like it used new information when it
+    # didn't. Traceability: each assignment's phase_task_ids entry tracks a
+    # content_hash so this comparison is possible at all.
+    monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
+    monkeypatch.setattr(config, "CANVAS_COURSE_ID", COURSE_ID)
+    monkeypatch.setattr(config, "CANVAS_COURSES", "")
+    monkeypatch.setattr(config, "LIST_COURSE", "list-course")
+    _write_state(str(tmp_path), synced_modules=[], task_titles=[])
+
+    fs = FakeFS(course_tasks=[])
+    modules = [{"id": 100, "name": "Module 4", "unlock_at": "2026-06-20T00:00:00Z",
+                "items": [{"type": "Assignment", "content_id": 9}]}]
+    same_description = "<p>Boilerplate only.</p>"
+    labels_v1 = [
+        {"name": "Setup", "minutes": 25},
+        {"name": "Guessed Middle Step", "minutes": 85},
+        {"name": "Finish & Submit", "minutes": 50},
+    ]
+    cv = FakeCanvas(modules=modules,
+                    assignments=[{"id": 9, "name": "Big Project",
+                                  "due_at": "2026-07-20T23:59:59Z",
+                                  "description": same_description}])
+    canvas_domain._canvas_sync(cv, lambda s: s, canvas_engine, FakeLLMWithPhaseLabels(labels_v1), fs, NOW)
+
+    from lifeops import state_store
+    sp = os.path.join(str(tmp_path), "private", "logs", "canvas_state.json")
+    st_before = state_store.load_json(sp)["courses"][COURSE_ID]["phase_task_ids"]["9"]
+    assert st_before["content_hash"], "the content fingerprint must be recorded"
+
+    assert canvas_domain.refresh_assignment(COURSE_ID, 9) is True
+    fs.updated.clear()
+    capsys.readouterr()   # discard run-1 output
+
+    # same Canvas description as before -- a re-roll, not real new information
+    labels_v2 = [
+        {"name": "Setup Again", "minutes": 25},
+        {"name": "Guessed Middle Step Again", "minutes": 85},
+        {"name": "Finish & Submit Again", "minutes": 50},
+    ]
+    canvas_domain._canvas_sync(cv, lambda s: s, canvas_engine, FakeLLMWithPhaseLabels(labels_v2), fs, NOW)
+
+    assert len(fs.updated) == 3, "still upserts -- the user explicitly asked for a recheck"
+    out = capsys.readouterr().out
+    assert "NOT new information" in out
+
+    st_after = state_store.load_json(sp)["courses"][COURSE_ID]["phase_task_ids"]["9"]
+    assert st_after["content_hash"] == st_before["content_hash"], \
+        "hash is unchanged since the underlying content never changed"
+
+
+class FakeLLMDriftingReadings:
+    """Returns a slightly different reading title on every call -- models
+    the real observed non-determinism of llm.extract_readings, used to prove
+    readings_cache prevents the exact failure mode that caused a real
+    incident (2026-07-06): a state-loss re-sync re-extracted an
+    already-synced module's readings from scratch, and the reworded output
+    dodged dedup entirely, creating near-duplicates."""
+    def __init__(self):
+        self.calls = 0
+
+    def extract_readings(self, text, module_num):
+        self.calls += 1
+        return [{"author": "A", "title": f"M6 Reading (v{self.calls})", "type": "article"}]
+
+
+def test_reading_extraction_cached_by_page_content_survives_a_resync(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
+    monkeypatch.setattr(config, "CANVAS_COURSE_ID", COURSE_ID)
+    monkeypatch.setattr(config, "CANVAS_COURSES", "")
+    monkeypatch.setattr(config, "LIST_COURSE", "list-course")
+    _write_state(str(tmp_path), synced_modules=[], task_titles=[])
+
+    class _CanvasWithReadingsPage(FakeCanvas):
+        def page(self, slug, course_id=None):
+            return {"body": "<p>Stable, unchanged page text.</p>"}
+
+    fs = FakeFS(course_tasks=[])
+    page_item = {"type": "Page", "title": "Readings and Resources", "page_url": "readings"}
+    cv = _CanvasWithReadingsPage(
+        modules=[{"id": 100, "name": "Module 6", "unlock_at": "2026-06-20T00:00:00Z", "items": [page_item]}],
+        assignments=[],
+    )
+    llm = FakeLLMDriftingReadings()
+
+    canvas_domain._canvas_sync(cv, lambda s: s, canvas_engine, llm, fs, NOW)
+    assert len(fs.created) == 1
+    assert fs.created[0]["title"] == "Read A, M6 Reading (v1)"
+    assert llm.calls == 1
+
+    # ── simulate the real incident: canvas_state.json's synced-module
+    # tracking gets lost (but task_titles/readings_cache survive), so the
+    # next sync sees Module 6 as "new" again and re-extracts its page ──
+    from lifeops import state_store
+    sp = os.path.join(str(tmp_path), "private", "logs", "canvas_state.json")
+    st_root = state_store.load_json(sp)
+    st_root["courses"][COURSE_ID]["synced_modules"] = []
+    st_root["courses"][COURSE_ID]["synced_module_ids"] = []
+    state_store.save_json_atomic(sp, st_root)
+
+    canvas_domain._canvas_sync(cv, lambda s: s, canvas_engine, llm, fs, NOW)
+
+    # Without the content cache, this second call would re-extract with
+    # DRIFTED wording ("v2") that dodges title-based dedup and creates a
+    # near-duplicate -- exactly what happened in production. With the
+    # page-content cache, the LLM isn't even called again, so the same exact
+    # title comes back and title-based dedup (via the persisted task_titles)
+    # correctly recognizes it as already-created.
+    assert llm.calls == 1, "unchanged page content must reuse the cached extraction"
+    assert len(fs.created) == 1, "no near-duplicate should be created on the resync"
+
+
+def test_missing_linked_file_flags_phases_as_info_missing(tmp_path, monkeypatch):
+    # The PS3 failure mode: the description is boilerplate that links to a
+    # real .qmd file, but the file couldn't be read this run (no session /
+    # fetch error). The LLM still returns field-valid phases from the
+    # boilerplate alone -- those phases must be flagged "info missing" (in
+    # the task's own notes AND in state), not left indistinguishable from a
+    # genuinely grounded result.
+    monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
+    monkeypatch.setattr(config, "CANVAS_COURSE_ID", COURSE_ID)
+    monkeypatch.setattr(config, "CANVAS_COURSES", "")
+    monkeypatch.setattr(config, "LIST_COURSE", "list-course")
+    _write_state(str(tmp_path), synced_modules=[], task_titles=[])
+
+    fs = FakeFS(course_tasks=[])
+    modules = [{"id": 100, "name": "Module 4", "unlock_at": "2026-06-20T00:00:00Z",
+                "items": [{"type": "Assignment", "content_id": 9}]}]
+    boilerplate_with_link = (
+        '<p>Answer the questions and render. '
+        '<a href="https://x.test/courses/1/files/555?wrap=1">ps3.qmd</a></p>'
+    )
+    labels = [
+        {"name": "Setup", "minutes": 25},
+        {"name": "Guessed Middle Step", "minutes": 85},
+        {"name": "Finish & Submit", "minutes": 50},
+    ]
+    # file_texts=None (default empty) -- the linked file exists but this run
+    # can't read it, same as a dead/unauthenticated fetch in production.
+    cv = FakeCanvas(modules=modules,
+                    assignments=[{"id": 9, "name": "Big Project",
+                                  "due_at": "2026-07-20T23:59:59Z",
+                                  "description": boilerplate_with_link}])
+    canvas_domain._canvas_sync(cv, lambda s: s, canvas_engine, FakeLLMWithPhaseLabels(labels), fs, NOW)
+
+    assert len(fs.created) == 3
+    for spec in fs.created:
+        assert "Info missing" in spec["notes"]
+        assert "ps3.qmd" in spec["notes"]
+
+    missing = canvas_domain.list_missing_info(COURSE_ID)
+    assert len(missing) == 1
+    assert missing[0]["assignment_id"] == "9"
+    assert missing[0]["missing_files"] == ["ps3.qmd"]
+    assert set(missing[0]["task_ids"]) == {"new-1", "new-2", "new-3"}
+
+    # ── the file becomes readable (session restored) and the user refreshes ──
+    assert canvas_domain.refresh_assignment(COURSE_ID, 9) is True
+    fs.updated.clear()
+    real_labels = [
+        {"name": "Pull the Real Dataset", "minutes": 45},
+        {"name": "Fit the Actual Model", "minutes": 120},
+        {"name": "Write the Real Report", "minutes": 60},
+    ]
+    cv2 = FakeCanvas(modules=modules,
+                     assignments=[{"id": 9, "name": "Big Project",
+                                   "due_at": "2026-07-20T23:59:59Z",
+                                   "description": boilerplate_with_link}],
+                     file_texts={"555": "Question 1: do the thing. Question 2: do another thing."})
+    canvas_domain._canvas_sync(cv2, lambda s: s, canvas_engine, FakeLLMWithPhaseLabels(real_labels), fs, NOW)
+
+    assert len(fs.updated) == 3
+    for _, kwargs in fs.updated:
+        assert "Info missing" not in kwargs["notes"], "the file is readable now -- no more warning"
+    assert canvas_domain.list_missing_info(COURSE_ID) == [], \
+        "resolved -- nothing should still show as missing info"
 
 
 class FakeLLMPerModuleReadings:

@@ -1,10 +1,31 @@
 """Canvas domain: sync newly-unlocked modules into FlowSavvy tasks."""
-import os, datetime
+import os, datetime, hashlib
 from .. import actions, config, history, state_store
 from ..engines.canvas_tasks import classify as _classify, phase_count_for
 from ..engines.canvas_engine import _parse_date
 from ..canvas import extract_text_file_refs
 from ._shared import _save_json_atomic, _alert_once, _touch
+
+
+def _info_missing_note(missing_files):
+    """Notes-field warning stamped onto a phase task built from incomplete
+    content, naming exactly which linked file(s) couldn't be read -- this is
+    the visible, in-FlowSavvy counterpart to the internal `info_missing`
+    flag: a human glancing at the task (not just at canvas_state.json) can
+    tell its duration/coverage is a rough guess and which file would fix it
+    (see refresh_assignment once that file is readable)."""
+    if not missing_files:
+        return None
+    return "⚠ Info missing — could not read: " + ", ".join(missing_files) + \
+           " (phases are a rough guess; refresh once readable)"
+
+
+def _content_hash(content):
+    """Short fingerprint of the raw content that backed a phase-label call —
+    lets a later run tell "this task set was built from THIS exact content"
+    from "content changed since these tasks were built" without keeping two
+    full copies of the text around."""
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()[:16] if content else None
 
 # Canvas flood guard: a healthy incremental sync creates a handful of tasks; the
 # two duplicate-flood incidents (2026-07-03/06) each tried to create ~59 in one
@@ -88,6 +109,63 @@ def _migrate_legacy_canvas_state(st_root, legacy_course_id):
     st_root["courses"] = {legacy_course_id: bucket} if bucket else {}
 
 
+def refresh_assignment(course_id, assignment_id):
+    """Force the next sync to regenerate one assignment's phases from
+    scratch and upsert its already-created FlowSavvy tasks in place.
+
+    Use this when better content becomes available for an assignment
+    already synced with thin/generic phases (e.g. a linked file couldn't be
+    fetched the first time, or the Canvas description was still a stub) --
+    clears the cached phase labels so `_phase_labels_for` re-reads the
+    assignment's current description/linked files instead of reusing the
+    stale cached guess, and clears the `content_aware` flag so the
+    retroactive-rename check in `_canvas_sync` treats it as "not yet
+    content-aware" and upserts title/duration/notes on every existing phase
+    task the next time `run_canvas` runs (it does NOT call FlowSavvy
+    itself -- the actual upsert happens on the next real or dry-run sync).
+    Returns True if there was cached state to clear, False if this
+    assignment has no recorded phases yet (nothing to refresh)."""
+    sp = os.path.join(history.ROOT, "private", "logs", "canvas_state.json")
+    st_root = state_store.load_json(sp, default={}) or {}
+    _migrate_legacy_canvas_state(st_root, course_id)
+    st = st_root.get("courses", {}).get(course_id)
+    if not st:
+        return False
+    aid = str(assignment_id)
+    changed = False
+    if aid in st.get("phase_labels", {}):
+        del st["phase_labels"][aid]
+        changed = True
+    entry = st.get("phase_task_ids", {}).get(aid)
+    if entry is not None:
+        entry["content_aware"] = False
+        changed = True
+    if changed:
+        _save_json_atomic(sp, st_root)
+    return changed
+
+
+def list_missing_info(course_id):
+    """Assignments in this course whose live phase tasks are currently
+    flagged `info_missing` -- i.e. built from content that referenced a
+    linked file this engine couldn't read, so their phase names/durations
+    are a rough guess, not a grounded one (see _info_missing_note; the same
+    warning is stamped into each task's own notes in FlowSavvy, this is
+    just the queryable version). Returns
+    [{"assignment_id", "missing_files", "task_ids"}, ...]."""
+    sp = os.path.join(history.ROOT, "private", "logs", "canvas_state.json")
+    st_root = state_store.load_json(sp, default={}) or {}
+    _migrate_legacy_canvas_state(st_root, course_id)
+    st = st_root.get("courses", {}).get(course_id, {})
+    out = []
+    for aid, entry in st.get("phase_task_ids", {}).items():
+        missing = entry.get("missing_files") or []
+        if missing:
+            out.append({"assignment_id": aid, "missing_files": missing,
+                        "task_ids": list(entry.get("tasks", {}).values())})
+    return out
+
+
 def _display_name(assignment, short_titles, llm):
     """The name to render in a task title — LLM-shortened when the raw
     Canvas name is too long for a task-list title, cached per assignment id
@@ -120,9 +198,17 @@ def _phase_labels_for(assignment, cache, llm, strip_html, cv=None, course_id=Non
     live in a linked file instead, which `cv`/`course_id` (when given) let
     this fetch directly. Cached per assignment id in `cache` (mutated in
     place) so the labels stay stable across runs despite the LLM call itself
-    not being deterministic. Returns None (canvas_tasks.split_assignment
-    then falls back to its generic template) for single-phase assignments,
-    no usable content at all, or any failure."""
+    not being deterministic -- the cache entry stores the SOURCE CONTENT
+    alongside the labels (not just the labels), so a later run can tell
+    whether the description/linked file actually changed since the labels
+    were generated (see refresh_assignment) instead of only ever having the
+    LLM's derived guess to go on -- without this, a thin/boilerplate-only
+    description that produced a plausible-but-ungrounded guess (e.g. a
+    linked file couldn't be fetched yet) leaves no record of what was fed
+    to the LLM, so there's nothing to compare against once real content
+    shows up. Returns None (canvas_tasks.split_assignment then falls back
+    to its generic template) for single-phase assignments, no usable
+    content at all, or any failure."""
     name = assignment.get("name", "")
     atype = _classify(name, assignment.get("submission_types", []), assignment.get("points_possible"))
     due = _parse_date(assignment.get("due_at"))
@@ -131,24 +217,43 @@ def _phase_labels_for(assignment, cache, llm, strip_html, cv=None, course_id=Non
         return None
     aid = str(assignment.get("id"))
     cached = cache.get(aid)
-    if cached and len(cached) == count:
-        return cached
+    # legacy shape: cache[aid] was the bare labels list. Treat that as
+    # content-less (no provenance to compare against) rather than migrating
+    # it -- the next real content change naturally overwrites it with the
+    # new {labels, content} shape.
+    cached_labels = cached.get("labels") if isinstance(cached, dict) else cached
+    if cached_labels and len(cached_labels) == count:
+        return cached_labels
     raw_description = assignment.get("description") or ""
     content_parts = []
     description = strip_html(raw_description)
     if description:
         content_parts.append(description)
+    # Track linked text files that EXIST (a real citation to more content)
+    # but couldn't be READ (no browser session, dead link, fetch error) --
+    # distinct from an assignment that simply has no linked file at all.
+    # This is the PS3 failure mode exactly: a description that's pure
+    # submission boilerplate, with the real questions sitting behind a
+    # `.qmd` link this run couldn't fetch -- the LLM still returns a
+    # field-valid, plausible-sounding guess from the boilerplate alone, and
+    # nothing about that output signals it's ungrounded. Recording which
+    # files are still unread lets the resulting phases be flagged as
+    # "info missing" instead of looking indistinguishable from a fully
+    # content-aware result.
+    missing_files = []
     if cv is not None:
         for file_id, filename in extract_text_file_refs(raw_description):
             text = cv.file_text(file_id, course_id=course_id)
             if text:
                 content_parts.append(f"--- {filename} ---\n{text}")
+            else:
+                missing_files.append(filename)
     content = "\n\n".join(content_parts)
     if not content:
         return None
     labels = llm.propose_assignment_phases(name, content, atype, count)
     if labels:
-        cache[aid] = labels
+        cache[aid] = {"labels": labels, "content": content, "missing_files": missing_files}
     return labels
 
 
@@ -192,6 +297,18 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now, course=None):
     # tasks in place once a description shows up (see the rename check near
     # the end of this function) -- keyed by str(assignment_id).
     phase_task_ids = st.setdefault("phase_task_ids", {})
+    # Cached reading extractions, keyed by Readings-page slug -- same
+    # rationale and shape as phase_labels_cache ({"readings": [...],
+    # "content": page_text}): llm.extract_readings isn't byte-stable, so
+    # re-running it on a page whose text HASN'T changed can silently return
+    # slightly different author/title phrasing each time. That drift is
+    # exactly what caused a real incident (2026-07-06): a re-sync
+    # re-extracted every already-synced module's readings from scratch and
+    # the reworded output dodged both the exact-id and fuzzy-title dedup,
+    # creating near-duplicates. Caching by content, the same fix already
+    # applied to assignment phase generation, makes re-extraction return the
+    # IDENTICAL reading dicts whenever the page hasn't actually changed.
+    readings_cache = st.setdefault("readings", {})
     synced  = set(st["synced_modules"])                 # legacy dedup key: module NUMBER (rename/collision-fragile)
     synced_ids = set(st.get("synced_module_ids", []))   # stable dedup key: Canvas module id
     # `task_titles` persists ONLY the titles THIS engine actually created (see the save block
@@ -334,6 +451,18 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now, course=None):
     # rename check further down (for assignments synced in an EARLIER run,
     # before this run learned their content-aware names).
     content_aware_by_aid = {}
+    # The content fingerprint behind each assignment's CURRENT phase labels
+    # (see _content_hash) -- lets phase_task_ids record exactly which
+    # version of the source content each live phase task is traceable back
+    # to, so a later run/refresh can tell "content genuinely changed" from
+    # "still the same thin content, still an ungrounded guess" instead of
+    # only ever knowing "content-aware: yes/no" with no way to compare.
+    content_hash_by_aid = {}
+    # Filenames of linked files we know exist but couldn't read this run,
+    # per assignment id -- when non-empty, this assignment's phases are a
+    # guess from incomplete content, not a grounded result (see
+    # _phase_labels_for and the "info missing" note stamped below).
+    missing_files_by_aid = {}
 
     # populate assignments + readings per module
     for mod in modules_data:
@@ -352,7 +481,12 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now, course=None):
                     if "_phase_labels" not in a:
                         a["_phase_labels"] = _phase_labels_for(a, phase_labels_cache, llm, strip_html,
                                                                cv=cv, course_id=course_id)
-                        content_aware_by_aid[str(a.get("id"))] = a["_phase_labels"] is not None
+                        aid_str = str(a.get("id"))
+                        content_aware_by_aid[aid_str] = a["_phase_labels"] is not None
+                        cached_entry = phase_labels_cache.get(aid_str)
+                        cached_entry = cached_entry if isinstance(cached_entry, dict) else {}
+                        content_hash_by_aid[aid_str] = _content_hash(cached_entry.get("content"))
+                        missing_files_by_aid[aid_str] = cached_entry.get("missing_files") or []
                     asgns.append(a)
             elif item.get("type") == "Page":
                 t = (item.get("title") or "").lower()
@@ -361,14 +495,30 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now, course=None):
                     if slug:
                         reading_page_slugs.append(slug)
 
-        # extract readings from pages via LLM
+        # extract readings from pages via LLM -- cached by page content, same
+        # pattern as _phase_labels_for, for the same reason: an unchanged
+        # page shouldn't get a fresh (and possibly differently-worded) LLM
+        # extraction every single sync.
         readings = []
         for slug in reading_page_slugs:
             try:
                 page = cv.page(slug, course_id=course_id)
                 text = strip_html(page.get("body") or "")
-                if text:
-                    readings.extend(llm.extract_readings(text, mod["module_num"]))
+                if not text:
+                    continue
+                # keyed by (slug, module_num), not slug alone -- extract_readings
+                # takes module_num as real context (not just a label), so the
+                # SAME slug/text reused across two different modules must not
+                # collapse into one cache entry.
+                cache_key = f"{slug}::{mod['module_num']}"
+                cached = readings_cache.get(cache_key)
+                if isinstance(cached, dict) and cached.get("content") == text and cached.get("readings"):
+                    extracted = cached["readings"]
+                else:
+                    extracted = llm.extract_readings(text, mod["module_num"])
+                    if extracted:
+                        readings_cache[cache_key] = {"readings": extracted, "content": text}
+                readings.extend(extracted)
             except Exception as e:
                 print(f"[canvas] page {slug}: {e}")
 
@@ -418,7 +568,13 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now, course=None):
         source_id = spec.pop("_source_id", None)
         phase_index = spec.pop("_phase_index", None)
         phase_total = spec.pop("_phase_total", None)
-        spec["notes"] = canvas_engine.format_ref_note(spec.get("notes", ""), source_id,
+        notes = spec.get("notes", "")
+        if source_id and source_id.startswith("assignment:"):
+            missing = missing_files_by_aid.get(source_id.split(":", 2)[1])
+            warn = _info_missing_note(missing)
+            if warn:
+                notes = f"{notes}\n\n{warn}" if notes else warn
+        spec["notes"] = canvas_engine.format_ref_note(notes, source_id,
                                                        phase_index, phase_total)
         kwargs = {
             "listId":            course["list_id"],
@@ -443,7 +599,10 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now, course=None):
                 # future run) can find and update it once/if that changes.
                 aid = source_id.split(":", 2)[1]
                 entry = phase_task_ids.setdefault(
-                    aid, {"content_aware": content_aware_by_aid.get(aid, False), "tasks": {}})
+                    aid, {"content_aware": content_aware_by_aid.get(aid, False),
+                          "content_hash": content_hash_by_aid.get(aid),
+                          "missing_files": missing_files_by_aid.get(aid) or [],
+                          "tasks": {}})
                 entry["tasks"][str(phase_index)] = tid
             # durable audit trail — creations must survive discarded stdout.
             # creates_task=True tells the History page's undo button that
@@ -512,21 +671,68 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now, course=None):
                                            cv=cv, course_id=course_id)
             if not new_labels or len(new_labels) != count:
                 continue   # still no usable description -- try again next run
+            cached_entry = phase_labels_cache.get(aid_str)
+            cached_entry = cached_entry if isinstance(cached_entry, dict) else {}
+            new_hash = _content_hash(cached_entry.get("content"))
+            new_missing = cached_entry.get("missing_files") or []
+            old_hash = entry.get("content_hash")
+            if old_hash and new_hash == old_hash:
+                # Same source content as last time this was checked -- the
+                # tasks we're about to "upsert" would just be re-derived from
+                # identical input, so this isn't new grounded data, it's the
+                # LLM re-guessing from the same thin content. Still upsert
+                # (a re-roll CAN legitimately differ, and refresh_assignment
+                # explicitly asked for a recheck) but say so plainly, since
+                # otherwise this looks indistinguishable from a real update.
+                print(f"[canvas] assignment {aid}: source content unchanged "
+                      f"since last check (hash {new_hash}) -- re-upserting "
+                      f"anyway, but this is NOT new information")
             new_specs = canvas_engine.split_assignment(
                 0, name, atype, due, due or today, None, today,
                 assignment_id=aid, display_name=a.get("display_name"), phase_labels=new_labels)
+            phase_total = len(new_specs)
             for phase_i_str, task_id in entry["tasks"].items():
                 idx = int(phase_i_str) - 1
                 if idx >= len(new_specs):
                     continue
-                new_title = new_specs[idx]["title"]
+                new_spec = new_specs[idx]
+                # Upsert faithfully: title, duration, AND notes (not just the
+                # title) -- a later re-check with better content (a fetched
+                # linked file, a description that finally got written) should
+                # correct the whole phase, since the first pass's duration/
+                # coverage guess was only ever as good as the thin content it
+                # had. Re-stamp the [canvas-ref] marker so exact-id dedup
+                # still recognizes this task on the next sync.
+                notes = new_spec.get("notes", "")
+                warn = _info_missing_note(new_missing)
+                if warn:
+                    notes = f"{notes}\n\n{warn}" if notes else warn
+                # Reuse the SAME per-phase source_id split_assignment already
+                # stamped onto new_spec ("assignment:<id>:phase:<n>"), not a
+                # hand-rolled "assignment:<id>" -- format_ref_note's marker is
+                # scraped back out by extract_source_ids and fed into plan()'s
+                # exact-id dedup on a future state-loss resync. A bare
+                # "assignment:<id>" collapses all phases of this assignment
+                # onto the SAME marker (the "(part i of N)" suffix isn't part
+                # of the parsed id), so that resync could no longer tell them
+                # apart by source id and would fall back to fuzzy title
+                # matching -- exactly the failure mode exact-id dedup exists
+                # to avoid.
+                new_notes = canvas_engine.format_ref_note(
+                    notes, new_spec.get("_source_id") or f"assignment:{aid}",
+                    idx + 1, phase_total if phase_total > 1 else None)
                 try:
-                    fs.update_task(task_id, title=new_title)
+                    fs.update_task(task_id, title=new_spec["title"],
+                                   durationMinutes=new_spec["durationMinutes"],
+                                   minLengthMinutes=new_spec.get("minLengthMinutes"),
+                                   notes=new_notes)
                     _touch()
-                    print(f"[canvas] renamed to content-aware phase name: {new_title}")
+                    print(f"[canvas] updated to content-aware phase: {new_spec['title']}")
                 except Exception as e:
-                    print(f"[canvas] rename failed for assignment {aid} phase {phase_i_str}: {e}")
+                    print(f"[canvas] update failed for assignment {aid} phase {phase_i_str}: {e}")
             entry["content_aware"] = True
+            entry["content_hash"] = new_hash
+            entry["missing_files"] = new_missing
     except Exception as e:
         print(f"[canvas] phase-rename check error: {e}")
 
