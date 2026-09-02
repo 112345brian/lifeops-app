@@ -66,6 +66,21 @@ class FakeLLM:
         return []
 
 
+class FakeLLMWithPhaseLabels(FakeLLM):
+    """Returns real content-aware labels ONLY when handed a non-empty
+    description -- models the real llm.propose_assignment_phases contract
+    (canvas_domain._phase_labels_for already refuses to call it at all
+    without a description; this fake's `calls` counter still lets a test
+    assert it was or wasn't invoked)."""
+    def __init__(self, labels):
+        self._labels = labels
+        self.calls = 0
+
+    def propose_assignment_phases(self, name, description, atype, count):
+        self.calls += 1
+        return self._labels if len(self._labels) == count else None
+
+
 def _write_state(root, synced_modules, task_titles):
     from lifeops import state_store
     state_store.save_json_atomic(
@@ -166,6 +181,66 @@ def test_multi_phase_assignment_dependencies_chain_through_real_creation(tmp_pat
     assert "blockedByIds" not in outline, "the first phase has nothing to depend on"
     assert draft["blockedByIds"] == ["new-1"], "Draft must be blockedBy Outline's real created id"
     assert revise["blockedByIds"] == ["new-2"], "Revise must be blockedBy Draft's real created id"
+
+
+def test_generic_phase_names_get_renamed_once_a_description_shows_up(tmp_path, monkeypatch):
+    # regression/feature: an assignment's whole semester is often visible --
+    # and synced -- well before its real Canvas description is written, so
+    # it gets the generic per-atype phase template at first. Once a later
+    # sync sees a real description, the already-created tasks must be
+    # renamed in place to the content-aware names, not left generic forever.
+    monkeypatch.setattr(runner.history, "ROOT", str(tmp_path))
+    monkeypatch.setattr(config, "CANVAS_COURSE_ID", COURSE_ID)
+    monkeypatch.setattr(config, "CANVAS_COURSES", "")
+    monkeypatch.setattr(config, "LIST_COURSE", "list-course")
+    _write_state(str(tmp_path), synced_modules=[], task_titles=[])
+
+    fs = FakeFS(course_tasks=[])
+    modules = [{"id": 100, "name": "Module 4", "unlock_at": "2026-06-20T00:00:00Z",
+                "items": [{"type": "Assignment", "content_id": 9}]}]
+
+    # ── run 1: assignment has no description yet -- generic names ──
+    llm1 = FakeLLMWithPhaseLabels(["should never be used"])
+    cv1 = FakeCanvas(modules=modules,
+                     assignments=[{"id": 9, "name": "Big Project",
+                                   "due_at": "2026-07-20T23:59:59Z"}])   # no "description" key
+    canvas_domain._canvas_sync(cv1, lambda s: s, canvas_engine, llm1, fs, NOW)
+
+    assert llm1.calls == 0   # never even attempted -- no description to send
+    assert len(fs.created) == 3
+    generic_titles = [c["title"] for c in fs.created]
+    assert generic_titles == [
+        "Big Project — Setup & Data Exploration",
+        "Big Project — Analysis & Visualization",
+        "Big Project — Write-Up",
+    ]
+    assert fs.updated == []
+
+    # ── run 2: same assignment, description has since been written ──
+    content_aware_labels = ["Pull the Dataset", "Explore & Model", "Write the Report"]
+    llm2 = FakeLLMWithPhaseLabels(content_aware_labels)
+    cv2 = FakeCanvas(modules=modules,
+                     assignments=[{"id": 9, "name": "Big Project",
+                                   "due_at": "2026-07-20T23:59:59Z",
+                                   "description": "<p>Real instructions now.</p>"}])
+    canvas_domain._canvas_sync(cv2, lambda s: s, canvas_engine, llm2, fs, NOW)
+
+    assert llm2.calls == 1   # description now present -- actually asked this time
+    assert len(fs.created) == 3, "nothing new should be CREATED -- these tasks already exist"
+    assert len(fs.updated) == 3, "all 3 existing phase tasks should be renamed in place"
+    renamed = {item_id: kwargs["title"] for item_id, kwargs in fs.updated}
+    assert set(renamed.values()) == {f"Big Project — {label}" for label in content_aware_labels}
+    # renamed the SAME task ids that were created in run 1 (id-based, not
+    # duplicated) -- FakeFS.create_task assigns "new-1"/"new-2"/"new-3" in
+    # creation order.
+    assert set(renamed.keys()) == {"new-1", "new-2", "new-3"}
+
+    # ── run 3: idempotent -- must not keep re-renaming every run ──
+    fs.updated.clear()
+    llm3 = FakeLLMWithPhaseLabels(content_aware_labels)
+    canvas_domain._canvas_sync(cv2, lambda s: s, canvas_engine, llm3, fs, NOW)
+    assert llm3.calls == 0     # already marked content_aware -- never rechecked again
+    assert fs.updated == []
 
 
 class FakeLLMPerModuleReadings:

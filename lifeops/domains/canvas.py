@@ -167,6 +167,15 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now, course=None):
     # Cached content-aware phase names (see _phase_labels_for), keyed by
     # Canvas assignment id (str) -- same stability rationale as short_titles.
     phase_labels_cache = st.setdefault("phase_labels", {})
+    # Per-assignment record of which FlowSavvy task id holds which phase,
+    # and whether those titles are already using real content-aware names
+    # or still the generic fallback template -- an assignment's whole
+    # semester is often visible (and synced) well before its description is
+    # actually written, so "generic now, content-aware later" is the normal
+    # case here, not an edge case. Lets a later run rename already-created
+    # tasks in place once a description shows up (see the rename check near
+    # the end of this function) -- keyed by str(assignment_id).
+    phase_task_ids = st.setdefault("phase_task_ids", {})
     synced  = set(st["synced_modules"])                 # legacy dedup key: module NUMBER (rename/collision-fragile)
     synced_ids = set(st.get("synced_module_ids", []))   # stable dedup key: Canvas module id
     # `task_titles` persists ONLY the titles THIS engine actually created (see the save block
@@ -303,6 +312,13 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now, course=None):
     except Exception as e:
         print(f"[canvas] failed to fetch assignments: {e}"); return
 
+    # Which assignments got REAL content-aware phase names this run, vs the
+    # generic fallback template -- keyed by str(assignment_id), used both to
+    # record alongside newly-created phase tasks below and by the retroactive
+    # rename check further down (for assignments synced in an EARLIER run,
+    # before this run learned their content-aware names).
+    content_aware_by_aid = {}
+
     # populate assignments + readings per module
     for mod in modules_data:
         items = mod.pop("_mod_items")
@@ -319,6 +335,7 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now, course=None):
                     a.setdefault("display_name", _display_name(a, short_titles, llm))
                     if "_phase_labels" not in a:
                         a["_phase_labels"] = _phase_labels_for(a, phase_labels_cache, llm, strip_html)
+                        content_aware_by_aid[str(a.get("id"))] = a["_phase_labels"] is not None
                     asgns.append(a)
             elif item.get("type") == "Page":
                 t = (item.get("title") or "").lower()
@@ -402,6 +419,15 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now, course=None):
                 created_titles[spec["title"]] = tid
             if source_id:
                 created_source_ids.add(source_id)
+            if tid and phase_index and source_id and source_id.startswith("assignment:"):
+                # source_id shape: "assignment:<id>:phase:<n>" -- record which
+                # task holds which phase, and whether it's already using a
+                # real content-aware name, so the rename check below (or a
+                # future run) can find and update it once/if that changes.
+                aid = source_id.split(":", 2)[1]
+                entry = phase_task_ids.setdefault(
+                    aid, {"content_aware": content_aware_by_aid.get(aid, False), "tasks": {}})
+                entry["tasks"][str(phase_index)] = tid
             # durable audit trail — creations must survive discarded stdout.
             # creates_task=True tells the History page's undo button that
             # meta.id is a FlowSavvy item THIS log entry created (so undo
@@ -440,6 +466,51 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now, course=None):
                     print(f"[canvas] updated due date for {title}: {fs_due}→{canvas_due}")
     except Exception as e:
         print(f"[canvas] change-check error: {e}")
+
+    # Retroactive rename: an assignment synced while its Canvas description
+    # was still empty/stub got the generic per-atype phase names (the whole
+    # semester's assignments are often visible -- and synced -- well before
+    # each one's real instructions are written). Recheck every
+    # not-yet-content-aware assignment EVERY run and rename its
+    # already-created phase tasks in place once real content-aware names
+    # become available. Safe to do after the fact: FlowSavvy resolves
+    # blockedByIds to real ids at creation time, not by title lookup, so
+    # renaming a task's title doesn't disturb any dependency already wired.
+    try:
+        for aid_str, entry in phase_task_ids.items():
+            if entry.get("content_aware"):
+                continue
+            try:
+                aid = int(aid_str)
+            except ValueError:
+                continue
+            a = all_assignments.get(aid)
+            if a is None:
+                continue
+            name = a.get("name", "")
+            atype = canvas_engine.classify(name, a.get("submission_types", []))
+            due = canvas_engine._parse_date(a.get("due_at"))
+            count = canvas_engine.phase_count_for(name, atype, due)
+            new_labels = _phase_labels_for(a, phase_labels_cache, llm, strip_html)
+            if not new_labels or len(new_labels) != count:
+                continue   # still no usable description -- try again next run
+            new_specs = canvas_engine.split_assignment(
+                0, name, atype, due, due or today, None, today,
+                assignment_id=aid, display_name=a.get("display_name"), phase_labels=new_labels)
+            for phase_i_str, task_id in entry["tasks"].items():
+                idx = int(phase_i_str) - 1
+                if idx >= len(new_specs):
+                    continue
+                new_title = new_specs[idx]["title"]
+                try:
+                    fs.update_task(task_id, title=new_title)
+                    _touch()
+                    print(f"[canvas] renamed to content-aware phase name: {new_title}")
+                except Exception as e:
+                    print(f"[canvas] rename failed for assignment {aid} phase {phase_i_str}: {e}")
+            entry["content_aware"] = True
+    except Exception as e:
+        print(f"[canvas] phase-rename check error: {e}")
 
     # check announcements
     try:
