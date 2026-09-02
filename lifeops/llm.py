@@ -141,40 +141,63 @@ def shorten_assignment_name(name, max_chars=35):
 
 
 def propose_assignment_phases(name, description_text, atype, phase_count):
-    """Propose `phase_count` content-aware phase names for one Canvas
-    assignment, read from its actual instructions, instead of the generic
-    per-atype template in canvas_tasks._DEFAULT_PHASE_NAMES (e.g. "Pull NYC
-    Open Data" / "Clean & Explore" / "Build Visualizations" instead of the
-    generic "Setup & Data Exploration"/"Analysis & Visualization"/"Write-Up").
-    Returns a list of `phase_count` short strings in chronological/dependency
-    order, or None on any failure or malformed output -- callers
-    (canvas_tasks.split_assignment via its `phase_labels` param) fall back to
-    the generic template whenever this returns anything else."""
+    """Propose `phase_count` content-aware phases for one Canvas assignment
+    -- name AND a real per-phase minutes estimate, read from its actual
+    instructions -- instead of the generic per-atype template in
+    canvas_tasks._DEFAULT_PHASE_NAMES with its fixed generic durations (e.g.
+    "Calculate Descriptive Statistics" ~70min / "Fit & Interpret Regression
+    Models" ~90min instead of the same 80/105/75 for every assignment of
+    this type regardless of how many questions it actually has).
+    Returns a list of `phase_count` {"name": str, "minutes": int} dicts in
+    chronological/dependency order, or None on any failure or malformed
+    output -- callers (canvas_tasks.split_assignment via its `phase_labels`
+    param) fall back to the generic names AND generic fixed durations
+    whenever this returns anything else."""
     if phase_count <= 1 or not description_text:
         return None
     prompt = (
         f"An assignment named {name!r} (Canvas type: {atype}) is being broken into "
         f"{phase_count} sequential work sessions on a task list, each its own calendar task. "
-        "Based on its ACTUAL instructions below, propose short (2-5 word) phase names, in "
-        "chronological order, specific to what this particular assignment requires — not "
-        "generic labels like \"Setup\"/\"Analysis\"/\"Write-Up\" unless the instructions "
-        "genuinely don't support anything more specific. Each name should read naturally as "
-        f"a task-list title suffix (e.g. \"Pull NYC Open Data\", \"Build Visualizations\").\n\n"
-        f"Instructions:\n{description_text[:3000]}\n\n"
-        f"Reply with ONLY a JSON array of exactly {phase_count} strings, in order."
+        "Based on its ACTUAL instructions below, propose each phase's name AND a realistic "
+        "time estimate in minutes, in chronological order.\n\n"
+        "For the name: short (2-5 words), specific to the SUBSTANTIVE academic work this "
+        "particular assignment requires — not generic labels like \"Setup\"/\"Analysis\"/"
+        "\"Write-Up\" unless the instructions genuinely don't support anything more specific. "
+        "Ignore generic environment/tooling setup (installing software, reading a tool's "
+        "general getting-started guide, formatting/submission mechanics) when proposing "
+        "phases — that's boilerplate common to every assignment in the course, not this "
+        "assignment's actual work, and doesn't deserve its own phase or time budget. If the "
+        "instructions reference a linked file (a problem set, dataset, or notebook) whose own "
+        "content is included below, base the phases and estimates on THAT content, not the "
+        "surrounding submission instructions. If, after excluding boilerplate, there genuinely "
+        "isn't enough assignment-specific content to name every phase distinctly, it's fine "
+        "for the later phases to be more generic (e.g. \"Complete Remaining Questions\") "
+        "rather than inventing false specifics.\n\n"
+        "For the minutes estimate: look at how many actual questions/sub-parts fall in each "
+        "phase, their point values, and their apparent complexity (e.g. \"compute a mean\" vs "
+        "\"fit and diagnose a regression model, then write up confounders\") — don't just "
+        "guess a round number. Rough per-question reference points for this kind of academic "
+        "work: ~5min for a one-line calculation, ~15min for a plot plus written interpretation, "
+        "~30min+ for fitting/diagnosing a model or writing a substantive multi-paragraph "
+        "response. Keep each estimate between 20 and 180 minutes.\n\n"
+        f"Instructions:\n{description_text[:8000]}\n\n"
+        f'Reply with ONLY a JSON array of exactly {phase_count} objects, each shaped '
+        '{"name": "...", "minutes": <integer>}, in order.'
     )
     try:
         msg = _c().messages.create(
-            model=config.JUDGE_MODEL, max_tokens=200,
+            model=config.JUDGE_MODEL, max_tokens=400,
             messages=[{"role": "user", "content": prompt}],
         )
         _log_usage("propose_assignment_phases", config.JUDGE_MODEL, msg)
         txt = msg.content[0].text.strip()
         txt = txt[txt.find("["): txt.rfind("]") + 1]
-        names = json.loads(txt)
-        if (isinstance(names, list) and len(names) == phase_count
-                and all(isinstance(x, str) and x.strip() for x in names)):
-            return [x.strip() for x in names]
+        phases = json.loads(txt)
+        if (isinstance(phases, list) and len(phases) == phase_count
+                and all(isinstance(p, dict) and isinstance(p.get("name"), str) and p["name"].strip()
+                        and isinstance(p.get("minutes"), (int, float)) and p["minutes"] > 0
+                        for p in phases)):
+            return [{"name": p["name"].strip(), "minutes": int(round(p["minutes"]))} for p in phases]
         return None
     except Exception:
         return None

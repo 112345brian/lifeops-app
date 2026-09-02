@@ -220,20 +220,33 @@ def test_phase_count_for_matches_actual_split_counts():
 
 
 def test_split_assignment_uses_content_aware_phase_labels():
-    labels = ["Pull NYC Open Data", "Clean & Explore", "Write Findings"]
+    # content-aware phase_labels carry REAL per-question-driven minutes too,
+    # not the generic per-atype fixed durations (80/105/75).
+    labels = [{"name": "Pull NYC Open Data", "minutes": 40},
+              {"name": "Clean & Explore", "minutes": 130},
+              {"name": "Write Findings", "minutes": 60}]
     specs = ce.split_assignment(4, "NYC Open Data Analysis", "assignment", D(2026, 7, 20),
                                 UNLOCK, None, TODAY, phase_labels=labels)
     titles = [s["title"].split(" — ")[-1] for s in specs]
-    assert titles == labels
+    assert titles == [l["name"] for l in labels]
+    assert [s["durationMinutes"] for s in specs] == [40, 130, 60]
 
 
-def test_split_assignment_falls_back_when_phase_labels_count_mismatches():
+def test_split_assignment_falls_back_when_phase_labels_malformed_or_wrong_count():
     # a stale cache entry from before a re-classification, or a malformed
-    # LLM response -- either way, must not crash or silently drop phases.
-    specs = ce.split_assignment(4, "X", "assignment", D(2026, 7, 20), UNLOCK, None, TODAY,
-                                phase_labels=["Only One"])
-    titles = [s["title"].split(" — ")[-1] for s in specs]
-    assert titles == ["Setup & Data Exploration", "Analysis & Visualization", "Write-Up"]
+    # LLM response -- either way, must not crash or silently drop phases,
+    # and must fall back to the generic durations too (not just names).
+    for bad_labels in (
+        [{"name": "Only One", "minutes": 40}],                          # wrong count
+        [{"name": "A", "minutes": 10}, {"name": "B", "minutes": 10},    # missing "minutes" key
+         {"name": "C"}],
+        ["A", "B", "C"],                                                 # old plain-string format
+    ):
+        specs = ce.split_assignment(4, "X", "assignment", D(2026, 7, 20), UNLOCK, None, TODAY,
+                                    phase_labels=bad_labels)
+        titles = [s["title"].split(" — ")[-1] for s in specs]
+        assert titles == ["Setup & Data Exploration", "Analysis & Visualization", "Write-Up"]
+        assert [s["durationMinutes"] for s in specs] == [80, 105, 75]
 
 
 def test_split_assignment_display_name_used_for_tag_only():

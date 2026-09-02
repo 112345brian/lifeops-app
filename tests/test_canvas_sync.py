@@ -217,7 +217,11 @@ def test_generic_phase_names_get_renamed_once_a_description_shows_up(tmp_path, m
     assert fs.updated == []
 
     # ── run 2: same assignment, description has since been written ──
-    content_aware_labels = ["Pull the Dataset", "Explore & Model", "Write the Report"]
+    content_aware_labels = [
+        {"name": "Pull the Dataset", "minutes": 45},
+        {"name": "Explore & Model", "minutes": 120},
+        {"name": "Write the Report", "minutes": 60},
+    ]
     llm2 = FakeLLMWithPhaseLabels(content_aware_labels)
     cv2 = FakeCanvas(modules=modules,
                      assignments=[{"id": 9, "name": "Big Project",
@@ -229,7 +233,11 @@ def test_generic_phase_names_get_renamed_once_a_description_shows_up(tmp_path, m
     assert len(fs.created) == 3, "nothing new should be CREATED -- these tasks already exist"
     assert len(fs.updated) == 3, "all 3 existing phase tasks should be renamed in place"
     renamed = {item_id: kwargs["title"] for item_id, kwargs in fs.updated}
-    assert set(renamed.values()) == {f"Big Project — {label}" for label in content_aware_labels}
+    assert set(renamed.values()) == {f"Big Project — {label['name']}" for label in content_aware_labels}
+    # renaming only changes the title -- durations aren't retroactively
+    # updated on tasks that already exist (only NEW tasks get the
+    # content-aware minutes; changing an already-scheduled task's duration
+    # after the fact is a separate, riskier operation this doesn't attempt).
     # renamed the SAME task ids that were created in run 1 (id-based, not
     # duplicated) -- FakeFS.create_task assigns "new-1"/"new-2"/"new-3" in
     # creation order.

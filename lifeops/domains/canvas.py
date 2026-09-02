@@ -3,6 +3,7 @@ import os, datetime
 from .. import actions, config, history, state_store
 from ..engines.canvas_tasks import classify as _classify, phase_count_for
 from ..engines.canvas_engine import _parse_date
+from ..canvas import extract_text_file_refs
 from ._shared import _save_json_atomic, _alert_once, _touch
 
 # Canvas flood guard: a healthy incremental sync creates a handful of tasks; the
@@ -107,16 +108,21 @@ def _display_name(assignment, short_titles, llm):
     return name
 
 
-def _phase_labels_for(assignment, cache, llm, strip_html):
+def _phase_labels_for(assignment, cache, llm, strip_html, cv=None, course_id=None):
     """Content-aware phase names for one multi-phase assignment (e.g. "Pull
     NYC Open Data" / "Clean & Explore" / "Build Visualizations" instead of
     the generic "Setup & Data Exploration"/"Analysis & Visualization"/
     "Write-Up" template), read from the assignment's actual Canvas
-    `description` via llm.propose_assignment_phases. Cached per assignment
-    id in `cache` (mutated in place) so the labels stay stable across runs
-    despite the LLM call itself not being deterministic. Returns None
-    (canvas_tasks.split_assignment then falls back to its generic template)
-    for single-phase assignments, an empty description, or any failure."""
+    `description` PLUS the text content of any linked .qmd/.py/.md/etc file
+    (see canvas.extract_text_file_refs) via llm.propose_assignment_phases.
+    The description alone is frequently just submission boilerplate ("answer
+    the questions, render, submit") -- a problem set's REAL questions often
+    live in a linked file instead, which `cv`/`course_id` (when given) let
+    this fetch directly. Cached per assignment id in `cache` (mutated in
+    place) so the labels stay stable across runs despite the LLM call itself
+    not being deterministic. Returns None (canvas_tasks.split_assignment
+    then falls back to its generic template) for single-phase assignments,
+    no usable content at all, or any failure."""
     name = assignment.get("name", "")
     atype = _classify(name, assignment.get("submission_types", []))
     due = _parse_date(assignment.get("due_at"))
@@ -127,10 +133,20 @@ def _phase_labels_for(assignment, cache, llm, strip_html):
     cached = cache.get(aid)
     if cached and len(cached) == count:
         return cached
-    description = strip_html(assignment.get("description") or "")
-    if not description:
+    raw_description = assignment.get("description") or ""
+    content_parts = []
+    description = strip_html(raw_description)
+    if description:
+        content_parts.append(description)
+    if cv is not None:
+        for file_id, filename in extract_text_file_refs(raw_description):
+            text = cv.file_text(file_id, course_id=course_id)
+            if text:
+                content_parts.append(f"--- {filename} ---\n{text}")
+    content = "\n\n".join(content_parts)
+    if not content:
         return None
-    labels = llm.propose_assignment_phases(name, description, atype, count)
+    labels = llm.propose_assignment_phases(name, content, atype, count)
     if labels:
         cache[aid] = labels
     return labels
@@ -334,7 +350,8 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now, course=None):
                     a = all_assignments[cid]
                     a.setdefault("display_name", _display_name(a, short_titles, llm))
                     if "_phase_labels" not in a:
-                        a["_phase_labels"] = _phase_labels_for(a, phase_labels_cache, llm, strip_html)
+                        a["_phase_labels"] = _phase_labels_for(a, phase_labels_cache, llm, strip_html,
+                                                               cv=cv, course_id=course_id)
                         content_aware_by_aid[str(a.get("id"))] = a["_phase_labels"] is not None
                     asgns.append(a)
             elif item.get("type") == "Page":
@@ -491,7 +508,8 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now, course=None):
             atype = canvas_engine.classify(name, a.get("submission_types", []))
             due = canvas_engine._parse_date(a.get("due_at"))
             count = canvas_engine.phase_count_for(name, atype, due)
-            new_labels = _phase_labels_for(a, phase_labels_cache, llm, strip_html)
+            new_labels = _phase_labels_for(a, phase_labels_cache, llm, strip_html,
+                                           cv=cv, course_id=course_id)
             if not new_labels or len(new_labels) != count:
                 continue   # still no usable description -- try again next run
             new_specs = canvas_engine.split_assignment(

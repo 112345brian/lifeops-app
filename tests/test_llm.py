@@ -130,24 +130,56 @@ def test_extract_readings_returns_empty_list_when_client_raises(tmp_path, monkey
 
 def test_propose_assignment_phases_parses_valid_array(tmp_path, monkeypatch):
     _configure(monkeypatch, tmp_path)
-    _install_fake_client(monkeypatch, json.dumps(["Pull NYC Open Data", "Clean & Explore", "Write Findings"]))
+    payload = json.dumps([
+        {"name": "Pull NYC Open Data", "minutes": 40},
+        {"name": "Clean & Explore", "minutes": 90},
+        {"name": "Write Findings", "minutes": 60},
+    ])
+    _install_fake_client(monkeypatch, payload)
 
     out = llm.propose_assignment_phases("NYC Open Data Analysis", "Use the NYC open data portal...",
                                         "assignment", 3)
-    assert out == ["Pull NYC Open Data", "Clean & Explore", "Write Findings"]
+    assert out == [
+        {"name": "Pull NYC Open Data", "minutes": 40},
+        {"name": "Clean & Explore", "minutes": 90},
+        {"name": "Write Findings", "minutes": 60},
+    ]
+
+
+def test_propose_assignment_phases_rounds_float_minutes_to_int(tmp_path, monkeypatch):
+    _configure(monkeypatch, tmp_path)
+    payload = json.dumps([{"name": "A", "minutes": 40.6}, {"name": "B", "minutes": 30},
+                          {"name": "C", "minutes": 25.2}])
+    _install_fake_client(monkeypatch, payload)
+
+    out = llm.propose_assignment_phases("X", "instructions", "assignment", 3)
+    assert [p["minutes"] for p in out] == [41, 30, 25]
+    assert all(isinstance(p["minutes"], int) for p in out)
 
 
 def test_propose_assignment_phases_rejects_wrong_count(tmp_path, monkeypatch):
     _configure(monkeypatch, tmp_path)
-    _install_fake_client(monkeypatch, json.dumps(["Only", "Two"]))
+    _install_fake_client(monkeypatch, json.dumps([{"name": "Only", "minutes": 40}]))
 
     assert llm.propose_assignment_phases("X", "instructions", "assignment", 3) is None
 
 
-def test_propose_assignment_phases_rejects_non_string_items(tmp_path, monkeypatch):
+def test_propose_assignment_phases_rejects_missing_or_bad_minutes(tmp_path, monkeypatch):
     _configure(monkeypatch, tmp_path)
-    _install_fake_client(monkeypatch, json.dumps(["Fine", 2, "Also fine"]))
+    for bad_payload in (
+        [{"name": "A"}, {"name": "B", "minutes": 30}, {"name": "C", "minutes": 20}],       # missing minutes
+        [{"name": "A", "minutes": 0}, {"name": "B", "minutes": 30}, {"name": "C", "minutes": 20}],  # non-positive
+        [{"name": "A", "minutes": "forty"}, {"name": "B", "minutes": 30}, {"name": "C", "minutes": 20}],  # non-numeric
+    ):
+        _install_fake_client(monkeypatch, json.dumps(bad_payload))
+        assert llm.propose_assignment_phases("X", "instructions", "assignment", 3) is None
 
+
+def test_propose_assignment_phases_rejects_non_object_items(tmp_path, monkeypatch):
+    _configure(monkeypatch, tmp_path)
+    # includes the OLD plain-string format (pre-minutes-estimate) -- must be
+    # rejected, not silently accepted with a missing/default duration.
+    _install_fake_client(monkeypatch, json.dumps(["Fine", 2, "Also fine"]))
     assert llm.propose_assignment_phases("X", "instructions", "assignment", 3) is None
 
 

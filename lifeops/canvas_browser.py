@@ -170,3 +170,18 @@ class BrowserCanvas:
         if since_date:
             extra["start_date"] = since_date
         return self._get("/api/v1/announcements", extra)
+
+    def file_text(self, file_id, course_id=None, max_chars=6000):
+        """See canvas.Canvas.file_text -- same contract, browser-authenticated
+        request context instead of a Bearer token."""
+        try:
+            meta = self._get(f"/api/v1/courses/{course_id or self.course}/files/{file_id}")
+            url = meta.get("url")
+            if not url:
+                return ""
+            r = self.context.request.get(url, timeout=30000)
+            if not r.ok:
+                return ""
+            return r.text()[:max_chars]
+        except Exception:
+            return ""

@@ -138,7 +138,7 @@ def _strip_html(s):
 
 
 def test_phase_labels_for_returns_none_for_single_phase_assignment():
-    llm = _FakePhaseLLM(["should never be used"])
+    llm = _FakePhaseLLM([{"name": "should never be used", "minutes": 30}])
     cache = {}
     a = {"id": 1, "name": "Real Reply", "due_at": "2026-07-20T23:59:59Z", "description": "some text"}
     assert canvas_domain._phase_labels_for(a, cache, llm, _strip_html) is None
@@ -147,7 +147,8 @@ def test_phase_labels_for_returns_none_for_single_phase_assignment():
 
 
 def test_phase_labels_for_returns_none_without_description():
-    llm = _FakePhaseLLM(["a", "b", "c"])
+    labels = [{"name": "a", "minutes": 10}, {"name": "b", "minutes": 10}, {"name": "c", "minutes": 10}]
+    llm = _FakePhaseLLM(labels)
     cache = {}
     a = {"id": 1, "name": "Problem Set 1", "due_at": "2026-07-20T23:59:59Z"}   # no description
     assert canvas_domain._phase_labels_for(a, cache, llm, _strip_html) is None
@@ -155,7 +156,9 @@ def test_phase_labels_for_returns_none_without_description():
 
 
 def test_phase_labels_for_fetches_and_caches():
-    labels = ["Pull NYC Open Data", "Clean & Explore", "Write Findings"]
+    labels = [{"name": "Pull NYC Open Data", "minutes": 40},
+              {"name": "Clean & Explore", "minutes": 90},
+              {"name": "Write Findings", "minutes": 60}]
     llm = _FakePhaseLLM(labels)
     cache = {}
     a = {"id": 42, "name": "NYC Open Data Analysis", "due_at": "2026-07-20T23:59:59Z",
@@ -179,6 +182,79 @@ def test_phase_labels_for_falls_back_when_llm_fails():
          "description": "instructions here"}
     assert canvas_domain._phase_labels_for(a, cache, llm, _strip_html) is None
     assert cache == {}   # nothing cached -- a later successful run can still fill it in
+
+
+class _RecordingPhaseLLM:
+    """Records the exact content string it was handed, so tests can assert
+    linked-file text actually made it into the LLM call."""
+    def __init__(self, labels):
+        self._labels = labels
+        self.seen_content = None
+
+    def propose_assignment_phases(self, name, content, atype, count):
+        self.seen_content = content
+        return self._labels
+
+
+class _FakeCanvasFileText:
+    def __init__(self, files):
+        self._files = files   # {file_id: text}
+        self.requested = []
+
+    def file_text(self, file_id, course_id=None):
+        self.requested.append((file_id, course_id))
+        return self._files.get(file_id, "")
+
+
+def test_phase_labels_for_pulls_in_linked_file_content():
+    # the description alone is boilerplate; the REAL problem set content is
+    # in the linked .qmd file -- both must reach the LLM call.
+    description = (
+        '<p>Answer the questions where indicated.</p>'
+        '<a href="https://jhu.instructure.com/courses/131470/files/999?wrap=1">ps1.qmd</a>'
+    )
+    a = {"id": 42, "name": "Problem Set 1", "due_at": "2026-07-20T23:59:59Z",
+         "description": description}
+    cv = _FakeCanvasFileText({"999": "Question 1: fit a linear model.\nQuestion 2: interpret it."})
+    expected = [{"name": "Fit the Model", "minutes": 40}, {"name": "Interpret Results", "minutes": 30},
+                {"name": "Write Up", "minutes": 20}]
+    llm = _RecordingPhaseLLM(expected)
+
+    labels = canvas_domain._phase_labels_for(a, {}, llm, lambda s: s, cv=cv, course_id="131470")
+
+    assert labels == expected
+    assert cv.requested == [("999", "131470")]
+    assert "Answer the questions where indicated" in llm.seen_content
+    assert "Question 1: fit a linear model" in llm.seen_content
+
+
+def test_phase_labels_for_works_without_a_canvas_client():
+    # cv=None (the default) -- must not crash, just skip file-fetching and
+    # use the description alone, same as before this feature existed.
+    a = {"id": 42, "name": "Problem Set 1", "due_at": "2026-07-20T23:59:59Z",
+         "description": "<p>Some real instructions here.</p>"}
+    expected = [{"name": "A", "minutes": 10}, {"name": "B", "minutes": 10}, {"name": "C", "minutes": 10}]
+    llm = _RecordingPhaseLLM(expected)
+    labels = canvas_domain._phase_labels_for(a, {}, llm, lambda s: s.replace("<p>", "").replace("</p>", ""))
+    assert labels == expected
+    assert "Some real instructions here" in llm.seen_content
+
+
+def test_phase_labels_for_skips_non_text_linked_files():
+    description = (
+        '<p>See the attached data.</p>'
+        '<a href="https://jhu.instructure.com/courses/131470/files/1?wrap=1">sim_data.csv</a>'
+    )
+    a = {"id": 42, "name": "Problem Set 1", "due_at": "2026-07-20T23:59:59Z",
+         "description": description}
+    cv = _FakeCanvasFileText({"1": "should never be fetched"})
+    llm = _RecordingPhaseLLM([{"name": "A", "minutes": 10}, {"name": "B", "minutes": 10},
+                              {"name": "C", "minutes": 10}])
+
+    canvas_domain._phase_labels_for(a, {}, llm, lambda s: s, cv=cv, course_id="131470")
+
+    assert cv.requested == []   # .csv is a data file, not a text problem-set doc
+    assert "should never be fetched" not in llm.seen_content
 
 
 class _CompleteFakeFlowSavvy:

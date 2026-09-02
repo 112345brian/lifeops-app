@@ -46,6 +46,54 @@ class Canvas:
             extra.append(("start_date", since_date))
         return self._get("/api/v1/announcements", extra_params=extra)
 
+    def file_text(self, file_id, course_id=None, max_chars=6000):
+        """Best-effort raw text of an attached Canvas file (e.g. a .qmd
+        problem set linked FROM an assignment description) -- returns "" on
+        any failure or non-text content. An assignment's description is
+        often just submission boilerplate ("answer the questions, render,
+        submit") with the actual questions living in a linked file instead;
+        see canvas.extract_text_file_refs for finding which links are worth
+        fetching. The file API's metadata `url` is a pre-signed download
+        link (not the courses/.../files/:id page itself), so this is a
+        plain unauthenticated GET, same as a browser clicking the link."""
+        try:
+            meta = self._get(f"/api/v1/courses/{course_id or self.course}/files/{file_id}")
+            url = meta.get("url")
+            if not url:
+                return ""
+            r = requests.get(url, timeout=30)
+            r.raise_for_status()
+            return r.content.decode("utf-8", errors="ignore")[:max_chars]
+        except Exception:
+            return ""
+
+
+# Canvas file links (including ones embedded via the rich-text editor's file
+# picker) point at /courses/<id>/files/<file_id> -- captures the numeric id
+# and the anchor's visible text (usually the original filename).
+_FILE_LINK_RE = re.compile(r'<a[^>]+href="[^"]*?/files/(\d+)[^"]*"[^>]*>([^<]+)</a>', re.I)
+# Text-based file types worth actually reading for an assignment's real
+# content (a linked .qmd/.py/.md problem set) -- NOT data files (.csv, .xlsx)
+# or binaries (.pdf, .docx), which either aren't useful as plain text or need
+# their own parser this doesn't have.
+_TEXT_FILE_EXTS = (".qmd", ".rmd", ".md", ".markdown", ".txt", ".r", ".py", ".ipynb")
+
+
+def extract_text_file_refs(html):
+    """[(file_id, filename), ...] for every Canvas file link in `html` whose
+    filename looks like a text-based document. An assignment's Canvas
+    `description` is frequently just submission/formatting boilerplate
+    around a link to the actual problem set file -- this is how callers
+    (see domains/canvas.py's _phase_labels_for) find and pull in the real
+    content instead of proposing phases off boilerplate alone."""
+    refs = []
+    for file_id, filename in _FILE_LINK_RE.findall(html or ""):
+        name = filename.strip()
+        if name.lower().endswith(_TEXT_FILE_EXTS):
+            refs.append((file_id, name))
+    return refs
+
+
 def strip_html(html):
     """Minimal HTML → plain text for feeding to the LLM.
 

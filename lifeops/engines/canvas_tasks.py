@@ -127,15 +127,17 @@ def split_assignment(mod_num, name, atype, due_date, unlock_date, readings_due, 
     Study/Evaluation Paper"). `name` itself is still used for classification/
     the "data smell" heuristic below, since a shortened name can drop the
     keywords those look for. Defaults to `name` when omitted.
-    phase_labels: content-aware phase names (e.g. from
+    phase_labels: content-aware phases (e.g. from
     llm.propose_assignment_phases, reading the assignment's actual Canvas
-    description) to use INSTEAD of the generic per-atype defaults in
-    _DEFAULT_PHASE_NAMES — e.g. ["Pull NYC Open Data", "Clean & Explore",
-    "Build Visualizations"] instead of "Setup & Data Exploration"/etc. Used
-    only when its length matches the phase count this atype/due_date
-    combination actually produces (see phase_count_for); otherwise silently
-    falls back to the generic defaults so a stale/malformed/absent label set
-    never breaks scheduling.
+    description/linked files) to use INSTEAD of the generic per-atype
+    defaults in _DEFAULT_PHASE_NAMES — a list of {"name", "minutes"} dicts,
+    e.g. [{"name": "Calculate Descriptive Statistics", "minutes": 70}, ...],
+    with `minutes` a REAL estimate from the actual question count/complexity
+    rather than a fixed per-atype guess. Used only when its length matches
+    the phase count this atype/due_date combination actually produces (see
+    phase_count_for) and every entry has a usable name + positive minutes;
+    otherwise silently falls back to the generic names AND generic fixed
+    durations so a stale/malformed/absent label set never breaks scheduling.
     """
     # The module number/range used to be glued onto the TITLE ("M01: Thing",
     # or "M01: M01-M03: Thing" before that double-prefix fix) -- moved into
@@ -168,15 +170,23 @@ def split_assignment(mod_num, name, atype, due_date, unlock_date, readings_due, 
         }
         return {k: v for k, v in t.items() if v is not None}
 
-    def _valid_labels(for_atype, count):
-        """`phase_labels` when it's a usable override for this many phases,
-        else the generic per-atype default -- a stale/malformed/absent
-        label set (e.g. the LLM call failed, or was cached against a
-        different phase count) must never break scheduling."""
+    def _names_and_durations(for_atype, count, default_durations):
+        """(names, durations) from `phase_labels` when it's a usable override
+        for this many phases -- content-aware names AND REAL per-phase
+        minutes, estimated from the assignment's actual question count/
+        complexity rather than a fixed per-atype guess -- else the generic
+        per-atype default names paired with the generic fixed durations. A
+        stale/malformed/absent label set (e.g. the LLM call failed, or was
+        cached against a different phase count) must never break scheduling,
+        so ANY validation failure falls back to the fully generic pair."""
         if (phase_labels and len(phase_labels) == count
-                and all(isinstance(x, str) and x.strip() for x in phase_labels)):
-            return [x.strip() for x in phase_labels]
-        return _DEFAULT_PHASE_NAMES.get(for_atype, [])
+                and all(isinstance(p, dict) and isinstance(p.get("name"), str) and p["name"].strip()
+                        and isinstance(p.get("minutes"), (int, float)) and p["minutes"] > 0
+                        for p in phase_labels)):
+            names = [p["name"].strip() for p in phase_labels]
+            durations = [max(15, int(round(p["minutes"]))) for p in phase_labels]
+            return names, durations
+        return _DEFAULT_PHASE_NAMES.get(for_atype, []), default_durations
 
     def _chain(durations, dates, names):
         """Build len(durations) dependency-chained tasks: phase i is
@@ -203,26 +213,31 @@ def split_assignment(mod_num, name, atype, due_date, unlock_date, readings_due, 
         # check if it smells like it needs data work first
         if any(w in name.lower() for w in ("data", "find", "identify", "research", "collect")):
             dates = _spread(due_date, [3, 0], today)
-            phases = _chain([55, 65], dates, _valid_labels("discussion", 2))
+            names, durations = _names_and_durations("discussion", 2, [55, 65])
+            phases = _chain(durations, dates, names)
         else:
             phases = [_task(tag, 75, due_date, start)]
 
     elif atype == "prospectus":
         dates = _spread(due_date, [5, 0], today)
-        phases = _chain([60, 120], dates, _valid_labels("prospectus", 2))
+        names, durations = _names_and_durations("prospectus", 2, [60, 120])
+        phases = _chain(durations, dates, names)
 
     elif atype == "paper":
         dates = _spread(due_date, [7, 3, 0], today)
-        phases = _chain([45, 110, 40], dates, _valid_labels("paper", 3))
+        names, durations = _names_and_durations("paper", 3, [45, 110, 40])
+        phases = _chain(durations, dates, names)
 
     elif atype == "final_paper":
         # 4 phases → 4 gaps; last gap 0 so the final phase lands ON the deadline
         dates = _spread(due_date, [14, 9, 5, 0], today)
-        phases = _chain([120, 150, 120, 90], dates, _valid_labels("final_paper", 4))
+        names, durations = _names_and_durations("final_paper", 4, [120, 150, 120, 90])
+        phases = _chain(durations, dates, names)
 
     elif atype in ("final_project", "lab", "assignment"):
         dates = _spread(due_date, [7, 3, 0], today)
-        phases = _chain([80, 105, 75], dates, _valid_labels(atype, 3))
+        names, durations = _names_and_durations(atype, 3, [80, 105, 75])
+        phases = _chain(durations, dates, names)
 
     elif atype == "presentation":
         phases = [_task(tag, 105, due_date, start)]
