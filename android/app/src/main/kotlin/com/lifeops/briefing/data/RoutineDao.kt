@@ -27,6 +27,13 @@ interface RoutineDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(routine: RoutineEntity)
 
+    /** Insert-or-skip by primary key -- unlike [insert] (which aborts on a
+     * collision) or [upsert] (which clobbers), an existing row with the
+     * same [RoutineEntity.id] is left untouched. Used by [RoutineDefaults]
+     * seeding so a user's own edits are never overwritten by re-seeding. */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertIfAbsent(routines: List<RoutineEntity>)
+
     @Delete
     suspend fun delete(routine: RoutineEntity)
 

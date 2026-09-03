@@ -19,6 +19,7 @@ import com.lifeops.briefing.data.WidgetDisplayConfig
 import com.lifeops.briefing.data.WidgetSection
 import com.lifeops.briefing.data.YnabCategoryBalance
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -944,6 +945,29 @@ class BriefingWidgetTest {
         assertEquals(ComboLayout.MEDIUM_3X2, comboLayoutFor(DpSize(200.dp, 150.dp)))
         assertEquals(ComboLayout.WIDE_4X2, comboLayoutFor(DpSize(280.dp, 150.dp)))
         assertEquals(ComboLayout.TALL_4X3, comboLayoutFor(DpSize(280.dp, 220.dp)))
+    }
+
+    // ---- stripHasRoomForEventsRow (Strip vs. Strip Tall's shared
+    // StripFamilyContent, see that composable's own kdoc) ----
+
+    @Test
+    fun stripHasRoomForEventsRow_trueAtAndAboveStripTallsDefaultHeight() {
+        // strip_tall_widget_info.xml's own minHeight (the n=2 formula
+        // floor) -- must clear the threshold, not just approach it.
+        assertTrue(stripHasRoomForEventsRow(110f))
+    }
+
+    @Test
+    fun stripHasRoomForEventsRow_falseAtStripsDefaultHeight() {
+        // strip_widget_info.xml's own minHeight -- the plain 1-row strip's
+        // default placement must NOT show the events row.
+        assertFalse(stripHasRoomForEventsRow(56f))
+    }
+
+    @Test
+    fun stripHasRoomForEventsRow_falseJustBelowThreshold_trueAtThreshold() {
+        assertFalse(stripHasRoomForEventsRow(99.9f))
+        assertTrue(stripHasRoomForEventsRow(100f))
     }
 
     @Test

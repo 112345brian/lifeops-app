@@ -195,6 +195,35 @@
                 android:resource="@xml/combo_widget_info" />
         </receiver>
 
+        <!-- Short, wide 4x1 strip: a horizontal row of compact stats for
+             users who want a slim status bar rather than a tall block. -->
+        <receiver
+            android:name=".StripWidgetReceiver"
+            android:exported="true"
+            android:label="@string/widget_name_strip">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/strip_widget_info" />
+        </receiver>
+
+        <!-- Same as StripWidgetReceiver above, plus a second row for the
+             next upcoming non-task calendar event: see
+             strip_tall_widget_info.xml's own comment. -->
+        <receiver
+            android:name=".StripTallWidgetReceiver"
+            android:exported="true"
+            android:label="@string/widget_name_strip_tall">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/strip_tall_widget_info" />
+        </receiver>
+
         <!-- Receives the daily briefing via Firebase Cloud Messaging:
              reliable even when the app is stopped, unlike a manifest
              broadcast receiver for a third-party implicit broadcast. -->

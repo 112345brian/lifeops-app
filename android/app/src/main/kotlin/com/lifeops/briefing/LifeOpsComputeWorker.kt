@@ -136,11 +136,20 @@ import com.lifeops.briefing.data.AttentionReason as UiAttentionReason
  * ## FlowSavvy config
  *
  * Reads `WidgetConfigStore.getFlowSavvyBaseUrl`/`getFlowSavvyToken` -- if
- * either is unconfigured, `doWork` no-ops (`Result.success()`) the same way
- * the old worker no-op'd on a missing panel URL/token. Set from the Settings
- * screen (base URL + token fields alongside the panel/YNAB/Anthropic ones)
- * or via `WidgetConfigStore.importFlowSavvyConfigFileIfPresent`'s sideload
- * path, mirroring the existing YNAB_TOKEN import mechanism.
+ * either is unconfigured, `doWork` skips only the FlowSavvy-DEPENDENT work
+ * (chore next-occurrence write-back, gym-plan booking, and the coursework/
+ * task facts that need a real FlowSavvy task list), via [EmptyFlowSavvyFetch]
+ * (see its own kdoc for the full "why," including the live-device bug this
+ * fixes: a prior version of this file `Result.success()`'d out of `doWork`
+ * BEFORE ever calling [runComputeTick]/[applyComputeTickResult] here, which
+ * left BRIEFING_JSON stuck on whatever was last persisted -- including
+ * possibly-ancient/foreign-shaped data -- forever un-regenerated). The tick
+ * still runs and still writes a real (if narrower) attention/briefing state
+ * from every local-only fact source (gym/social/meal/money/system health).
+ * Set from the Settings screen (base URL + token fields alongside the
+ * panel/YNAB/Anthropic ones) or via
+ * `WidgetConfigStore.importFlowSavvyConfigFileIfPresent`'s sideload path,
+ * mirroring the existing YNAB_TOKEN import mechanism.
  */
 
 // ---------------------------------------------------------------------
@@ -183,6 +192,40 @@ internal data class FlowSavvyFetchResult(
  * in-memory, with no network/mock-server dependency. */
 internal fun interface FlowSavvyFetch {
     fun fetch(now: LocalDateTime): FlowSavvyFetchResult
+}
+
+/**
+ * The [FlowSavvyFetch] [LifeOpsComputeWorker.doComputeTick] hands to
+ * [runComputeTick] when FlowSavvy isn't configured yet -- an explicit "zero
+ * schedule items, zero incomplete tasks" result, NOT a skip of the tick
+ * itself.
+ *
+ * Before this fix, an unconfigured FlowSavvy made `doComputeTick` return
+ * `Result.success()` immediately, which skipped [runComputeTick] /
+ * [applyComputeTickResult] entirely -- not just the FlowSavvy-dependent
+ * facts inside them. That left whatever [BriefingState] happened to already
+ * be persisted in `BRIEFING_JSON` (potentially written by a much older
+ * build, or by the legacy `BriefingState.fromApiResponse` FCM-push path
+ * before `AttentionReason.title` existed in that JSON shape) sitting there
+ * forever, un-regenerated -- confirmed live-device as four "coursework"
+ * reason cards with a null `title` (see `ui/AttentionScreen.kt`'s
+ * `reason.title ?: reason.domain` fallback rendering the bare domain word)
+ * and a blank Today-tab headline.
+ *
+ * Using this empty fetch instead means [runComputeTick] always runs and
+ * always writes a REAL, correctly-titled `attention_state`/`reasons`/
+ * `headline` -- just a narrower one than when FlowSavvy is available: no
+ * coursework facts (nothing to derive them from without FlowSavvy's task
+ * list), but still real gym/social/meal/money/system-health facts, all of
+ * which are already local-only (Room + [WidgetConfigStore]/YNAB refresh),
+ * exactly as this file's top-level kdoc's "## FlowSavvy config" section
+ * documents.
+ */
+internal object EmptyFlowSavvyFetch : FlowSavvyFetch {
+    override fun fetch(now: LocalDateTime): FlowSavvyFetchResult = FlowSavvyFetchResult(
+        scheduleItems = emptyList(),
+        incompleteTasks = emptyList(),
+    )
 }
 
 /** has()-and-not-null()-safe String read -- `optString` on an explicit JSON
@@ -775,18 +818,50 @@ class LifeOpsComputeWorker(
         // behavior in the Python source.
         runYnabWriteTickIfConfigured(applicationContext, now)
 
+        // Read here, BEFORE the FlowSavvy-configured branch below, so both
+        // branches (configured and not) can use the same value -- neither
+        // depends on FlowSavvy itself (see readCurrentDiscretionaryDollars'
+        // own kdoc: it reads back what refreshYnabCategoriesIfConfigured,
+        // called unconditionally above, already computed from local YNAB
+        // state).
+        val discretionaryDollars = readCurrentDiscretionaryDollars(applicationContext)
+
+        // Read BEFORE this tick's own FlowSavvy fetch below -- see
+        // OnDeviceSystemHealth.kt's top-level kdoc point 6 for why computing
+        // this after would be circular (a fetch that just succeeded would
+        // always look perfectly fresh, making staleness undetectable). Also
+        // moved above the FlowSavvy-configured branch (unlike the fetch
+        // itself) since system health has zero dependency on FlowSavvy and
+        // both branches below need it.
+        val systemHealth = computeOnDeviceSystemHealth(applicationContext, now)
+
         WidgetConfigStore.importFlowSavvyConfigFileIfPresent(applicationContext)
         val flowSavvyBaseUrl = WidgetConfigStore.getFlowSavvyBaseUrl(applicationContext)
         val flowSavvyToken = WidgetConfigStore.getFlowSavvyToken(applicationContext)
         if (flowSavvyBaseUrl == null || flowSavvyToken == null) {
-            // Not configured yet -- nothing left to do (the on-device
-            // compute tick needs FlowSavvy data to run against).
-            Log.i(TAG, "skipping on-device compute tick: FlowSavvy is not configured")
+            // FlowSavvy isn't configured yet, so there is no coursework/task
+            // data to compute overdue/due-today/coursework-at-risk facts
+            // from, and the chore/gym-plan write-back cycles below (which
+            // both need a live FlowSavvyClient) can't run either. But that
+            // is NOT a reason to skip the entire tick the way this branch
+            // used to (`return Result.success()` right here, before ever
+            // calling runComputeTick/applyComputeTickResult): gym adherence,
+            // social/meal nudges, the discretionary-dollars figure just read
+            // above, and system health are all local-only facts with zero
+            // FlowSavvy dependency, and Attention.compute can produce a
+            // real, correctly-titled attention_state/reasons/headline from
+            // just those -- see EmptyFlowSavvyFetch's own kdoc for the full
+            // "why," including the live-device null-title-reason-card bug
+            // this fixes (stale/foreign BRIEFING_JSON data left un-
+            // regenerated forever because this branch used to bail before
+            // ever writing fresh state).
+            Log.i(TAG, "FlowSavvy is not configured: running a partial compute tick (no coursework/gym-plan/chore facts)")
+            val result = runComputeTick(db, EmptyFlowSavvyFetch, discretionaryDollars, now, systemHealth = systemHealth)
+            applyComputeTickResult(applicationContext, result)
             return Result.success()
         }
 
         val client = FlowSavvyClient(flowSavvyBaseUrl, flowSavvyToken)
-        val discretionaryDollars = readCurrentDiscretionaryDollars(applicationContext)
 
         // Chore next-occurrence write-back (runChoreCycle/ChoreCycle.kt) --
         // wrapped in its OWN try/catch, deliberately separate from the main
@@ -810,11 +885,12 @@ class LifeOpsComputeWorker(
             Log.e(TAG, "chore cycle failed, isolated from the rest of this tick", e)
         }
 
-        // Read BEFORE this tick's own FlowSavvy fetch below -- see
+        // systemHealth was already computed above (before the FlowSavvy-
+        // configured check) -- still BEFORE this tick's own FlowSavvy fetch
+        // below, which is what actually matters here: see
         // OnDeviceSystemHealth.kt's top-level kdoc point 6 for why computing
-        // this after would be circular (a fetch that just succeeded would
-        // always look perfectly fresh, making staleness undetectable).
-        val systemHealth = computeOnDeviceSystemHealth(applicationContext, now)
+        // it after the fetch would be circular (a fetch that just succeeded
+        // would always look perfectly fresh, making staleness undetectable).
 
         // Fetched ONCE here (rather than inside runComputeTick, which used to
         // own this fetch) so gym-plan-cycle's day-context assembly

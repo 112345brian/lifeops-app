@@ -31,6 +31,16 @@ object WidgetPresets {
         SocialWidgetReceiver::class.java to WidgetDisplayConfig.singleStat(WidgetSection.SOCIAL),
         EventsWidgetReceiver::class.java to WidgetDisplayConfig.singleStat(WidgetSection.NOTABLE_EVENTS),
         ComboWidgetReceiver::class.java to WidgetDisplayConfig.comboGrid(),
+        // A fixed section set (weather/gym/money/notable events), not
+        // Combo's priority-ordered "take what fits" subset -- see
+        // WidgetDisplayConfig.strip()'s own kdoc for why a strip-family
+        // footprint gets a hand-picked default instead of reusing
+        // comboGrid()'s. Same config for both -- StripFamilyContent
+        // (BriefingWidget.kt) decides purely from placed height whether
+        // the events row actually renders, so Strip and Strip Tall don't
+        // need two different default configs.
+        StripWidgetReceiver::class.java to WidgetDisplayConfig.strip(),
+        StripTallWidgetReceiver::class.java to WidgetDisplayConfig.strip(),
     )
 
     fun defaultConfigFor(receiverClassName: String?): WidgetDisplayConfig =

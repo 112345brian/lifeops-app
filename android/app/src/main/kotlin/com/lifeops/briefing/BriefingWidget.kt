@@ -1376,7 +1376,7 @@ internal const val COMBO_EVENTS_SHOWN = 3
 // competed too much with COMBO_TILE_VALUE_SP's row text for the same small
 // footprint.
 internal const val COMBO_EVENTS_HEADER_SP = 11f
-internal enum class ComboLayout { COMPACT_2X2, MEDIUM_3X2, WIDE_4X2, TALL_4X3 }
+internal enum class ComboLayout { COMPACT_2X2, MEDIUM_3X2, STRIP_4X1, WIDE_4X2, TALL_4X3 }
 
 internal fun comboLayoutFor(size: DpSize): ComboLayout = when {
     // Samsung can report a visually 2x2 placement at the 180dp formula
@@ -1385,6 +1385,13 @@ internal fun comboLayoutFor(size: DpSize): ComboLayout = when {
     // weather/gym in the left column with money as a full-height right cell.
     size.width.value <= 190f -> ComboLayout.COMPACT_2X2
     size.width.value < 250f -> ComboLayout.MEDIUM_3X2
+    // Wide enough for the two-column WIDE_4X2 branch, but too short for it
+    // to stack two cells per column without clipping (the "LifeOps Strip"
+    // 4x1 preset's true placed footprint, see strip_widget_info.xml) --
+    // show one full-height row of cells instead. 90dp gives comfortable
+    // room above the 4x1 preset's 56dp default placed height while staying
+    // well under WIDE_4X2's two-cells-tall minimum comfortable height.
+    size.height.value < 90f -> ComboLayout.STRIP_4X1
     size.height.value < 180f -> ComboLayout.WIDE_4X2
     else -> ComboLayout.TALL_4X3
 }
@@ -1578,6 +1585,19 @@ private fun ComboGridContent(
         }
     }
     if (cells.isEmpty()) return
+    // Strip-family presets ("LifeOps Strip"/"LifeOps Strip Tall") don't go
+    // through comboLayoutFor's general size-bucket system at all -- they're
+    // a fixed weather(2x)/gym/money row, optionally with a second full-width
+    // "next event" row below it (see StripFamilyContent's own kdoc for why
+    // that second row is purely a LocalSize check, not a second preset-
+    // specific code path). Branching on config.stripLayout HERE, before
+    // comboLayoutFor's Row/when dispatch below, keeps the original Combo
+    // widget's own layout selection completely untouched -- this is
+    // additive, not a change to how any existing preset renders.
+    if (config.stripLayout) {
+        StripFamilyContent(cells, state, temperatureF, highF, lowF, condition, scale, placedSize)
+        return
+    }
     Row(
         modifier = GlanceModifier
             .fillMaxSize()
@@ -1589,6 +1609,7 @@ private fun ComboGridContent(
                 ComboCompactTwoByTwo(cells, state, temperatureF, highF, lowF, condition, scale)
             ComboLayout.MEDIUM_3X2 -> ComboTwoColumn(cells.take(3), state, temperatureF, highF, lowF, condition, scale,
                 leftCount = 2)
+            ComboLayout.STRIP_4X1 -> ComboStrip(cells.take(4), state, temperatureF, highF, lowF, condition, scale)
             ComboLayout.WIDE_4X2 -> ComboTwoColumn(cells.take(4), state, temperatureF, highF, lowF, condition, scale,
                 leftCount = 2)
             ComboLayout.TALL_4X3 -> {
@@ -1647,6 +1668,139 @@ private fun RowScope.ComboTwoColumn(
     if (right.isNotEmpty()) {
         ComboTileDivider()
         ComboColumn(right, state, temperatureF, highF, lowF, condition, scale, GlanceModifier.fillMaxSize().defaultWeight())
+    }
+}
+
+/** STRIP_4X1's single full-height row of cells -- direct children of
+ * ComboGridContent's outer Row (see its docstring), not a nested Row/Column
+ * wrapper, since the whole widget footprint already IS one row at this
+ * layout's true placed height. Reuses [ComboRenderCell] exactly like every
+ * other Combo layout branch (same compact stat/tile rendering already
+ * tuned for narrow columns), just laid out horizontally instead of the
+ * two-column stack WIDE_4X2 uses. */
+@Composable
+private fun RowScope.ComboStrip(
+    cells: List<ComboCell>, state: BriefingState, temperatureF: Int?, highF: Int?, lowF: Int?, condition: String?,
+    scale: Float,
+) {
+    // Hand-built for the "LifeOps Strip" preset's literal spec (confirmed
+    // 2026-08-04: "weather for the first two, one 1x1 with the gym, and
+    // then 1x1 with the discretionary spending") -- weather rendered at
+    // DOUBLE the width of each other cell, not N equal-width cells the way
+    // this used to just take(4) and loop. Glance's RowScope only exposes
+    // defaultWeight() -- a fixed weight of 1, no arbitrary-weight overload
+    // (confirmed against the actual androidx.glance:glance-1.1.1 API via
+    // javap -- RowScope declares exactly one method,
+    // defaultWeight(GlanceModifier)) -- so "twice as wide" can't be a
+    // single weight=2 modifier. Built instead from two nested 50/50 splits:
+    // the outer Row (this function's own RowScope receiver) splits
+    // [weather | everything else] 50/50, then the "everything else" half
+    // splits again internally, landing weather at half the strip's total
+    // width and each remaining cell at a quarter.
+    val weatherCell = cells.firstOrNull { it.section == WidgetSection.WEATHER }
+    val otherCells = cells.filter { it.section != WidgetSection.WEATHER }
+
+    if (weatherCell != null) {
+        ComboRenderCell(weatherCell, state, temperatureF, highF, lowF, condition, scale,
+            GlanceModifier.fillMaxSize().defaultWeight())
+        if (otherCells.isNotEmpty()) ComboTileDivider()
+    }
+    if (otherCells.isNotEmpty()) {
+        Row(modifier = GlanceModifier.fillMaxSize().defaultWeight()) {
+            otherCells.forEachIndexed { index, cell ->
+                if (index > 0) ComboTileDivider()
+                ComboRenderCell(cell, state, temperatureF, highF, lowF, condition, scale,
+                    GlanceModifier.fillMaxSize().defaultWeight())
+            }
+        }
+    }
+}
+
+/**
+ * Entry point for BOTH "LifeOps Strip" and "LifeOps Strip Tall" -- the only
+ * difference between those two presets is their widget_info.xml default
+ * placed height (see strip_tall_widget_info.xml's own comment); this one
+ * composable serves both, purely by reading the widget's real placed
+ * height, the same "branch on LocalSize.current, don't hand-tune per
+ * preset" rule android/CLAUDE.md's "Sizing" section already commits this
+ * file to. A plain "LifeOps Strip" instance dragged tall enough by hand
+ * gets the second "next event" row too, and a "LifeOps Strip Tall"
+ * instance dragged short enough loses it -- one responsive behavior, not
+ * two hand-maintained code paths for what's really the same layout family.
+ *
+ * The second row shows the single next upcoming NOTABLE_EVENTS entry --
+ * "the next non-task event on your calendar" (confirmed 2026-08-04) --
+ * not [ComboEventsTile]'s "Coming up" list-of-3 (that's a tall, vertically-
+ * stacked cell meant to share a row with other square-ish cells at
+ * TALL_4X3; a strip's second row is short and full-width, so it gets its
+ * own compact single-line rendering via [NotableEventLine] instead).
+ */
+@Composable
+private fun StripFamilyContent(
+    cells: List<ComboCell>, state: BriefingState, temperatureF: Int?, highF: Int?, lowF: Int?, condition: String?,
+    scale: Float, placedSize: DpSize,
+) {
+    val eventsCell = cells.firstOrNull { it.section == WidgetSection.NOTABLE_EVENTS }
+    val topRowCells = cells.filter { it.section != WidgetSection.NOTABLE_EVENTS }
+    val showEventsRow = eventsCell != null && stripHasRoomForEventsRow(placedSize.height.value)
+
+    if (showEventsRow) {
+        Column(
+            modifier = GlanceModifier
+                .fillMaxSize()
+                .cornerRadius(COMBO_OUTER_RADIUS)
+                .background(ColorProvider(COMBO_BG)),
+        ) {
+            Row(modifier = GlanceModifier.fillMaxWidth().defaultWeight()) {
+                ComboStrip(topRowCells, state, temperatureF, highF, lowF, condition, scale)
+            }
+            ComboTileDividerHorizontal()
+            NextEventRow(state.notableEvents, scale, GlanceModifier.fillMaxWidth().defaultWeight())
+        }
+    } else {
+        Row(
+            modifier = GlanceModifier
+                .fillMaxSize()
+                .cornerRadius(COMBO_OUTER_RADIUS)
+                .background(ColorProvider(COMBO_BG)),
+        ) {
+            ComboStrip(topRowCells, state, temperatureF, highF, lowF, condition, scale)
+        }
+    }
+}
+
+// n=2 tier formula floor (70*2-30=110dp, see android/CLAUDE.md) minus a
+// margin -- matches this project's existing "10dp margin under the next
+// threshold" convention. STRIP_4X1's own default placed height is 56dp, so
+// 100dp comfortably distinguishes "tall enough for a real second row" from
+// a 1-row strip only slightly resized.
+private const val STRIP_TALL_MIN_HEIGHT = 100
+
+/** Pulled out as a plain function (not inlined into [StripFamilyContent])
+ * specifically so it's unit-testable without a Compose/Glance test
+ * harness -- see BriefingWidgetTest.kt's stripHasRoomForEventsRow cases,
+ * the same "pure decision function, tested directly" pattern this file
+ * already uses for [comboLayoutFor]. */
+internal fun stripHasRoomForEventsRow(placedHeightDp: Float): Boolean = placedHeightDp >= STRIP_TALL_MIN_HEIGHT
+
+@Composable
+private fun NextEventRow(events: List<NotableEvent>, scale: Float, modifier: GlanceModifier) {
+    Row(
+        modifier = modifier
+            .background(ColorProvider(MONEY_SOLO_BG))
+            .padding(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        val next = events.firstOrNull()
+        if (next == null) {
+            Text(
+                text = "Nothing scheduled",
+                maxLines = 1,
+                style = TextStyle(fontSize = (COMBO_TILE_VALUE_SP * scale).sp, color = GlanceTheme.colors.onSurfaceVariant),
+            )
+        } else {
+            NotableEventLine(next, scale, COMBO_TILE_VALUE_SP)
+        }
     }
 }
 

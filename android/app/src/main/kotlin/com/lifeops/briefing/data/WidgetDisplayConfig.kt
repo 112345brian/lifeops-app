@@ -69,6 +69,17 @@ data class WidgetDisplayConfig(
     // to decide which compact-compatible cells to show first as the placed
     // size grows from 2x2 to 3x2, 4x2, and taller variants.
     val comboGrid: Boolean = false,
+    // True only for the "LifeOps Strip"/"LifeOps Strip Tall" presets (see
+    // [strip]) -- tells ComboGridContent to bypass comboLayoutFor's general
+    // size-bucket system entirely and render via StripFamilyContent's fixed
+    // weather(2x)/gym/money row instead (optionally with a second "next
+    // event" row when there's room -- see that composable's own kdoc).
+    // Implies comboGrid=true (StripFamilyContent is only reached from
+    // inside the `if (config.comboGrid)` dispatch), but is its own field
+    // rather than an implicit "comboGrid but also X" convention, so the
+    // original Combo widget's own comboLayoutFor-driven rendering can never
+    // be silently affected by a strip-specific change.
+    val stripLayout: Boolean = false,
 ) {
     fun toJson(): String = JSONObject().apply {
         put("sectionOrder", JSONArray().apply {
@@ -85,6 +96,7 @@ data class WidgetDisplayConfig(
         put("moneyDisplayMode", moneyDisplayMode.name)
         put("ynabCategoryName", ynabCategoryName)
         put("comboGrid", comboGrid)
+        put("stripLayout", stripLayout)
     }.toString()
 
     companion object {
@@ -156,6 +168,38 @@ data class WidgetDisplayConfig(
             comboGrid = true,
         )
 
+        /** Exact sections BOTH the "LifeOps Strip" and "LifeOps Strip Tall"
+         * presets default to -- weather, gym, discretionary spending, and
+         * notable events, nothing else (confirmed 2026-08-04: "weather for
+         * the first two, one 1x1 with the gym, and then 1x1 with the
+         * discretionary spending" for the top row, "the second row displays
+         * the next non-task event" for Strip Tall's second row). Unlike
+         * [comboGrid]'s priority-ordered subset (which takes as many
+         * COMBO_GRID_SUPPORTED_SECTIONS cells as the placed size fits),
+         * this is a fixed, hand-picked 4-section set -- Social/Coursework/
+         * Sleep stay excluded from the default. Whether NOTABLE_EVENTS
+         * actually renders is a pure function of placed height
+         * (StripFamilyContent's own concern, not this config) -- that's why
+         * both presets share this exact same default rather than needing
+         * two slightly-different section sets. Still a real, user-editable
+         * [WidgetDisplayConfig] like any other preset -- the configure
+         * screen can re-enable/reorder sections same as always; this is
+         * only the starting point. */
+        private val STRIP_DEFAULT_SECTIONS = listOf(
+            WidgetSection.WEATHER,
+            WidgetSection.GYM_RING,
+            WidgetSection.MONEY_TILE,
+            WidgetSection.NOTABLE_EVENTS,
+        )
+
+        fun strip(): WidgetDisplayConfig = WidgetDisplayConfig(
+            sectionOrder = STRIP_DEFAULT_SECTIONS +
+                WidgetSection.entries.filter { it !in STRIP_DEFAULT_SECTIONS },
+            hiddenSections = WidgetSection.entries.filter { it !in STRIP_DEFAULT_SECTIONS }.toSet(),
+            comboGrid = true,
+            stripLayout = true,
+        )
+
         /** Unknown/removed enum values (e.g. an older or newer app version's
          * section that this build doesn't recognize) are silently dropped
          * rather than throwing -- forward/backward compatibility across app
@@ -198,6 +242,7 @@ data class WidgetDisplayConfig(
                 ynabCategoryName = o.optString("ynabCategoryName", DEFAULT_YNAB_CATEGORY_NAME)
                     .takeIf { it.isNotBlank() } ?: DEFAULT_YNAB_CATEGORY_NAME,
                 comboGrid = o.optBoolean("comboGrid", false),
+                stripLayout = o.optBoolean("stripLayout", false),
             )
         }
     }

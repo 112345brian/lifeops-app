@@ -1,0 +1,1 @@
+The "Recurring" tab now shows each routine's real due/not-due status instead of a bare title and raw cadence parameters: a colored status dot, a human-readable cadence phrase ("4x a week", "Every 7 days"), and a progress bar toward the current window or cooldown period.
