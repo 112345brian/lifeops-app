@@ -7,7 +7,7 @@ ENDPOINT PATHS ARE INFERRED from the connector's tool set and REST convention.
 Verify them against my.flowsavvy.app/api/docs and adjust _paths below if needed
 (base URL + token go in .env).
 """
-import time, requests
+import collections, threading, time, requests
 from . import config
 
 # A transient TLS/TCP blip (connection refused, reset, SSL handshake EOF) means
@@ -16,12 +16,49 @@ from . import config
 # so we do NOT retry those here: blindly retrying a non-idempotent POST/PUT
 # after an ambiguous server-side response risks creating a duplicate task
 # exactly like the title-suffix dedup issue this codebase already had to fix.
-_RETRIES = 2
-_BACKOFF = 0.5
+#
+# FlowSavvy exposes NO rate-limit headers at all (no X-RateLimit-*, and 429
+# responses carry no Retry-After either) -- a one-time bulk backfill (the
+# whole semester's Canvas backlog, 50+ creates in one run) blew straight
+# through whatever the real limit is and silently dropped 11 tasks
+# (2026-09-03). A live read-only probe against the real account that day
+# measured the actual behavior: roughly 30 requests/60s before a 429, and
+# ~45-60s before it clears again once tripped -- both far worse than this
+# client's old backoff (maxed out around 15s total) could survive.
+#
+# _throttle() below is the real fix: a global sliding-window limiter that
+# paces EVERY outgoing request (across every FlowSavvy instance -- creating
+# a fresh FlowSavvy() per call is common in this codebase, so the limiter
+# state must live at module level, not per-instance) to stay under the
+# measured limit with margin, so a burst self-paces instead of ever
+# erroring. _RETRIES/_BACKOFF below are just the safety net for the
+# remaining case the throttle can't cover -- another process/session
+# sharing the same account token and consuming budget concurrently -- sized
+# to the measured ~60s real cooldown instead of guessing short.
+_RATE_LIMIT_MAX = 20        # requests allowed per rolling window (measured safe ceiling ~30/60s; keep margin)
+_RATE_LIMIT_WINDOW = 60.0   # seconds
+_request_times = collections.deque()
+_rate_lock = threading.Lock()
+
+def _throttle():
+    while True:
+        with _rate_lock:
+            now = time.monotonic()
+            while _request_times and now - _request_times[0] > _RATE_LIMIT_WINDOW:
+                _request_times.popleft()
+            if len(_request_times) < _RATE_LIMIT_MAX:
+                _request_times.append(now)
+                return
+            wait = _RATE_LIMIT_WINDOW - (now - _request_times[0]) + 0.05
+        time.sleep(wait)
+
+_RETRIES = 5
+_BACKOFF = 2.0
 
 def _with_retry(fn):
     last = None
     for attempt in range(_RETRIES + 1):
+        _throttle()
         try:
             return fn()
         except requests.exceptions.ConnectionError as e:
@@ -90,7 +127,27 @@ class FlowSavvy:
     def list_calendars(self):              return self._get("/calendars")
     def list_lists(self):                  return self._get("/lists")
     def list_scheduling_hours(self):       return self._get("/scheduling-hours")
-    def list_items(self, **params):        return self._get("/items", **params)
+    def list_items(self, **params):
+        """/items is paginated (a nextPageToken means more results exist) --
+        every caller in this codebase treats the returned "items" list as
+        the COMPLETE answer for dedup/lookup purposes (seen_titles,
+        seen_source_ids, due-date rechecks, ...), so silently returning only
+        page 1 here is worse than returning nothing: on 2026-09-03 a course
+        list crossing the page boundary made an already-created task look
+        "missing" from a diff against live state, and the resulting "fix"
+        created a real duplicate before the truncation was caught. Follow
+        pageToken internally so every caller gets the true complete list
+        without having to know pagination exists."""
+        items = []
+        page_params = dict(params)
+        while True:
+            r = self._get("/items", **page_params)
+            items.extend(r.get("items", []))
+            token = r.get("nextPageToken")
+            if not token:
+                break
+            page_params["pageToken"] = token
+        return {"items": items}
     def get_schedule(self, start, end):    return self._get("/schedule", startDate=start, endDate=end)
     def get_month(self, month="current"):  return self._get(f"/months/{month}")
 

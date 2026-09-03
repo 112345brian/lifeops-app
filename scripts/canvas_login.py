@@ -8,9 +8,14 @@ Opens a REAL, visible Chrome window (a plain process, no automation attached
 — see lifeops/canvas_browser.py's module docstring for why) using the same
 persistent profile the LifeOps Canvas sync uses (data/browser_profiles/canvas/
 — separate from your everyday Chrome profile). Log in with JHU SSO + Duo,
-wait for the course modules page to load, close the window, then come back
-here and press Enter. The session is saved to disk and reused automatically
-by every future headless sync run until it eventually expires again.
+wait for the course modules page to load (URL should read
+jhu.instructure.com/courses/.../modules, not canvas.jhu.edu), then come back
+here and press Enter WITHOUT closing the window yet. canvas_session/
+log_session_id are true session-only cookies that Chrome purges from its own
+on-disk profile the moment a new Chrome process reopens it — so this script
+snapshots them live via CDP first (see canvas_browser.capture_session_cookies),
+then closes the window for you. That snapshot is what every future headless
+sync run reuses, until it eventually expires again.
 """
 import sys, os
 
@@ -21,8 +26,11 @@ from lifeops import canvas_browser
 def main():
     print("Opening Canvas in a visible browser window...")
     proc = canvas_browser.launch_manual_login(canvas_browser.modules_url())
-    input("\nLog in (JHU SSO + Duo). Once you see the course modules page, "
-          "close the browser window, then press Enter here...\n")
+    input("\nLog in (JHU SSO + Duo). Once you see the course modules page "
+          "(URL should read jhu.instructure.com/courses/.../modules — not "
+          "canvas.jhu.edu), come back here and press Enter WITHOUT closing "
+          "the browser window yet...\n")
+    canvas_browser.capture_session_cookies()
     proc.terminate()
     with canvas_browser.BrowserCanvas(headless=True) as cv:
         ok = cv.logged_in()

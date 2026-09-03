@@ -129,6 +129,43 @@ def test_small_run_creates_normally(sandbox):
     assert not any(k.startswith("canvas:flood:") for k in alerts)
 
 
+class _FakeDriftingLLM:
+    """Like _FakeLLM but returns DIFFERENT readings on every call, simulating
+    extract_readings' real non-determinism -- used to prove a held run's
+    cache survives so a second held run (e.g. someone re-triggering sync
+    while still deciding whether to approve) reuses the first run's output
+    instead of drifting."""
+    def __init__(self, n):
+        self._n = n
+        self.calls = 0
+
+    def extract_readings(self, text, module_num):
+        self.calls += 1
+        return [{"author": f"Author{self.calls}", "title": f"Topic{i}-v{self.calls}",
+                 "type": "article"} for i in range(self._n)]
+
+
+def test_held_run_persists_cache_so_a_retry_does_not_drift(sandbox):
+    tmp, alerts = sandbox
+    fs = _FakeFS()
+    llm = _FakeDriftingLLM(12)                          # 12 > _CANVAS_FLOOD_MAX (8)
+    state_store.save_json_atomic(_sp(tmp), {"courses": {COURSE_ID: {"synced_modules": [], "task_titles": []}}})
+    canvas_domain._canvas_sync(_FakeCanvas(12), _strip_html, canvas_engine, llm, fs, NOW)
+    first_titles = _pending(tmp)["titles"]
+    assert llm.calls == 1
+    # the readings cache must have been persisted despite the early return
+    st = _course_state(tmp)
+    assert st.get("readings"), "held run must still save its LLM cache to state"
+
+    # re-run while still held (unchanged content) -- must reuse the cache,
+    # not call the drifting LLM again and produce different titles
+    canvas_domain._canvas_sync(_FakeCanvas(12), _strip_html, canvas_engine, llm, fs, NOW)
+    assert llm.calls == 1, "a held re-sync of unchanged content must not re-invoke the LLM"
+    second_titles = _pending(tmp)["titles"]
+    assert second_titles == first_titles, "pending preview must stay stable across held retries"
+    assert fs.created == []
+
+
 def test_approved_run_bypasses_guard_and_clears_pending(sandbox):
     tmp, alerts = sandbox
     fs = _FakeFS()

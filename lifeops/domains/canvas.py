@@ -546,6 +546,18 @@ def _canvas_sync(cv, strip_html, canvas_engine, llm, fs, now, course=None):
                                   "report": result.get("report", ""),
                                   "titles": [c.get("title") for c in creates]}
         _save_json_atomic(pp, pending_all)
+        # Persist phase_labels/readings/phase_task_ids caches even on a HELD
+        # run -- they were already mutated in place above (before this point,
+        # not after), and none of synced_modules/synced_module_ids/task_titles/
+        # source_ids have been reassigned onto `st` yet (that happens later,
+        # in the "save state" block below, which this early return skips), so
+        # this can't falsely mark anything as synced/created. Without this,
+        # every held run re-invokes the non-deterministic LLM calls from a
+        # cold cache, so the pending preview's titles drift on each retry
+        # instead of staying stable until approved -- exactly the bug this
+        # session's content-keyed caching was built to prevent elsewhere.
+        st_root["courses"][course_id] = st
+        _save_json_atomic(sp, st_root)
         _alert_once("canvas:flood:" + course_id + ":" + today.isoformat(),
                     f"⚠️ Canvas sync for course {course_id} wanted to create {len(creates)} tasks — "
                     f"held as suspicious (usually a state-loss re-sync, not that many real new "

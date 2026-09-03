@@ -32,12 +32,24 @@ off-domain, and the daily sync hits Canvas's JSON API directly via
 `context.request` (no rendered page, no JS, nothing for Cloudflare's browser
 checks to see).
 """
-import os, subprocess
+import os, json, subprocess
 from pathlib import Path
 from . import config
 
 ROOT = Path(__file__).resolve().parent.parent
 PROFILE_DIR = ROOT / "data" / "browser_profiles" / "canvas"
+# canvas_session/log_session_id are true session-only cookies (no Expires) --
+# Chrome purges them from the profile's on-disk Cookies DB on its next clean
+# startup, so a launch_persistent_context() pointed at PROFILE_DIR right
+# after the login window closes never actually sees them (verified: present
+# in the DB immediately after closing the login window, gone the moment a
+# fresh Chrome process opens that same profile). So instead of relying on
+# disk persistence for the session cookie itself, capture_session_cookies()
+# takes an explicit in-memory snapshot via CDP while the login window is
+# STILL OPEN, and BrowserCanvas re-injects that snapshot into every fresh
+# context on launch.
+COOKIES_PATH = ROOT / "data" / "browser_profiles" / "canvas_cookies.json"
+LOGIN_CDP_PORT = 9333
 
 _CHROME_CANDIDATES = [
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
@@ -83,9 +95,29 @@ def launch_manual_login(url):
     if not exe:
         raise RuntimeError("Chrome not found — Canvas login needs the real Chrome binary")
     return subprocess.Popen(
-        [exe, f"--user-data-dir={PROFILE_DIR}", "--new-window", url],
+        [exe, f"--user-data-dir={PROFILE_DIR}",
+         f"--remote-debugging-port={LOGIN_CDP_PORT}", "--new-window", url],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
+
+
+def capture_session_cookies(port=LOGIN_CDP_PORT):
+    """Snapshot the login window's live cookies via CDP while it's still
+    open (see COOKIES_PATH comment above for why this can't just be read
+    back off disk after the window closes) and save them for BrowserCanvas
+    to re-inject into its own headless context. Call this BEFORE closing/
+    terminating the login window. Returns True on success."""
+    from playwright.sync_api import sync_playwright
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.connect_over_cdp(f"http://localhost:{port}")
+            cookies = browser.contexts[0].cookies()
+        os.makedirs(COOKIES_PATH.parent, exist_ok=True)
+        COOKIES_PATH.write_text(json.dumps(cookies))
+        return True
+    except Exception as e:
+        print(f"[canvas_browser] cookie capture failed: {e}")
+        return False
 
 
 class BrowserCanvas:
@@ -111,6 +143,11 @@ class BrowserCanvas:
         if exe:
             kwargs["executable_path"] = exe
         self.context = self._pw.chromium.launch_persistent_context(str(PROFILE_DIR), **kwargs)
+        if COOKIES_PATH.exists():
+            try:
+                self.context.add_cookies(json.loads(COOKIES_PATH.read_text()))
+            except Exception as e:
+                print(f"[canvas_browser] cookie snapshot injection failed: {e}")
         return self
 
     def __exit__(self, exc_type, exc, tb):
