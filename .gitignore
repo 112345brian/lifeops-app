@@ -7,4 +7,5 @@ logs/
 *.pyc
 data/browser_profiles/
 .codex/
+.canvas_dump/
 .DS_Store
